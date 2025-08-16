@@ -1,0 +1,29 @@
+{
+  "feature_name": "fx-trading-system",
+  "project_description": "Forex_procrssorは、FX取引における価格予測と自動化を実現する、機械学習ベースの統合取引支援システムです。MT5からのリアルタイムデータ取得、Polarsベースの高速データ処理、PatchTSTモデルによるAI価格予測、InfluxDBでの時系列データ保存、Dashによるリアルタイム可視化ダッシュボードを統合し、トレーダーの意思決定を支援します。",
+  "created_at": "2025-07-25T16:06:00Z",
+  "updated_at": "2025-07-28T20:45:00Z",
+  "change_notes": "Task 17 spec updated: adopt Nixtla NeuralForecast PatchTST (Polars→Pandas at boundary), h=15, input_size=30, patch_len=5, quantiles 0.5/0.8/0.9/0.95; default target close only; volume excluded.",
+  "language": "japanese",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "progress": {
+    "requirements": 100,
+    "design": 100,
+    "tasks": 100
+  },
+  "ready_for_implementation": false
+}

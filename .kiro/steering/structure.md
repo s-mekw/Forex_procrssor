@@ -3,7 +3,7 @@
 ## Root Directory Organization
 
 ```
-Route_to_Botter_gamma/
+Forex_procrssor/
 ├── src/                      # ソースコード
 ├── tests/                    # テストファイル
 ├── docs/                     # 技術ドキュメント

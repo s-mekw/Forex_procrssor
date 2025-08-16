@@ -1,8 +1,8 @@
 # Product Overview
 
-## Route to Botter Gamma
+## Forex_procrssor
 
-Route to Botter Gammaは、FX取引における価格予測と自動化を実現する、機械学習ベースの統合取引支援システムです。
+Forex_procrssorは、FX取引における価格予測と自動化を実現する、機械学習ベースの統合取引支援システムです。
 
 ## Core Features
 
