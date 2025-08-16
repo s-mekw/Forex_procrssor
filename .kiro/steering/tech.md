@@ -110,11 +110,6 @@ uv run python -m src.backtesting.run
 
 ### 必須環境変数
 ```env
-# MT5接続情報
-MT5_LOGIN=your_login
-MT5_PASSWORD=your_password
-MT5_SERVER=your_server
-
 # InfluxDB設定
 INFLUXDB_URL=http://localhost:8086
 INFLUXDB_TOKEN=your_token
