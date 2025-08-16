@@ -1,0 +1,8 @@
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "context7",
+    "serena"
+  ],
+  "outputStyle": "default"
+}
