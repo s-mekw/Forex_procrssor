@@ -2,7 +2,7 @@
 
 ## フェーズ1: プロジェクト構造とコアインターフェース
 
-- [ ] 1. プロジェクト構造とテスト環境のセットアップ
+- [X] 1. プロジェクト構造とテスト環境のセットアップ
   - src/ディレクトリ構造を作成: common、mt5_data_acquisition、data_processing、storage、patchTST_model、app、production
   - tests/ディレクトリ構造を作成: unit、integration、fixtures
   - pytestの設定ファイル（conftest.py）を作成し、共通フィクスチャを定義
