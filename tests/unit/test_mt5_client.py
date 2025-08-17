@@ -293,6 +293,91 @@ class TestMT5ConnectionManager(unittest.TestCase):
     def test_health_check(self):
         """ヘルスチェック機能のテスト"""
         pass
+    
+    def test_property_methods(self):
+        """プロパティメソッドのテスト（Step 5で実装）"""
+        # terminal_infoプロパティのテスト
+        self.assertIsNone(self.connection_manager.terminal_info)
+        test_terminal_info = {"version": "5.0.0", "build": 3000}
+        self.connection_manager._terminal_info = test_terminal_info
+        self.assertEqual(self.connection_manager.terminal_info, test_terminal_info)
+        
+        # account_infoプロパティのテスト
+        self.assertIsNone(self.connection_manager.account_info)
+        test_account_info = {"login": 12345678, "server": "TestServer"}
+        self.connection_manager._account_info = test_account_info
+        self.assertEqual(self.connection_manager.account_info, test_account_info)
+        
+        # retry_countプロパティのテスト
+        self.assertEqual(self.connection_manager.retry_count, 0)
+        self.connection_manager._retry_count = 3
+        self.assertEqual(self.connection_manager.retry_count, 3)
+        
+        # max_retriesプロパティのテスト（読み取り）
+        self.assertEqual(self.connection_manager.max_retries, 5)
+        
+        # max_retriesプロパティのテスト（設定）
+        self.connection_manager.max_retries = 10
+        self.assertEqual(self.connection_manager.max_retries, 10)
+        
+        # max_retriesプロパティのテスト（無効な値）
+        with self.assertRaises(ValueError) as context:
+            self.connection_manager.max_retries = 0
+        self.assertIn("最大再試行回数は1以上である必要があります", str(context.exception))
+    
+    def test_utility_methods(self):
+        """ユーティリティメソッドのテスト（Step 5で実装）"""
+        # _reset_retry_countメソッドのテスト
+        self.connection_manager._retry_count = 5
+        self.connection_manager._reset_retry_count()
+        self.assertEqual(self.connection_manager.retry_count, 0)
+        
+        # _increment_retry_countメソッドのテスト
+        self.assertEqual(self.connection_manager._increment_retry_count(), 1)
+        self.assertEqual(self.connection_manager.retry_count, 1)
+        self.assertEqual(self.connection_manager._increment_retry_count(), 2)
+        self.assertEqual(self.connection_manager.retry_count, 2)
+        
+        # _calculate_backoff_delayメソッドのテスト
+        self.connection_manager._retry_count = 0
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 1.0)
+        
+        self.connection_manager._retry_count = 1
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 2.0)
+        
+        self.connection_manager._retry_count = 2
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 4.0)
+        
+        self.connection_manager._retry_count = 3
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 8.0)
+        
+        self.connection_manager._retry_count = 4
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)
+        
+        # 最大待機時間のテスト
+        self.connection_manager._retry_count = 10  # 非常に大きな再試行回数
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)
+    
+    def test_config_with_custom_values(self):
+        """カスタム設定値でのインスタンス化テスト（Step 5で実装）"""
+        custom_config = {
+            'account': 99999999,
+            'password': 'custom_password',
+            'server': 'CustomServer',
+            'max_retries': 10,
+            'retry_delay': 2
+        }
+        
+        custom_manager = MT5ConnectionManager(config=custom_config)
+        
+        # カスタム設定が適用されているか確認
+        self.assertEqual(custom_manager.max_retries, 10)
+        self.assertEqual(custom_manager._retry_delay, 2)
+        self.assertEqual(custom_manager._config, custom_config)
+        
+        # _get_config_valueメソッドのテスト
+        self.assertEqual(custom_manager._get_config_value('account', None), 99999999)
+        self.assertEqual(custom_manager._get_config_value('nonexistent', 'default'), 'default')
 
 
 class TestMT5ConnectionManagerIntegration(unittest.TestCase):
@@ -316,7 +401,6 @@ class TestMT5ConnectionManagerIntegration(unittest.TestCase):
         pass
 
 
-# Pytestマーカー用のテスト関数（オプション）
 @pytest.mark.unit
 @pytest.mark.skip(reason="MT5ConnectionManagerクラスが未実装")
 def test_mt5_client_imports():

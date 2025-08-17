@@ -9,7 +9,13 @@
       "mcp__serena__onboarding",
       "mcp__serena__get_symbols_overview",
       "mcp__serena__write_memory",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_reconnection_with_exponential_backoff -v)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py -v)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_property_methods -v)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_config_with_custom_values -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -k \"not connection_success and not connection_failure and not reconnection\" -xvs)"
     ]
   },
   "enableAllProjectMcpServers": true,

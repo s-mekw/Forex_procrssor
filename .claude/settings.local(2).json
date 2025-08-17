@@ -1,0 +1,41 @@
+{
+  "comment": "Claude Code Settings - Simplified Configuration",
+  "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定",
+  "permissions": {
+    "allow": [
+      "mcp__serena__list_dir",
+      "Bash(mkdir:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "context7",
+    "serena"
+  ],
+  "outputStyle": "default",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🚀 Claude Code セッション開始\\n利用可能なコマンド: /wf <タスク>'",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '✅ サブエージェントタスク完了'",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

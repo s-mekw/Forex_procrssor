@@ -1,10 +1,10 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: 5/10
-- 最終更新: 2025-08-17 16:00
+- ステップ: 6/10
+- 最終更新: 2025-08-17 17:30
 - 対象タスク: MT5接続管理のテスト駆動実装（要件1.1）
-- 現在の作業: MT5ConnectionManagerクラスの基本実装
+- 現在の作業: 接続成功ロジック実装
 
 ## 📋 計画
 ### Step 1: テストファイル作成と基本構造
@@ -58,8 +58,24 @@
 
 ### Step 5: MT5ConnectionManagerクラスの基本実装
 - ファイル: src/mt5_data_acquisition/mt5_client.py
-- 作業: クラス定義、初期化メソッド、基本的な接続メソッド
-- 完了: [ ]
+- 作業: 
+  1. クラスの基本構造の改善
+    - 接続設定の管理（_config）
+    - 接続状態の管理（_connected）
+    - 再試行カウンタ（_retry_count）
+    - ターミナル情報の保持（_terminal_info）
+    - アカウント情報の保持（_account_info）
+  2. __init__メソッドの拡張
+    - デフォルト設定の定義（max_retries, timeout等）
+    - ロガー設定の初期化
+  3. プロパティメソッドの追加
+    - terminal_info: ターミナル情報を返す
+    - account_info: アカウント情報を返す
+    - retry_count: 現在の再試行回数を返す
+  4. ユーティリティメソッドの追加
+    - _reset_retry_count(): 再試行カウンタをリセット
+    - _increment_retry_count(): 再試行カウンタをインクリメント
+- 完了: [✅]
 
 ### Step 6: 接続成功ロジック実装
 - ファイル: src/mt5_data_acquisition/mt5_client.py
@@ -176,6 +192,34 @@
 
 **総合評価**: Step 4の実装は模範的です。指数バックオフアルゴリズムのテスト設計が完璧で、TDDアプローチに忠実に従っています。特にside_effectの使用方法とtime.sleepのモック化が教科書的な実装となっています。
 
+### コミット結果（合格時）
+- Hash: 1410199
+- Message: feat: Step 4完了 - 再接続ロジックテスト実装（指数バックオフ）
+
+### Step 5 完了
+- ✅ MT5ConnectionManagerクラスの基本構造を改善
+  - クラス定数の定義（DEFAULT_MAX_RETRIES = 5など）
+  - configパラメータ付きの__init__メソッドに拡張
+  - structlogとloggingの両方に対応したロガー設定
+- ✅ プロパティメソッドの実装
+  - terminal_info: ターミナル情報を取得（読み取り専用）
+  - account_info: アカウント情報を取得（読み取り専用）
+  - retry_count: 現在の再試行回数を取得（読み取り専用）
+  - max_retries: 最大再試行回数を取得/設定（セッター付き）
+- ✅ ユーティリティメソッドの実装
+  - _get_config_value(): 設定値を取得（デフォルト値付き）
+  - _reset_retry_count(): 再試行カウンタをリセット
+  - _increment_retry_count(): 再試行カウンタをインクリメント
+  - _calculate_backoff_delay(): 指数バックオフによる待機時間計算
+- ✅ 3つの新しいテストケースを追加
+  - test_property_methods: プロパティメソッドのテスト
+  - test_utility_methods: ユーティリティメソッドのテスト
+  - test_config_with_custom_values: カスタム設定値でのインスタンス化テスト
+- 📁 変更ファイル:
+  - src/mt5_data_acquisition/mt5_client.py（クラス拡張）
+  - tests/unit/test_mt5_client.py（テストケース追加）
+- 📝 備考: pytest実行で6 passed, 3 skipped確認済み。既存の3つのテストも引き続きパス。カバレッジが90.54%に向上。
+
 ## 👁️ レビュー結果
 
 ### Step 1 レビュー
@@ -271,6 +315,61 @@
 - テスト駆動開発（TDD）アプローチを採用
 - モックを使用してMT5 APIの依存を排除
 - 指数バックオフアルゴリズムで信頼性を向上
+
+## 🎯 Step 5 実装詳細
+
+### MT5ConnectionManagerクラス基本実装仕様
+
+#### 1. クラス属性とインスタンス変数
+```python
+class MT5ConnectionManager:
+    # クラス定数
+    DEFAULT_MAX_RETRIES = 5
+    DEFAULT_TIMEOUT = 60000  # 60秒
+    DEFAULT_RETRY_DELAY = 1  # 初期待機時間（秒）
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        # 接続管理
+        self._connected: bool = False
+        self._config: Optional[Dict[str, Any]] = config
+        
+        # 再試行管理
+        self._retry_count: int = 0
+        self._max_retries: int = self.DEFAULT_MAX_RETRIES
+        self._retry_delay: int = self.DEFAULT_RETRY_DELAY
+        
+        # MT5情報
+        self._terminal_info: Optional[Dict[str, Any]] = None
+        self._account_info: Optional[Dict[str, Any]] = None
+        
+        # ロガー
+        self.logger = logging.getLogger(__name__)
+```
+
+#### 2. プロパティメソッド
+- `terminal_info`: ターミナル情報を取得（読み取り専用）
+- `account_info`: アカウント情報を取得（読み取り専用）
+- `retry_count`: 現在の再試行回数を取得（読み取り専用）
+- `max_retries`: 最大再試行回数を取得/設定
+
+#### 3. ユーティリティメソッド
+- `_reset_retry_count()`: 再試行カウンタを0にリセット
+- `_increment_retry_count()`: 再試行カウンタを1増加
+- `_calculate_backoff_delay()`: 現在の再試行回数から待機時間を計算
+
+#### 4. 設定管理
+- デフォルト設定の適用
+- カスタム設定のマージ
+- 設定の検証（必須パラメータのチェック）
+
+### 実装アプローチ
+1. **TDDの継続**: 既存のテストが全てパスすることを確認しながら実装
+2. **段階的な実装**: 
+   - まず基本的な構造を実装
+   - プロパティとユーティリティメソッドを追加
+   - テスト実行で動作確認
+3. **後方互換性の維持**: 既存のインターフェースを変更しない
+4. **ドキュメントの充実**: 各メソッドに詳細なdocstringを追加
 
 ## 🎯 Step 4 実装詳細
 
