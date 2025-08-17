@@ -137,7 +137,45 @@ cython_debug/
 # VS Code
 .vscode/
 
-# Project specific
+# Forex Processor specific files
+# データファイル
+*.csv
+*.parquet
+*.h5
+*.hdf5
+
+# 設定ファイル（環境固有）
+config/local.toml
+config/production.toml
+.env.local
+.env.production
+
+# ログファイル
+logs/*.log
+logs/*.txt
+
+# ML モデルファイル
+models/*.pth
+models/*.pkl
+models/*.joblib
+models/checkpoints/
+models/experiments/
+
+# データベースファイル
+*.db
+*.sqlite
+*.sqlite3
+
+# MT5関連
+MT5/
+metatrader5/
+
+# 一時ファイル
+temp/
+tmp/
+.tmp/
+
+# データディレクトリ（元の設定も保持）
 data/
 models/
 logs/

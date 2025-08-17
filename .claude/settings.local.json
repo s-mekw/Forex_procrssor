@@ -1,8 +1,22 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__serena__list_dir",
+      "Bash(mkdir:*)",
+      "Bash(uv run --frozen pytest tests/unit/test_tick_model.py -v)",
+      "Bash(uv run:*)",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__onboarding",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__write_memory"
+    ]
+  },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "context7",
     "serena"
   ],
-  "outputStyle": "default"
+  "outputStyle": "default",
+  "comment": "Claude Code Settings - Simplified Configuration",
+  "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }
