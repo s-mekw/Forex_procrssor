@@ -1,6 +1,7 @@
 ---
-name: reviewer  
+name: reviewer
 description: コードレビューする時に使います。実装内容を確認し、改善点を提案します。
+model: inherit
 color: purple
 ---
 

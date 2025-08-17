@@ -1,6 +1,7 @@
 ---
 name: executor
 description: 実装する時に使います。計画に基づいてコードを作成・編集します。
+model: inherit
 color: blue
 ---
 

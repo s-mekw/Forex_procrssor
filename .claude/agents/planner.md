@@ -1,6 +1,7 @@
 ---
 name: planner
 description: 計画を立てる時に使います。タスクを小さなステップに分解し、実装可能な単位で管理します。
+model: inherit
 color: green
 ---
 
