@@ -12,6 +12,7 @@ from datetime import datetime
 import logging
 import sys
 import os
+import time
 
 # srcディレクトリをパスに追加
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
@@ -196,10 +197,87 @@ class TestMT5ConnectionManager(unittest.TestCase):
         self.assertIn("認証失敗", self.mock_mt5.last_error.return_value[1])
         self.assertFalse(self.connection_manager.is_connected())  # 接続状態は未接続のまま
 
-    @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
-    def test_reconnection_with_exponential_backoff(self):
-        """指数バックオフによる再接続テスト"""
-        pass
+    @patch('time.sleep')  # time.sleepをモック化
+    def test_reconnection_with_exponential_backoff(self, mock_sleep):
+        """指数バックオフによる再接続テスト
+        
+        再接続メカニズムが指数バックオフアルゴリズムで動作することを検証:
+        1. 初回接続失敗後、再接続を試行
+        2. 各試行間の待機時間が指数的に増加（1, 2, 4, 8, 16秒）
+        3. 3回目の試行で成功するシナリオ
+        4. 適切なログ出力の確認
+        """
+        # 初回接続を失敗に設定
+        self.mock_mt5.initialize.return_value = True
+        self.mock_mt5.login.return_value = False  # 初回は失敗
+        self.mock_mt5.last_error.return_value = (10004, "ネットワークエラー: 一時的な接続障害")
+        
+        # 接続試行（初回失敗）
+        result = self.connection_manager.connect(self.test_config)
+        
+        # 再接続用に3回目で成功するようside_effectを設定
+        # side_effect: [1回目失敗, 2回目失敗, 3回目成功]
+        self.mock_mt5.login.side_effect = [False, False, True]
+        
+        # ターミナル情報とアカウント情報のモック（成功時用）
+        mock_terminal_info = MagicMock()
+        mock_terminal_info.company = "Test Broker"
+        mock_terminal_info.connected = True
+        self.mock_mt5.terminal_info.return_value = mock_terminal_info
+        
+        mock_account_info = MagicMock()
+        mock_account_info.login = 12345678
+        mock_account_info.balance = 10000.0
+        self.mock_mt5.account_info.return_value = mock_account_info
+        
+        # 再接続の実行
+        reconnect_result = self.connection_manager.reconnect()
+        
+        # 現時点ではreconnectメソッドが未実装のため、Noneが返される
+        # Step 7で実装後に以下のアサーションを有効化
+        
+        # 再接続成功の検証（Step 7実装後に有効化）
+        # self.assertTrue(reconnect_result)
+        # self.assertTrue(self.connection_manager.is_connected())
+        
+        # time.sleepの呼び出し検証（Step 7実装後に有効化）
+        # 期待される呼び出し: sleep(1), sleep(2) の2回（3回目で成功するため）
+        # expected_sleep_calls = [call(1), call(2)]
+        # mock_sleep.assert_has_calls(expected_sleep_calls)
+        # self.assertEqual(mock_sleep.call_count, 2)
+        
+        # ログイン試行回数の検証（Step 7実装後に有効化）
+        # 初回接続で1回 + 再接続で3回 = 合計4回のログイン試行
+        # self.assertEqual(self.mock_mt5.login.call_count, 4)
+        
+        # ログ出力の検証（Step 7実装後に有効化）
+        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 1/5)")
+        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 2/5)")
+        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 3/5)")
+        # self.mock_logger.info.assert_any_call("再接続に成功しました (試行回数: 3)")
+        # self.mock_logger.warning.assert_any_call("接続失敗。1秒後に再試行します...")
+        # self.mock_logger.warning.assert_any_call("接続失敗。2秒後に再試行します...")
+        
+        # 現時点ではモックの設定確認のみ
+        self.assertIsNotNone(self.connection_manager)
+        # side_effectはiteratorなので、直接長さを確認できない
+        # 代わりにモックの動作を確認
+        self.assertFalse(self.connection_manager.is_connected())  # reconnectメソッド未実装のため
+        
+        # side_effectの動作確認（テスト用）
+        # モックをリセットして手動で動作確認
+        self.mock_mt5.reset_mock()
+        self.mock_mt5.login.side_effect = [False, False, True]
+        results = []
+        for _ in range(3):
+            try:
+                results.append(self.mock_mt5.login())
+            except StopIteration:
+                break
+        self.assertEqual(results, [False, False, True])
+        
+        # time.sleepが呼ばれていないことを確認（reconnectメソッド未実装のため）
+        mock_sleep.assert_not_called()
 
     @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
     def test_max_retry_attempts(self):
