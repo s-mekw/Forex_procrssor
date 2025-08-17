@@ -50,6 +50,8 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "toml>=0.10.2",
+    "tomli>=2.0.1",
+    "tomli-w>=1.0.0",
     # ログ・監視
     "structlog>=23.2.0",
     "rich>=13.7.0",

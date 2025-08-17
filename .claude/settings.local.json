@@ -4,7 +4,11 @@
       "mcp__serena__list_dir",
       "Bash(mkdir:*)",
       "Bash(uv run --frozen pytest tests/unit/test_tick_model.py -v)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__onboarding",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__write_memory"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -1,627 +1,503 @@
-"""Tests for Prediction and Alert data models.
+"""PredictionとAlertモデルの包括的なテスト
 
-このモジュールは、PredictionとAlertデータモデルのテストを提供します。
+このテストファイルは、PredictionとAlertモデルのバリデーション、
+プロパティメソッド、エッジケースを網羅的にテストします。
 """
 
-from datetime import datetime, timedelta, timezone
-
-import numpy as np
 import pytest
+from datetime import datetime, timedelta, timezone
+import numpy as np
 from pydantic import ValidationError
 
 from src.common.models import (
-    Alert,
-    AlertSeverity,
-    AlertType,
-    Prediction,
-    PredictionType,
+    Prediction, PredictionType,
+    Alert, AlertType, AlertSeverity
 )
 
 
-class TestPrediction:
+class TestPredictionModel:
     """Predictionモデルのテストクラス"""
-
-    def test_prediction_creation_basic(self):
-        """基本的なPredictionの作成テスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        prediction = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.500,
-            confidence_score=0.85
-        )
-        
-        assert prediction.symbol == "USDJPY"
-        assert prediction.predicted_at == now
-        assert prediction.target_timestamp == future
-        assert prediction.prediction_type == PredictionType.PRICE
-        assert prediction.predicted_value == pytest.approx(150.500, rel=1e-5)
-        assert prediction.confidence_score == pytest.approx(0.85, rel=1e-5)
-        assert prediction.confidence_upper is None
-        assert prediction.confidence_lower is None
-
-    def test_prediction_with_confidence_interval(self):
-        """信頼区間付きPredictionの作成テスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        prediction = Prediction(
-            symbol="EURUSD",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=1.1000,
-            confidence_score=0.90,
-            confidence_upper=1.1050,
-            confidence_lower=1.0950
-        )
-        
-        assert prediction.confidence_upper == pytest.approx(1.1050, rel=1e-5)
-        assert prediction.confidence_lower == pytest.approx(1.0950, rel=1e-5)
-        assert prediction.confidence_range == pytest.approx(0.01, rel=1e-5)
-
-    def test_prediction_float32_conversion(self):
-        """Float32変換のテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        # 高精度の値を入力
-        high_precision_value = 150.123456789
-        
-        prediction = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=high_precision_value,
-            confidence_score=0.85,
-            confidence_upper=150.2,
-            confidence_lower=150.0
-        )
-        
-        # Float32精度に丸められることを確認
-        expected_value = float(np.float32(high_precision_value))
-        assert prediction.predicted_value == expected_value
-        assert prediction.confidence_upper == float(np.float32(150.2))
-        assert prediction.confidence_lower == float(np.float32(150.0))
-
-    def test_prediction_confidence_score_validation(self):
-        """信頼度スコアのバリデーションテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        # 範囲外の信頼度スコアでエラー
-        with pytest.raises(ValidationError) as exc_info:
-            Prediction(
-                symbol="USDJPY",
-                predicted_at=now,
-                target_timestamp=future,
-                prediction_type=PredictionType.PRICE,
-                predicted_value=150.0,
-                confidence_score=1.5  # 1.0を超える
-            )
-        assert "less than or equal to 1" in str(exc_info.value)
-        
-        with pytest.raises(ValidationError) as exc_info:
-            Prediction(
-                symbol="USDJPY",
-                predicted_at=now,
-                target_timestamp=future,
-                prediction_type=PredictionType.PRICE,
-                predicted_value=150.0,
-                confidence_score=-0.1  # 0.0未満
-            )
-        assert "greater than or equal to 0" in str(exc_info.value)
-
-    def test_prediction_confidence_interval_validation(self):
-        """信頼区間の妥当性検証テスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        # 上限が下限より小さい場合エラー
-        with pytest.raises(ValidationError) as exc_info:
-            Prediction(
-                symbol="USDJPY",
-                predicted_at=now,
-                target_timestamp=future,
-                prediction_type=PredictionType.PRICE,
-                predicted_value=150.0,
-                confidence_score=0.85,
-                confidence_lower=150.1,  # 下限が先に設定される
-                confidence_upper=149.9   # 上限が下限より小さい
-            )
-        assert "Confidence upper must be greater than or equal to confidence lower" in str(exc_info.value)
-
-    def test_prediction_timestamp_validation(self):
-        """タイムスタンプの妥当性検証テスト"""
-        now = datetime.now(timezone.utc)
-        past = now - timedelta(hours=1)
-        
-        # 予測対象時刻が過去の場合エラー
-        with pytest.raises(ValidationError) as exc_info:
-            Prediction(
-                symbol="USDJPY",
-                predicted_at=now,
-                target_timestamp=past,  # 過去の時刻
-                prediction_type=PredictionType.PRICE,
-                predicted_value=150.0,
-                confidence_score=0.85
-            )
-        assert "Target timestamp must be after predicted_at timestamp" in str(exc_info.value)
-
-    def test_prediction_symbol_normalization(self):
-        """シンボルの正規化テスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
-        
-        prediction = Prediction(
-            symbol="usdjpy",  # 小文字で入力
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.0,
-            confidence_score=0.85
-        )
-        
+    
+    @pytest.fixture
+    def valid_prediction_data(self):
+        """有効なPredictionデータのフィクスチャ"""
+        now = datetime(2025, 1, 17, 12, 0, 0, tzinfo=timezone.utc)
+        return {
+            "symbol": "usdjpy",  # 小文字でテスト（正規化確認）
+            "predicted_at": now,
+            "target_timestamp": now + timedelta(hours=1),
+            "prediction_type": PredictionType.PRICE,
+            "predicted_value": 150.500,
+            "confidence_score": 0.85,
+            "confidence_upper": 150.600,
+            "confidence_lower": 150.400,
+            "model_version": "v1.2.3"
+        }
+    
+    def test_prediction_creation_with_valid_data(self, valid_prediction_data):
+        """有効なデータでPredictionインスタンスが作成できることを確認"""
+        prediction = Prediction(**valid_prediction_data)
         assert prediction.symbol == "USDJPY"  # 大文字に正規化
-
-    def test_prediction_types(self):
-        """異なる予測タイプのテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
+        assert prediction.predicted_at == valid_prediction_data["predicted_at"]
+        assert prediction.target_timestamp == valid_prediction_data["target_timestamp"]
+        assert prediction.prediction_type == PredictionType.PRICE
+        assert np.isclose(prediction.predicted_value, np.float32(150.500))
+        assert np.isclose(prediction.confidence_score, np.float32(0.85))
+        assert np.isclose(prediction.confidence_upper, np.float32(150.600))
+        assert np.isclose(prediction.confidence_lower, np.float32(150.400))
+    
+    def test_float32_conversion(self, valid_prediction_data):
+        """Float32への変換が正しく行われることを確認"""
+        prediction = Prediction(**valid_prediction_data)
+        # 高精度の値を設定してFloat32に丸められることを確認
+        high_precision_data = valid_prediction_data.copy()
+        high_precision_data["predicted_value"] = 150.123456789
+        high_precision_data["confidence_score"] = 0.987654321
+        prediction = Prediction(**high_precision_data)
+        assert prediction.predicted_value == float(np.float32(150.123456789))
+        assert prediction.confidence_score == float(np.float32(0.987654321))
+    
+    def test_symbol_normalization(self, valid_prediction_data):
+        """シンボルが大文字に正規化されることを確認"""
+        data = valid_prediction_data.copy()
+        data["symbol"] = "eurusd"
+        prediction = Prediction(**data)
+        assert prediction.symbol == "EURUSD"
+    
+    def test_confidence_score_validation(self, valid_prediction_data):
+        """信頼度スコアの範囲検証"""
+        # 範囲外の値（> 1.0）
+        invalid_data = valid_prediction_data.copy()
+        invalid_data["confidence_score"] = 1.5
         
-        # 価格予測
-        price_pred = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.0,
-            confidence_score=0.85
-        )
-        assert price_pred.prediction_type == PredictionType.PRICE
+        with pytest.raises(ValidationError) as exc_info:
+            Prediction(**invalid_data)
+        assert "less than or equal to 1" in str(exc_info.value).lower()
         
-        # 方向性予測
-        direction_pred = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.DIRECTION,
-            predicted_value=1.0,  # 1: 上昇, -1: 下降
-            confidence_score=0.75
-        )
-        assert direction_pred.prediction_type == PredictionType.DIRECTION
+        # 範囲外の値（< 0.0）
+        invalid_data["confidence_score"] = -0.1
         
-        # ボラティリティ予測
-        volatility_pred = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.VOLATILITY,
-            predicted_value=0.015,  # 1.5%のボラティリティ
-            confidence_score=0.80
-        )
-        assert volatility_pred.prediction_type == PredictionType.VOLATILITY
-
-    def test_prediction_properties(self):
-        """プロパティメソッドのテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=3)
+        with pytest.raises(ValidationError) as exc_info:
+            Prediction(**invalid_data)
+        assert "greater than or equal to 0" in str(exc_info.value).lower()
+    
+    def test_confidence_interval_validation(self, valid_prediction_data):
+        """信頼区間の妥当性検証"""
+        # upperがlowerより小さい場合
+        invalid_data = valid_prediction_data.copy()
+        invalid_data["confidence_upper"] = 150.300
+        invalid_data["confidence_lower"] = 150.500  # upperより大きい
         
-        prediction = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.0,
-            confidence_score=0.75,
-            confidence_upper=150.1,
-            confidence_lower=149.9
-        )
+        with pytest.raises(ValidationError) as exc_info:
+            Prediction(**invalid_data)
+        assert "Confidence upper must be greater than or equal to confidence lower" in str(exc_info.value)
+    
+    def test_target_timestamp_validation(self, valid_prediction_data):
+        """予測対象時刻が予測実行時刻より未来であることの検証"""
+        invalid_data = valid_prediction_data.copy()
+        # target_timestampをpredicted_atと同じにする
+        invalid_data["target_timestamp"] = invalid_data["predicted_at"]
         
-        # 高信頼度判定
+        with pytest.raises(ValidationError) as exc_info:
+            Prediction(**invalid_data)
+        assert "Target timestamp must be after predicted_at timestamp" in str(exc_info.value)
+        
+        # target_timestampをpredicted_atより過去にする
+        invalid_data["target_timestamp"] = invalid_data["predicted_at"] - timedelta(hours=1)
+        
+        with pytest.raises(ValidationError) as exc_info:
+            Prediction(**invalid_data)
+        assert "Target timestamp must be after predicted_at timestamp" in str(exc_info.value)
+    
+    def test_confidence_range_property(self, valid_prediction_data):
+        """信頼区間の幅計算が正しいことを確認"""
+        prediction = Prediction(**valid_prediction_data)
+        expected_range = float(np.float32(150.600 - 150.400))
+        assert np.isclose(prediction.confidence_range, expected_range, rtol=1e-3)
+        
+        # 信頼区間が設定されていない場合
+        data = valid_prediction_data.copy()
+        del data["confidence_upper"]
+        del data["confidence_lower"]
+        prediction = Prediction(**data)
+        assert prediction.confidence_range is None
+    
+    def test_is_high_confidence_property(self, valid_prediction_data):
+        """高信頼度判定が正しいことを確認"""
+        # 高信頼度（>= 0.7）
+        prediction = Prediction(**valid_prediction_data)
         assert prediction.is_high_confidence is True
         
-        # 予測ホライゾン
-        assert prediction.prediction_horizon_hours == pytest.approx(3.0, rel=1e-5)
+        # 低信頼度（< 0.7）
+        low_confidence_data = valid_prediction_data.copy()
+        low_confidence_data["confidence_score"] = 0.6
+        prediction = Prediction(**low_confidence_data)
+        assert prediction.is_high_confidence is False
         
-        # 信頼区間の幅
-        assert prediction.confidence_range == pytest.approx(0.2, rel=1e-3)
-
-    def test_prediction_to_float32_dict(self):
-        """Float32辞書変換のテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
+        # 境界値（= 0.7）
+        boundary_data = valid_prediction_data.copy()
+        boundary_data["confidence_score"] = 0.70001  # Float32では0.7以上になる
+        prediction = Prediction(**boundary_data)
+        assert prediction.is_high_confidence is True
+    
+    def test_prediction_horizon_hours_property(self, valid_prediction_data):
+        """予測ホライゾン計算が正しいことを確認"""
+        prediction = Prediction(**valid_prediction_data)
+        # 1時間後を予測
+        assert prediction.prediction_horizon_hours == 1.0
         
-        prediction = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.123456,
-            confidence_score=0.85,
-            confidence_upper=150.2,
-            confidence_lower=150.0,
-            model_version="v1.2.3"
-        )
+        # 24時間後を予測
+        data = valid_prediction_data.copy()
+        data["target_timestamp"] = data["predicted_at"] + timedelta(days=1)
+        prediction = Prediction(**data)
+        assert prediction.prediction_horizon_hours == 24.0
         
+        # 30分後を予測
+        data["target_timestamp"] = data["predicted_at"] + timedelta(minutes=30)
+        prediction = Prediction(**data)
+        assert prediction.prediction_horizon_hours == 0.5
+    
+    def test_all_prediction_types(self, valid_prediction_data):
+        """全ての予測タイプが正しく処理されることを確認"""
+        for pred_type in PredictionType:
+            data = valid_prediction_data.copy()
+            data["prediction_type"] = pred_type
+            prediction = Prediction(**data)
+            assert prediction.prediction_type == pred_type
+    
+    def test_optional_fields(self, valid_prediction_data):
+        """オプショナルフィールドの処理を確認"""
+        # 最小限の必須フィールドのみ
+        minimal_data = {
+            "symbol": "USDJPY",
+            "predicted_at": datetime.now(timezone.utc),
+            "target_timestamp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "prediction_type": PredictionType.DIRECTION,
+            "predicted_value": 1.0,  # 1: up, -1: down
+            "confidence_score": 0.75
+        }
+        prediction = Prediction(**minimal_data)
+        assert prediction.model_version is None
+        assert prediction.metadata is None
+        assert prediction.confidence_upper is None
+        assert prediction.confidence_lower is None
+    
+    def test_metadata_field(self, valid_prediction_data):
+        """メタデータフィールドの処理を確認"""
+        data = valid_prediction_data.copy()
+        data["metadata"] = {
+            "model_name": "LSTM",
+            "features_used": ["price", "volume", "indicators"],
+            "training_window": 30
+        }
+        prediction = Prediction(**data)
+        assert prediction.metadata["model_name"] == "LSTM"
+        assert len(prediction.metadata["features_used"]) == 3
+    
+    def test_to_float32_dict(self, valid_prediction_data):
+        """Float32辞書への変換が正しいことを確認"""
+        prediction = Prediction(**valid_prediction_data)
         float32_dict = prediction.to_float32_dict()
         
         assert float32_dict["symbol"] == "USDJPY"
-        assert float32_dict["predicted_at"] == now
-        assert float32_dict["target_timestamp"] == future
         assert float32_dict["prediction_type"] == "PRICE"
         assert isinstance(float32_dict["predicted_value"], np.float32)
         assert isinstance(float32_dict["confidence_score"], np.float32)
         assert isinstance(float32_dict["confidence_upper"], np.float32)
         assert isinstance(float32_dict["confidence_lower"], np.float32)
-        assert float32_dict["model_version"] == "v1.2.3"
-
-    def test_prediction_with_metadata(self):
-        """メタデータ付きPredictionのテスト"""
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(hours=1)
         
-        metadata = {
-            "model_name": "LSTM",
-            "features_used": ["price", "volume", "rsi"],
-            "training_window": 100
-        }
-        
-        prediction = Prediction(
-            symbol="USDJPY",
-            predicted_at=now,
-            target_timestamp=future,
-            prediction_type=PredictionType.PRICE,
-            predicted_value=150.0,
-            confidence_score=0.85,
-            metadata=metadata
-        )
-        
-        assert prediction.metadata == metadata
-        assert prediction.metadata["model_name"] == "LSTM"
+        # オプショナルフィールドが含まれていることを確認
+        assert "model_version" in float32_dict
+        assert "metadata" in float32_dict
 
 
-class TestAlert:
+class TestAlertModel:
     """Alertモデルのテストクラス"""
-
-    def test_alert_creation_basic(self):
-        """基本的なAlertの作成テスト"""
-        now = datetime.now(timezone.utc)
-        
-        alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="USDJPY price exceeded threshold"
-        )
-        
-        assert alert.symbol == "USDJPY"
-        assert alert.timestamp == now
+    
+    @pytest.fixture
+    def valid_alert_data(self):
+        """有効なAlertデータのフィクスチャ"""
+        return {
+            "symbol": "usdjpy",  # 小文字でテスト（正規化確認）
+            "timestamp": datetime(2025, 1, 17, 12, 0, 0, tzinfo=timezone.utc),
+            "alert_type": AlertType.PRICE_THRESHOLD,
+            "severity": AlertSeverity.WARNING,
+            "message": "USDJPY price exceeded threshold",
+            "threshold_value": 150.000,
+            "current_value": 150.123,
+            "condition": "price > 150.000",
+            "acknowledged": False
+        }
+    
+    def test_alert_creation_with_valid_data(self, valid_alert_data):
+        """有効なデータでAlertインスタンスが作成できることを確認"""
+        alert = Alert(**valid_alert_data)
+        assert alert.symbol == "USDJPY"  # 大文字に正規化
+        assert alert.timestamp == valid_alert_data["timestamp"]
         assert alert.alert_type == AlertType.PRICE_THRESHOLD
         assert alert.severity == AlertSeverity.WARNING
-        assert alert.message == "USDJPY price exceeded threshold"
+        assert alert.message == valid_alert_data["message"]
+        assert np.isclose(alert.threshold_value, np.float32(150.000))
+        assert np.isclose(alert.current_value, np.float32(150.123))
         assert alert.acknowledged is False
-
-    def test_alert_with_threshold(self):
-        """閾値付きAlertの作成テスト"""
-        now = datetime.now(timezone.utc)
+    
+    def test_float32_conversion(self, valid_alert_data):
+        """Float32への変換が正しく行われることを確認"""
+        alert = Alert(**valid_alert_data)
+        # 高精度の値を設定してFloat32に丸められることを確認
+        high_precision_data = valid_alert_data.copy()
+        high_precision_data["threshold_value"] = 150.123456789
+        high_precision_data["current_value"] = 150.987654321
+        alert = Alert(**high_precision_data)
+        assert alert.threshold_value == float(np.float32(150.123456789))
+        assert alert.current_value == float(np.float32(150.987654321))
+    
+    def test_symbol_normalization(self, valid_alert_data):
+        """シンボルが大文字に正規化されることを確認"""
+        data = valid_alert_data.copy()
+        data["symbol"] = "eurusd"
+        alert = Alert(**data)
+        assert alert.symbol == "EURUSD"
+    
+    def test_price_threshold_validation(self, valid_alert_data):
+        """価格閾値アラートのバリデーション"""
+        # PRICE_THRESHOLDタイプでthreshold_valueがない場合
+        invalid_data = valid_alert_data.copy()
+        invalid_data["alert_type"] = AlertType.PRICE_THRESHOLD
+        invalid_data["current_value"] = 150.123
+        del invalid_data["threshold_value"]
         
-        alert = Alert(
-            symbol="EURUSD",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="EURUSD price exceeded upper threshold",
-            threshold_value=1.1000,
-            current_value=1.1050,
-            condition="price > 1.1000"
-        )
-        
-        assert alert.threshold_value == pytest.approx(1.1000, rel=1e-5)
-        assert alert.current_value == pytest.approx(1.1050, rel=1e-5)
-        assert alert.condition == "price > 1.1000"
-        assert alert.threshold_exceeded is True
-        assert alert.threshold_difference == pytest.approx(0.005, rel=1e-3)
-
-    def test_alert_float32_conversion(self):
-        """Float32変換のテスト"""
-        now = datetime.now(timezone.utc)
-        
-        # 高精度の値を入力
-        high_precision_threshold = 150.123456789
-        high_precision_current = 150.234567890
-        
-        alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Test alert",
-            threshold_value=high_precision_threshold,
-            current_value=high_precision_current
-        )
-        
-        # Float32精度に丸められることを確認
-        assert alert.threshold_value == float(np.float32(high_precision_threshold))
-        assert alert.current_value == float(np.float32(high_precision_current))
-
-    def test_alert_price_threshold_validation(self):
-        """価格閾値アラートのバリデーションテスト"""
-        now = datetime.now(timezone.utc)
-        
-        # 価格閾値アラートで閾値がない場合エラー
         with pytest.raises(ValidationError) as exc_info:
-            Alert(
-                symbol="USDJPY",
-                timestamp=now,
-                alert_type=AlertType.PRICE_THRESHOLD,
-                severity=AlertSeverity.WARNING,
-                message="Test alert",
-                current_value=150.0  # threshold_valueがない
-            )
+            Alert(**invalid_data)
         assert "Threshold value is required for price threshold alerts" in str(exc_info.value)
-
-    def test_alert_symbol_normalization(self):
-        """シンボルの正規化テスト"""
-        now = datetime.now(timezone.utc)
+    
+    def test_is_critical_property(self):
+        """緊急レベル判定が正しいことを確認"""
+        data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.RISK_WARNING,
+            "severity": AlertSeverity.CRITICAL,
+            "message": "Critical risk detected"
+        }
+        alert = Alert(**data)
+        assert alert.is_critical is True
+        assert alert.is_warning is False
+        assert alert.is_info is False
+    
+    def test_is_warning_property(self):
+        """警告レベル判定が正しいことを確認"""
+        data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.PATTERN_DETECTED,
+            "severity": AlertSeverity.WARNING,
+            "message": "Pattern detected"
+        }
+        alert = Alert(**data)
+        assert alert.is_warning is True
+        assert alert.is_critical is False
+        assert alert.is_info is False
+    
+    def test_is_info_property(self):
+        """情報レベル判定が正しいことを確認"""
+        data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.PATTERN_DETECTED,
+            "severity": AlertSeverity.INFO,
+            "message": "Information alert"
+        }
+        alert = Alert(**data)
+        assert alert.is_info is True
+        assert alert.is_critical is False
+        assert alert.is_warning is False
+    
+    def test_threshold_exceeded_property(self, valid_alert_data):
+        """閾値超過判定が正しいことを確認"""
+        # 閾値を超過している場合
+        alert = Alert(**valid_alert_data)
+        assert alert.threshold_exceeded is True
         
-        alert = Alert(
-            symbol="eurusd",  # 小文字で入力
-            timestamp=now,
-            alert_type=AlertType.PATTERN_DETECTED,
-            severity=AlertSeverity.INFO,
-            message="Pattern detected"
-        )
+        # 閾値を超過していない場合
+        data = valid_alert_data.copy()
+        data["current_value"] = 149.999
+        alert = Alert(**data)
+        assert alert.threshold_exceeded is False
         
-        assert alert.symbol == "EURUSD"  # 大文字に正規化
-
-    def test_alert_types(self):
-        """異なるアラートタイプのテスト"""
-        now = datetime.now(timezone.utc)
+        # 閾値と同じ場合
+        data["current_value"] = 150.000
+        alert = Alert(**data)
+        assert alert.threshold_exceeded is False
         
-        # 価格閾値アラート
-        price_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Price threshold alert",
-            threshold_value=150.0,
-            current_value=150.1
-        )
-        assert price_alert.alert_type == AlertType.PRICE_THRESHOLD
+        # PRICE_THRESHOLD以外のタイプの場合
+        data["alert_type"] = AlertType.PATTERN_DETECTED
+        alert = Alert(**data)
+        assert alert.threshold_exceeded is None
+    
+    def test_threshold_difference_property(self, valid_alert_data):
+        """閾値との差分計算が正しいことを確認"""
+        alert = Alert(**valid_alert_data)
+        expected_diff = float(np.float32(150.123 - 150.000))
+        assert np.isclose(alert.threshold_difference, expected_diff, rtol=1e-3)
         
-        # パターン検出アラート
-        pattern_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PATTERN_DETECTED,
-            severity=AlertSeverity.INFO,
-            message="Head and shoulders pattern detected"
-        )
-        assert pattern_alert.alert_type == AlertType.PATTERN_DETECTED
+        # 閾値を下回る場合（負の差分）
+        data = valid_alert_data.copy()
+        data["current_value"] = 149.900
+        alert = Alert(**data)
+        expected_diff = float(np.float32(149.900 - 150.000))
+        assert np.isclose(alert.threshold_difference, expected_diff, rtol=1e-3)
         
-        # リスク警告アラート
-        risk_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.RISK_WARNING,
-            severity=AlertSeverity.CRITICAL,
-            message="High volatility detected"
-        )
-        assert risk_alert.alert_type == AlertType.RISK_WARNING
-
-    def test_alert_severities(self):
-        """異なる重要度レベルのテスト"""
-        now = datetime.now(timezone.utc)
+        # 閾値情報がない場合
+        data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.PATTERN_DETECTED,
+            "severity": AlertSeverity.INFO,
+            "message": "Pattern detected"
+        }
+        alert = Alert(**data)
+        assert alert.threshold_difference is None
+    
+    def test_all_alert_types(self):
+        """全てのアラートタイプが正しく処理されることを確認"""
+        base_data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "severity": AlertSeverity.INFO,
+            "message": "Test alert"
+        }
         
-        # 情報レベル
-        info_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PATTERN_DETECTED,
-            severity=AlertSeverity.INFO,
-            message="Info alert"
-        )
-        assert info_alert.is_info is True
-        assert info_alert.is_warning is False
-        assert info_alert.is_critical is False
+        for alert_type in AlertType:
+            data = base_data.copy()
+            data["alert_type"] = alert_type
+            alert = Alert(**data)
+            assert alert.alert_type == alert_type
+    
+    def test_all_severity_levels(self):
+        """全ての重要度レベルが正しく処理されることを確認"""
+        base_data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.PATTERN_DETECTED,
+            "message": "Test alert"
+        }
         
-        # 警告レベル
-        warning_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Warning alert"
-        )
-        assert warning_alert.is_info is False
-        assert warning_alert.is_warning is True
-        assert warning_alert.is_critical is False
+        for severity in AlertSeverity:
+            data = base_data.copy()
+            data["severity"] = severity
+            alert = Alert(**data)
+            assert alert.severity == severity
+    
+    def test_optional_fields(self):
+        """オプショナルフィールドの処理を確認"""
+        # 最小限の必須フィールドのみ
+        minimal_data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.PATTERN_DETECTED,
+            "severity": AlertSeverity.INFO,
+            "message": "Pattern detected"
+        }
+        alert = Alert(**minimal_data)
+        assert alert.threshold_value is None
+        assert alert.current_value is None
+        assert alert.condition is None
+        assert alert.metadata is None
+        assert alert.acknowledged is False  # デフォルト値
+    
+    def test_metadata_field(self, valid_alert_data):
+        """メタデータフィールドの処理を確認"""
+        data = valid_alert_data.copy()
+        data["metadata"] = {
+            "pattern_name": "Head and Shoulders",
+            "confidence": 0.85,
+            "timeframe": "H1"
+        }
+        alert = Alert(**data)
+        assert alert.metadata["pattern_name"] == "Head and Shoulders"
+        assert alert.metadata["confidence"] == 0.85
+    
+    def test_acknowledged_flag(self, valid_alert_data):
+        """確認済みフラグの処理を確認"""
+        # デフォルトはFalse
+        data = valid_alert_data.copy()
+        del data["acknowledged"]
+        alert = Alert(**data)
+        assert alert.acknowledged is False
         
-        # 緊急レベル
-        critical_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.RISK_WARNING,
-            severity=AlertSeverity.CRITICAL,
-            message="Critical alert"
-        )
-        assert critical_alert.is_info is False
-        assert critical_alert.is_warning is False
-        assert critical_alert.is_critical is True
-
-    def test_alert_properties(self):
-        """プロパティメソッドのテスト"""
-        now = datetime.now(timezone.utc)
+        # Trueに設定
+        data["acknowledged"] = True
+        alert = Alert(**data)
+        assert alert.acknowledged is True
+    
+    def test_message_validation(self):
+        """メッセージの長さ制限を確認"""
+        data = {
+            "symbol": "USDJPY",
+            "timestamp": datetime.now(timezone.utc),
+            "alert_type": AlertType.RISK_WARNING,
+            "severity": AlertSeverity.WARNING,
+            "message": ""  # 空文字列
+        }
         
-        # 閾値超過なし
-        alert_below = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Test alert",
-            threshold_value=150.0,
-            current_value=149.9
-        )
-        assert alert_below.threshold_exceeded is False
-        assert alert_below.threshold_difference == pytest.approx(-0.1, rel=1e-3)
+        with pytest.raises(ValidationError) as exc_info:
+            Alert(**data)
+        assert "at least 1 character" in str(exc_info.value).lower()
         
-        # 閾値超過あり
-        alert_above = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Test alert",
-            threshold_value=150.0,
-            current_value=150.1
-        )
-        assert alert_above.threshold_exceeded is True
-        assert alert_above.threshold_difference == pytest.approx(0.1, rel=1e-3)
-
-    def test_alert_to_float32_dict(self):
-        """Float32辞書変換のテスト"""
-        now = datetime.now(timezone.utc)
-        
-        alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.PRICE_THRESHOLD,
-            severity=AlertSeverity.WARNING,
-            message="Test alert",
-            threshold_value=150.123456,
-            current_value=150.234567,
-            condition="price > 150.0",
-            acknowledged=True
-        )
-        
+        # 500文字を超えるメッセージ
+        data["message"] = "x" * 501
+        with pytest.raises(ValidationError) as exc_info:
+            Alert(**data)
+        assert "at most 500 character" in str(exc_info.value).lower()
+    
+    def test_to_float32_dict(self, valid_alert_data):
+        """Float32辞書への変換が正しいことを確認"""
+        alert = Alert(**valid_alert_data)
         float32_dict = alert.to_float32_dict()
         
         assert float32_dict["symbol"] == "USDJPY"
-        assert float32_dict["timestamp"] == now
         assert float32_dict["alert_type"] == "PRICE_THRESHOLD"
         assert float32_dict["severity"] == "WARNING"
-        assert float32_dict["message"] == "Test alert"
         assert isinstance(float32_dict["threshold_value"], np.float32)
         assert isinstance(float32_dict["current_value"], np.float32)
-        assert float32_dict["condition"] == "price > 150.0"
-        assert float32_dict["acknowledged"] is True
-
-    def test_alert_with_metadata(self):
-        """メタデータ付きAlertのテスト"""
-        now = datetime.now(timezone.utc)
+        assert float32_dict["acknowledged"] is False
         
-        metadata = {
-            "source": "price_monitor",
-            "strategy": "breakout",
-            "timeframe": "H1"
-        }
-        
-        alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
+        # オプショナルフィールドが含まれていることを確認
+        assert "condition" in float32_dict
+        assert "metadata" in float32_dict
+    
+    def test_complex_alert_scenario(self):
+        """複雑なアラートシナリオをテスト"""
+        # パターン検出アラート
+        pattern_alert = Alert(
+            symbol="EURUSD",
+            timestamp=datetime.now(timezone.utc),
             alert_type=AlertType.PATTERN_DETECTED,
             severity=AlertSeverity.INFO,
-            message="Breakout pattern detected",
-            metadata=metadata
+            message="Bullish flag pattern detected on EURUSD H4",
+            condition="flag_pattern_confidence > 0.8",
+            metadata={
+                "pattern": "bullish_flag",
+                "confidence": 0.85,
+                "timeframe": "H4"
+            }
         )
+        assert pattern_alert.is_info
+        assert pattern_alert.threshold_exceeded is None
         
-        assert alert.metadata == metadata
-        assert alert.metadata["source"] == "price_monitor"
-
-    def test_alert_acknowledged_flag(self):
-        """確認済みフラグのテスト"""
-        now = datetime.now(timezone.utc)
-        
-        # デフォルトは未確認
-        alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
+        # リスク警告アラート
+        risk_alert = Alert(
+            symbol="GBPJPY",
+            timestamp=datetime.now(timezone.utc),
             alert_type=AlertType.RISK_WARNING,
             severity=AlertSeverity.CRITICAL,
-            message="High risk alert"
+            message="High volatility detected - risk level critical",
+            metadata={
+                "volatility": 2.5,
+                "risk_score": 0.95
+            },
+            acknowledged=False
         )
-        assert alert.acknowledged is False
-        
-        # 確認済みとして作成
-        acknowledged_alert = Alert(
-            symbol="USDJPY",
-            timestamp=now,
-            alert_type=AlertType.RISK_WARNING,
-            severity=AlertSeverity.CRITICAL,
-            message="High risk alert",
-            acknowledged=True
-        )
-        assert acknowledged_alert.acknowledged is True
-
-    def test_alert_message_validation(self):
-        """メッセージ長のバリデーションテスト"""
-        now = datetime.now(timezone.utc)
-        
-        # 空のメッセージでエラー
-        with pytest.raises(ValidationError) as exc_info:
-            Alert(
-                symbol="USDJPY",
-                timestamp=now,
-                alert_type=AlertType.RISK_WARNING,
-                severity=AlertSeverity.WARNING,
-                message=""  # 空文字列
-            )
-        assert "at least 1 character" in str(exc_info.value)
-        
-        # 長すぎるメッセージでエラー
-        long_message = "x" * 501
-        with pytest.raises(ValidationError) as exc_info:
-            Alert(
-                symbol="USDJPY",
-                timestamp=now,
-                alert_type=AlertType.RISK_WARNING,
-                severity=AlertSeverity.WARNING,
-                message=long_message
-            )
-        assert "at most 500 characters" in str(exc_info.value)
-
-
-class TestEnums:
-    """Enumクラスのテスト"""
-
-    def test_prediction_type_enum(self):
-        """PredictionType Enumのテスト"""
-        assert PredictionType.PRICE.value == "PRICE"
-        assert PredictionType.DIRECTION.value == "DIRECTION"
-        assert PredictionType.VOLATILITY.value == "VOLATILITY"
-        
-        # Enumメンバーの存在確認
-        assert hasattr(PredictionType, "PRICE")
-        assert hasattr(PredictionType, "DIRECTION")
-        assert hasattr(PredictionType, "VOLATILITY")
-
-    def test_alert_type_enum(self):
-        """AlertType Enumのテスト"""
-        assert AlertType.PRICE_THRESHOLD.value == "PRICE_THRESHOLD"
-        assert AlertType.PATTERN_DETECTED.value == "PATTERN_DETECTED"
-        assert AlertType.RISK_WARNING.value == "RISK_WARNING"
-        
-        # Enumメンバーの存在確認
-        assert hasattr(AlertType, "PRICE_THRESHOLD")
-        assert hasattr(AlertType, "PATTERN_DETECTED")
-        assert hasattr(AlertType, "RISK_WARNING")
-
-    def test_alert_severity_enum(self):
-        """AlertSeverity Enumのテスト"""
-        assert AlertSeverity.INFO.value == "INFO"
-        assert AlertSeverity.WARNING.value == "WARNING"
-        assert AlertSeverity.CRITICAL.value == "CRITICAL"
-        
-        # Enumメンバーの存在確認
-        assert hasattr(AlertSeverity, "INFO")
-        assert hasattr(AlertSeverity, "WARNING")
-        assert hasattr(AlertSeverity, "CRITICAL")
+        assert risk_alert.is_critical
+        assert not risk_alert.acknowledged
