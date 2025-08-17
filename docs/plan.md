@@ -2,17 +2,21 @@
 
 ## 📋 実装ステップ
 
-### Step 1: Pydanticモデルの定義 - Tickモデル
+### Step 1: Pydanticモデルの定義 - Tickモデル ✅
 - ファイル: src/common/models.py
 - 作業: Tickデータモデルの作成（timestamp、symbol、bid、ask、volume）
 - Float32型の使用とバリデーション設定
 - 完了: [x]
+- コミット: f52cf6f
 
-### Step 2: Pydanticモデルの定義 - OHLCモデル
+### Step 2: Pydanticモデルの定義 - OHLCモデル ✅
 - ファイル: src/common/models.py
 - 作業: OHLCデータモデルの作成（timestamp、symbol、open、high、low、close、volume）
-- 時間足（timeframe）フィールドの追加
-- 完了: [ ]
+- 時間足（timeframe）フィールドの追加（Enum: M1, M5, M15, H1, H4, D1等）
+- Float32型制約の適用（Step 1と同様のパターン）
+- OHLC価格の論理的整合性検証の実装
+- プロパティメソッド: range（高値-安値）、is_bullish（陽線判定）、body_size（実体サイズ）
+- 完了: [x]
 
 ### Step 3: Pydanticモデルの定義 - Prediction/Alertモデル
 - ファイル: src/common/models.py
@@ -47,25 +51,63 @@
 - 完了: [ ]
 
 ## 📊 進捗状況
-- 完了ステップ: 1/8
-- 進捗率: 12.5%
+- 完了ステップ: 2/8
+- 進行中ステップ: Step 3（Prediction/Alertモデル）
+- 進捗率: 25%
+- Step 1成果: テストカバレッジ95.65%達成
+- Step 2成果: テストカバレッジ82.14%達成
 
 ## 🔍 実装詳細
 
 ### モデル設計の詳細
+
+#### Step 1: Tickモデル（実装済み✅）
 ```python
-# Float32使用例
 class Tick(BaseModel):
     timestamp: datetime
     symbol: str
-    bid: float  # Pydanticでfloat32に制約
-    ask: float
-    volume: float
+    bid: float  # Float32に制約
+    ask: float  # Float32に制約
+    volume: float  # Float32に制約
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    @field_validator('bid', 'ask', 'volume', mode='before')
+    def ensure_float32(cls, v: float) -> float:
+        """Float32型への変換を保証"""
+        return float(np.float32(v))
+```
+
+#### Step 2: OHLCモデル（実装済み✅）
+```python
+from enum import Enum
+
+class TimeFrame(str, Enum):
+    """時間足の定義"""
+    M1 = "M1"   # 1分足
+    M5 = "M5"   # 5分足
+    M15 = "M15" # 15分足
+    H1 = "H1"   # 1時間足
+    H4 = "H4"   # 4時間足
+    D1 = "D1"   # 日足
+
+class OHLC(BaseModel):
+    timestamp: datetime
+    symbol: str
+    timeframe: TimeFrame
+    open: float   # Float32制約
+    high: float   # Float32制約  
+    low: float    # Float32制約
+    close: float  # Float32制約
+    volume: float # Float32制約
+    
+    @field_validator('high')
+    def validate_high(cls, v, info):
+        """高値が開値・終値・安値以上であることを検証"""
+        # high >= low, high >= open, high >= close
+    
+    @property
+    def range(self) -> float:
+        """価格レンジ（高値-安値）"""
+        return float(np.float32(self.high - self.low))
 ```
 
 ### インターフェース設計の詳細
