@@ -1,10 +1,10 @@
 {
-  "comment": "Claude Code Settings - Simplified Configuration",
-  "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定",
   "permissions": {
     "allow": [
       "mcp__serena__list_dir",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(uv run --frozen pytest tests/unit/test_tick_model.py -v)",
+      "Bash(uv run:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -12,7 +12,6 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "default",
   "hooks": {
     "SessionStart": [
       {
@@ -37,5 +36,8 @@
         ]
       }
     ]
-  }
+  },
+  "outputStyle": "default",
+  "comment": "Claude Code Settings - Simplified Configuration",
+  "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }
