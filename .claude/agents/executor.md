@@ -21,6 +21,7 @@ color: blue
 1. 計画に記載されたステップを実装
 2. 実装内容を明確に記録
 3. エラーがあれば報告
+4. - Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
 
 ## 出力フォーマット
 ```markdown

@@ -20,6 +20,11 @@ color: purple
 
 ## レビュー観点
 1. **動作確認**: コードは期待通り動くか
+   Testing Requirements
+   - Framework: `uv run --frozen pytest`
+   - Coverage: test edge cases and errors
+   - New features require tests
+   - Bug fixes require regression tests
 2. **品質**: 読みやすく保守しやすいか
 3. **セキュリティ**: 脆弱性はないか
 4. **パフォーマンス**: 効率的か
