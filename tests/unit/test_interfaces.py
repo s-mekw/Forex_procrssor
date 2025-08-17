@@ -345,6 +345,105 @@ class ProtocolDataFetcher:
         return []
 
 
+class IncompleteDataFetcher(DataFetcher):
+    """不完全な実装（テスト用）"""
+    # fetch_tick_dataのみ実装
+    async def fetch_tick_data(
+        self, 
+        symbol: str, 
+        start_time: datetime, 
+        end_time: datetime,
+        limit: Optional[int] = None
+    ) -> pl.DataFrame:
+        return pl.DataFrame()
+    # 他のメソッドは未実装（インスタンス化時にエラーになるはず）
+
+
+class MinimalDataProcessor(DataProcessor):
+    """最小限の実装（DataProcessor継承テスト用）"""
+    def process_tick_to_ohlc(
+        self,
+        tick_data: pl.DataFrame,
+        timeframe: TimeFrame,
+        symbol: Optional[str] = None
+    ) -> pl.DataFrame:
+        return pl.DataFrame()
+    
+    def calculate_indicators(
+        self,
+        ohlc_data: pl.DataFrame,
+        indicators: List[str],
+        **params
+    ) -> pl.DataFrame:
+        return ohlc_data
+    
+    def validate_data(
+        self,
+        data: pl.DataFrame,
+        data_type: str = "tick"
+    ) -> tuple[bool, List[str]]:
+        return True, []
+
+
+class MinimalStorageHandler(StorageHandler):
+    """最小限の実装（StorageHandler継承テスト用）"""
+    async def save_data(
+        self,
+        data: Union[pl.DataFrame, List[Union[Tick, OHLC, Prediction, Alert]]],
+        key: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        return True
+    
+    async def load_data(
+        self,
+        key: str,
+        data_type: Optional[str] = None
+    ) -> Union[pl.DataFrame, List[Union[Tick, OHLC, Prediction, Alert]]]:
+        return pl.DataFrame()
+    
+    async def delete_data(self, key: str) -> bool:
+        return True
+    
+    async def query_data(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None
+    ) -> pl.DataFrame:
+        return pl.DataFrame()
+
+
+class MinimalPredictor(Predictor):
+    """最小限の実装（Predictor継承テスト用）"""
+    async def train(
+        self,
+        training_data: pl.DataFrame,
+        validation_data: Optional[pl.DataFrame] = None,
+        **hyperparameters
+    ) -> Dict[str, Any]:
+        return {"loss": 0.0}
+    
+    async def predict(
+        self,
+        input_data: pl.DataFrame,
+        **params
+    ) -> List[Prediction]:
+        return []
+    
+    async def evaluate(
+        self,
+        test_data: pl.DataFrame,
+        metrics: Optional[List[str]] = None
+    ) -> Dict[str, float]:
+        return {"mae": 0.0}
+    
+    async def save_model(self, path: Path) -> bool:
+        return True
+    
+    async def load_model(self, path: Path) -> bool:
+        return True
+
+
 # === Test cases ===
 
 @pytest.mark.asyncio
@@ -676,7 +775,8 @@ class TestPredictor:
 class TestProtocolCompatibility:
     """Protocolの互換性テスト"""
     
-    def test_protocol_implementation(self):
+    @pytest.mark.asyncio
+    async def test_protocol_implementation(self):
         """Protocolを満たす実装の確認"""
         # 継承なしでProtocolを満たす
         fetcher = ProtocolDataFetcher()
@@ -688,6 +788,17 @@ class TestProtocolCompatibility:
         assert hasattr(fetcher, "fetch_tick_data")
         assert hasattr(fetcher, "fetch_ohlc_data")
         assert hasattr(fetcher, "get_available_symbols")
+        
+        # 実際にメソッドを呼び出してみる
+        now = datetime.now(timezone.utc)
+        tick_result = await fetcher.fetch_tick_data("TEST", now, now)
+        assert isinstance(tick_result, pl.DataFrame)
+        
+        ohlc_result = await fetcher.fetch_ohlc_data("TEST", TimeFrame.M1, now, now)
+        assert isinstance(ohlc_result, pl.DataFrame)
+        
+        symbols = await fetcher.get_available_symbols()
+        assert isinstance(symbols, list)
     
     def test_abc_implementation(self):
         """ABCの実装確認"""
@@ -700,6 +811,209 @@ class TestProtocolCompatibility:
         # メソッドの存在確認
         assert hasattr(fetcher, "fetch_tick_data")
         assert hasattr(fetcher, "is_connected")
+    
+    def test_all_protocol_classes(self):
+        """すべてのProtocolクラスの実装確認"""
+        # DataProcessorProtocol
+        class TestProcessor:
+            def process_tick_to_ohlc(self, tick_data, timeframe, symbol=None):
+                return pl.DataFrame()
+            def calculate_indicators(self, ohlc_data, indicators, **params):
+                return pl.DataFrame()
+            def validate_data(self, data, data_type="tick"):
+                return True, []
+        
+        processor = TestProcessor()
+        assert hasattr(processor, "process_tick_to_ohlc")
+        assert hasattr(processor, "calculate_indicators")
+        assert hasattr(processor, "validate_data")
+        
+        # StorageHandlerProtocol
+        class TestStorage:
+            async def save_data(self, data, key, metadata=None):
+                return True
+            async def load_data(self, key, data_type=None):
+                return pl.DataFrame()
+            async def delete_data(self, key):
+                return True
+            async def query_data(self, query, params=None):
+                return pl.DataFrame()
+        
+        storage = TestStorage()
+        assert hasattr(storage, "save_data")
+        assert hasattr(storage, "load_data")
+        assert hasattr(storage, "delete_data")
+        assert hasattr(storage, "query_data")
+        
+        # PredictorProtocol
+        class TestPredictor:
+            async def train(self, training_data, validation_data=None, **hyperparameters):
+                return {}
+            async def predict(self, input_data, **params):
+                return []
+            async def evaluate(self, test_data, metrics=None):
+                return {}
+            async def save_model(self, path):
+                return True
+            async def load_model(self, path):
+                return True
+        
+        predictor = TestPredictor()
+        assert hasattr(predictor, "train")
+        assert hasattr(predictor, "predict")
+        assert hasattr(predictor, "evaluate")
+        assert hasattr(predictor, "save_model")
+        assert hasattr(predictor, "load_model")
+
+
+class TestAbstractMethods:
+    """抽象メソッドのテスト"""
+    
+    def test_cannot_instantiate_abstract_classes(self):
+        """抽象クラスは直接インスタンス化できないことを確認"""
+        # DataFetcherの直接インスタンス化はエラー
+        with pytest.raises(TypeError) as exc_info:
+            DataFetcher()
+        assert "Can't instantiate abstract class" in str(exc_info.value)
+        
+        # DataProcessorの直接インスタンス化はエラー
+        with pytest.raises(TypeError) as exc_info:
+            DataProcessor()
+        assert "Can't instantiate abstract class" in str(exc_info.value)
+        
+        # StorageHandlerの直接インスタンス化はエラー
+        with pytest.raises(TypeError) as exc_info:
+            StorageHandler()
+        assert "Can't instantiate abstract class" in str(exc_info.value)
+        
+        # Predictorの直接インスタンス化はエラー
+        with pytest.raises(TypeError) as exc_info:
+            Predictor()
+        assert "Can't instantiate abstract class" in str(exc_info.value)
+    
+    def test_incomplete_implementation_fails(self):
+        """不完全な実装はインスタンス化できないことを確認"""
+        # 必要なメソッドが未実装の場合はエラー
+        with pytest.raises(TypeError) as exc_info:
+            IncompleteDataFetcher()
+        assert "Can't instantiate abstract class" in str(exc_info.value)
+    
+    def test_dataprocessor_resample_ohlc_not_implemented(self):
+        """DataProcessorのresample_ohlcメソッドのデフォルト実装テスト"""
+        processor = MockDataProcessor()
+        
+        # テスト用OHLCデータ作成
+        ohlc_data = pl.DataFrame({
+            "timestamp": [datetime.now(timezone.utc)],
+            "symbol": ["USDJPY"],
+            "open": [150.0],
+            "high": [150.1],
+            "low": [149.9],
+            "close": [150.05],
+            "volume": [10000.0]
+        })
+        
+        # resample_ohlcはデフォルトでNotImplementedError
+        with pytest.raises(NotImplementedError) as exc_info:
+            processor.resample_ohlc(ohlc_data, TimeFrame.M1, TimeFrame.H1)
+        assert "Resampling is not implemented" in str(exc_info.value)
+    
+    @pytest.mark.asyncio
+    async def test_storagehandler_list_keys_not_implemented(self):
+        """StorageHandlerのlist_keysメソッドのデフォルト実装テスト"""
+        storage = MockStorageHandler()
+        
+        # list_keysはデフォルトでNotImplementedError
+        with pytest.raises(NotImplementedError) as exc_info:
+            await storage.list_keys()
+        assert "List keys is not implemented" in str(exc_info.value)
+    
+    @pytest.mark.asyncio
+    async def test_predictor_get_feature_importance_default(self):
+        """Predictorのget_feature_importanceメソッドのデフォルト実装テスト"""
+        predictor = MockPredictor()
+        
+        # デフォルト実装はNoneを返す
+        importance = await predictor.get_feature_importance()
+        assert importance is None
+    
+    def test_minimal_dataprocessor_implementation(self):
+        """最小限のDataProcessor実装のテスト"""
+        processor = MinimalDataProcessor()
+        
+        # インスタンス化可能であることを確認
+        assert isinstance(processor, DataProcessor)
+        
+        # テスト用データ作成
+        tick_data = pl.DataFrame({
+            "timestamp": [datetime.now(timezone.utc)],
+            "symbol": ["USDJPY"],
+            "bid": [150.0],
+            "ask": [150.01],
+            "volume": [1000.0]
+        })
+        
+        # メソッドが正しく動作することを確認
+        result = processor.process_tick_to_ohlc(tick_data, TimeFrame.M1)
+        assert isinstance(result, pl.DataFrame)
+        
+        # calculate_indicatorsのテスト
+        indicators_result = processor.calculate_indicators(tick_data, ["SMA"])
+        assert indicators_result.equals(tick_data)
+        
+        # validate_dataのテスト
+        is_valid, errors = processor.validate_data(tick_data)
+        assert is_valid is True
+        assert errors == []
+        
+        # resample_ohlcはデフォルト実装を使用
+        with pytest.raises(NotImplementedError):
+            processor.resample_ohlc(tick_data, TimeFrame.M1, TimeFrame.H1)
+    
+    @pytest.mark.asyncio
+    async def test_minimal_storagehandler_implementation(self):
+        """最小限のStorageHandler実装のテスト"""
+        storage = MinimalStorageHandler()
+        
+        # インスタンス化可能であることを確認
+        assert isinstance(storage, StorageHandler)
+        
+        # 各メソッドが正しく動作することを確認
+        assert await storage.save_data(pl.DataFrame(), "test") is True
+        result = await storage.load_data("test")
+        assert isinstance(result, pl.DataFrame)
+        assert await storage.delete_data("test") is True
+        query_result = await storage.query_data("test")
+        assert isinstance(query_result, pl.DataFrame)
+        
+        # list_keysはデフォルト実装
+        with pytest.raises(NotImplementedError):
+            await storage.list_keys()
+    
+    @pytest.mark.asyncio
+    async def test_minimal_predictor_implementation(self):
+        """最小限のPredictor実装のテスト"""
+        predictor = MinimalPredictor()
+        
+        # インスタンス化可能であることを確認
+        assert isinstance(predictor, Predictor)
+        
+        # 各メソッドが正しく動作することを確認
+        train_result = await predictor.train(pl.DataFrame())
+        assert "loss" in train_result
+        
+        predictions = await predictor.predict(pl.DataFrame())
+        assert isinstance(predictions, list)
+        
+        eval_result = await predictor.evaluate(pl.DataFrame())
+        assert "mae" in eval_result
+        
+        assert await predictor.save_model(Path("test.pkl")) is True
+        assert await predictor.load_model(Path("test.pkl")) is True
+        
+        # get_feature_importanceはデフォルト実装
+        importance = await predictor.get_feature_importance()
+        assert importance is None
 
 
 @pytest.mark.asyncio
@@ -783,3 +1097,151 @@ class TestInterfaceIntegration:
         # 予測結果を読み込み
         loaded_predictions = await storage.load_data("predictions/batch1")
         assert len(loaded_predictions) == len(predictions)
+
+
+class TestTypeAliases:
+    """型エイリアスのテスト"""
+    
+    def test_type_aliases_exist(self):
+        """型エイリアスが定義されていることを確認"""
+        from src.common.interfaces import (
+            DataFetcherType,
+            DataProcessorType,
+            StorageHandlerType,
+            PredictorType
+        )
+        
+        # 型エイリアスが存在することを確認
+        assert DataFetcherType is not None
+        assert DataProcessorType is not None
+        assert StorageHandlerType is not None
+        assert PredictorType is not None
+
+
+class TestMethodSignatures:
+    """メソッドシグネチャのテスト"""
+    
+    def test_datafetcher_method_signatures(self):
+        """DataFetcherのメソッドシグネチャ確認"""
+        import inspect
+        
+        # fetch_tick_dataのシグネチャ確認
+        sig = inspect.signature(DataFetcher.fetch_tick_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "symbol" in params
+        assert "start_time" in params
+        assert "end_time" in params
+        assert "limit" in params
+        
+        # fetch_ohlc_dataのシグネチャ確認
+        sig = inspect.signature(DataFetcher.fetch_ohlc_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "symbol" in params
+        assert "timeframe" in params
+        assert "start_time" in params
+        assert "end_time" in params
+        assert "limit" in params
+        
+        # get_available_symbolsのシグネチャ確認
+        sig = inspect.signature(DataFetcher.get_available_symbols)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+    
+    def test_dataprocessor_method_signatures(self):
+        """DataProcessorのメソッドシグネチャ確認"""
+        import inspect
+        
+        # process_tick_to_ohlcのシグネチャ確認
+        sig = inspect.signature(DataProcessor.process_tick_to_ohlc)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "tick_data" in params
+        assert "timeframe" in params
+        assert "symbol" in params
+        
+        # calculate_indicatorsのシグネチャ確認
+        sig = inspect.signature(DataProcessor.calculate_indicators)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "ohlc_data" in params
+        assert "indicators" in params
+        assert "params" in params
+        
+        # validate_dataのシグネチャ確認
+        sig = inspect.signature(DataProcessor.validate_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "data" in params
+        assert "data_type" in params
+    
+    def test_storagehandler_method_signatures(self):
+        """StorageHandlerのメソッドシグネチャ確認"""
+        import inspect
+        
+        # save_dataのシグネチャ確認
+        sig = inspect.signature(StorageHandler.save_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "data" in params
+        assert "key" in params
+        assert "metadata" in params
+        
+        # load_dataのシグネチャ確認
+        sig = inspect.signature(StorageHandler.load_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "key" in params
+        assert "data_type" in params
+        
+        # delete_dataのシグネチャ確認
+        sig = inspect.signature(StorageHandler.delete_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "key" in params
+        
+        # query_dataのシグネチャ確認
+        sig = inspect.signature(StorageHandler.query_data)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "query" in params
+        assert "params" in params
+    
+    def test_predictor_method_signatures(self):
+        """Predictorのメソッドシグネチャ確認"""
+        import inspect
+        
+        # trainのシグネチャ確認
+        sig = inspect.signature(Predictor.train)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "training_data" in params
+        assert "validation_data" in params
+        assert "hyperparameters" in params
+        
+        # predictのシグネチャ確認
+        sig = inspect.signature(Predictor.predict)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "input_data" in params
+        assert "params" in params
+        
+        # evaluateのシグネチャ確認
+        sig = inspect.signature(Predictor.evaluate)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "test_data" in params
+        assert "metrics" in params
+        
+        # save_modelのシグネチャ確認
+        sig = inspect.signature(Predictor.save_model)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "path" in params
+        
+        # load_modelのシグネチャ確認
+        sig = inspect.signature(Predictor.load_model)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "path" in params
