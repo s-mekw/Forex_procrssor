@@ -6,9 +6,10 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Optional
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 
 class Tick(BaseModel):
@@ -317,3 +318,329 @@ class OHLC(BaseModel):
             "close": np.float32(self.close),
             "volume": np.float32(self.volume)
         }
+
+
+class PredictionType(str, Enum):
+    """予測タイプの定義
+    
+    予測モデルが提供する予測の種類を定義します。
+    """
+    PRICE = "PRICE"           # 価格予測
+    DIRECTION = "DIRECTION"   # 方向性予測（上昇/下降）
+    VOLATILITY = "VOLATILITY" # ボラティリティ予測
+
+
+class AlertType(str, Enum):
+    """アラートタイプの定義
+    
+    システムが生成するアラートの種類を定義します。
+    """
+    PRICE_THRESHOLD = "PRICE_THRESHOLD"     # 価格閾値アラート
+    PATTERN_DETECTED = "PATTERN_DETECTED"   # パターン検出アラート
+    RISK_WARNING = "RISK_WARNING"           # リスク警告アラート
+
+
+class AlertSeverity(str, Enum):
+    """アラート重要度の定義
+    
+    アラートの重要度レベルを定義します。
+    """
+    INFO = "INFO"         # 情報レベル
+    WARNING = "WARNING"   # 警告レベル
+    CRITICAL = "CRITICAL" # 緊急レベル
+
+
+class Prediction(BaseModel):
+    """予測データモデル
+    
+    機械学習モデルによる予測結果を表現します。
+    メモリ効率のため、数値フィールドはFloat32として制約されます。
+    """
+    
+    symbol: str = Field(
+        ...,
+        min_length=6,
+        max_length=10,
+        description="通貨ペアシンボル（例: USDJPY, EURUSD）"
+    )
+    predicted_at: datetime = Field(
+        ...,
+        description="予測実行時刻（UTC）"
+    )
+    target_timestamp: datetime = Field(
+        ...,
+        description="予測対象時刻（UTC）"
+    )
+    prediction_type: PredictionType = Field(
+        ...,
+        description="予測タイプ"
+    )
+    predicted_value: float = Field(
+        ...,
+        description="予測値"
+    )
+    confidence_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="信頼度スコア（0.0-1.0）"
+    )
+    confidence_upper: Optional[float] = Field(
+        default=None,
+        description="信頼区間上限"
+    )
+    confidence_lower: Optional[float] = Field(
+        default=None,
+        description="信頼区間下限"
+    )
+    model_version: Optional[str] = Field(
+        default=None,
+        max_length=50,
+        description="予測モデルのバージョン"
+    )
+    metadata: Optional[dict] = Field(
+        default=None,
+        description="追加メタデータ"
+    )
+    
+    @field_validator('predicted_value', 'confidence_score', 'confidence_upper', 'confidence_lower', mode='before')
+    @classmethod
+    def ensure_float32(cls, v: float) -> float:
+        """Float32型への変換を保証"""
+        if v is not None:
+            # numpy float32として処理し、Pythonのfloatに戻す
+            return float(np.float32(v))
+        return v
+    
+    @model_validator(mode='after')
+    def validate_confidence_interval(self) -> 'Prediction':
+        """信頼区間の妥当性を検証"""
+        if self.confidence_upper is not None and self.confidence_lower is not None:
+            # Float32精度での比較
+            upper_f32 = float(np.float32(self.confidence_upper))
+            lower_f32 = float(np.float32(self.confidence_lower))
+            if upper_f32 < lower_f32:
+                raise ValueError('Confidence upper must be greater than or equal to confidence lower')
+        return self
+    
+    @field_validator('symbol')
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        """シンボルを大文字に正規化"""
+        return v.upper()
+    
+    @field_validator('target_timestamp')
+    @classmethod
+    def validate_target_timestamp(cls, v: datetime, info: ValidationInfo) -> datetime:
+        """予測対象時刻が予測実行時刻より未来であることを検証"""
+        if 'predicted_at' in info.data:
+            if v <= info.data['predicted_at']:
+                raise ValueError('Target timestamp must be after predicted_at timestamp')
+        return v
+    
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+        },
+        json_schema_extra={
+            "example": {
+                "symbol": "USDJPY",
+                "predicted_at": "2025-01-17T12:00:00Z",
+                "target_timestamp": "2025-01-17T13:00:00Z",
+                "prediction_type": "PRICE",
+                "predicted_value": 150.500,
+                "confidence_score": 0.85,
+                "confidence_upper": 150.600,
+                "confidence_lower": 150.400,
+                "model_version": "v1.2.3"
+            }
+        }
+    )
+    
+    @property
+    def confidence_range(self) -> Optional[float]:
+        """信頼区間の幅を計算"""
+        if self.confidence_upper is not None and self.confidence_lower is not None:
+            return float(np.float32(self.confidence_upper - self.confidence_lower))
+        return None
+    
+    @property
+    def is_high_confidence(self) -> bool:
+        """高信頼度（0.7以上）かどうかを判定"""
+        return self.confidence_score >= 0.7
+    
+    @property
+    def prediction_horizon_hours(self) -> float:
+        """予測ホライゾン（時間）を計算"""
+        delta = self.target_timestamp - self.predicted_at
+        return delta.total_seconds() / 3600
+    
+    def to_float32_dict(self) -> dict:
+        """Float32型で数値フィールドを含む辞書を返す"""
+        result = {
+            "symbol": self.symbol,
+            "predicted_at": self.predicted_at,
+            "target_timestamp": self.target_timestamp,
+            "prediction_type": self.prediction_type.value,
+            "predicted_value": np.float32(self.predicted_value),
+            "confidence_score": np.float32(self.confidence_score),
+            "model_version": self.model_version,
+            "metadata": self.metadata
+        }
+        if self.confidence_upper is not None:
+            result["confidence_upper"] = np.float32(self.confidence_upper)
+        if self.confidence_lower is not None:
+            result["confidence_lower"] = np.float32(self.confidence_lower)
+        return result
+
+
+class Alert(BaseModel):
+    """アラートデータモデル
+    
+    システムが生成するアラート情報を表現します。
+    メモリ効率のため、数値フィールドはFloat32として制約されます。
+    """
+    
+    symbol: str = Field(
+        ...,
+        min_length=6,
+        max_length=10,
+        description="通貨ペアシンボル（例: USDJPY, EURUSD）"
+    )
+    timestamp: datetime = Field(
+        ...,
+        description="アラート生成時刻（UTC）"
+    )
+    alert_type: AlertType = Field(
+        ...,
+        description="アラートタイプ"
+    )
+    severity: AlertSeverity = Field(
+        ...,
+        description="アラート重要度"
+    )
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="アラートメッセージ"
+    )
+    threshold_value: Optional[float] = Field(
+        default=None,
+        description="閾値（価格閾値アラートの場合）"
+    )
+    current_value: Optional[float] = Field(
+        default=None,
+        description="現在値（閾値比較用）"
+    )
+    condition: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="トリガー条件の記録"
+    )
+    metadata: Optional[dict] = Field(
+        default=None,
+        description="追加メタデータ"
+    )
+    acknowledged: bool = Field(
+        default=False,
+        description="確認済みフラグ"
+    )
+    
+    @field_validator('threshold_value', 'current_value', mode='before')
+    @classmethod
+    def ensure_float32(cls, v: float) -> float:
+        """Float32型への変換を保証"""
+        if v is not None:
+            # numpy float32として処理し、Pythonのfloatに戻す
+            return float(np.float32(v))
+        return v
+    
+    @field_validator('symbol')
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        """シンボルを大文字に正規化"""
+        return v.upper()
+    
+    @field_validator('current_value')
+    @classmethod
+    def validate_current_value(cls, v: Optional[float], info: ValidationInfo) -> Optional[float]:
+        """閾値アラートの場合、現在値と閾値の関係を記録"""
+        # 実際のアラート生成ロジックはビジネスロジック層で実装
+        # ここではデータの整合性のみ確認
+        if v is not None and 'alert_type' in info.data:
+            if info.data['alert_type'] == AlertType.PRICE_THRESHOLD:
+                if 'threshold_value' not in info.data or info.data['threshold_value'] is None:
+                    raise ValueError('Threshold value is required for price threshold alerts')
+        return v
+    
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+        },
+        json_schema_extra={
+            "example": {
+                "symbol": "USDJPY",
+                "timestamp": "2025-01-17T12:00:00Z",
+                "alert_type": "PRICE_THRESHOLD",
+                "severity": "WARNING",
+                "message": "USDJPY price exceeded threshold",
+                "threshold_value": 150.000,
+                "current_value": 150.123,
+                "condition": "price > 150.000",
+                "acknowledged": False
+            }
+        }
+    )
+    
+    @property
+    def is_critical(self) -> bool:
+        """緊急レベルのアラートかどうかを判定"""
+        return self.severity == AlertSeverity.CRITICAL
+    
+    @property
+    def is_warning(self) -> bool:
+        """警告レベルのアラートかどうかを判定"""
+        return self.severity == AlertSeverity.WARNING
+    
+    @property
+    def is_info(self) -> bool:
+        """情報レベルのアラートかどうかを判定"""
+        return self.severity == AlertSeverity.INFO
+    
+    @property
+    def threshold_exceeded(self) -> Optional[bool]:
+        """閾値超過判定（価格閾値アラートの場合）"""
+        if (self.alert_type == AlertType.PRICE_THRESHOLD and 
+            self.threshold_value is not None and 
+            self.current_value is not None):
+            # Float32精度での比較
+            current_f32 = np.float32(self.current_value)
+            threshold_f32 = np.float32(self.threshold_value)
+            return bool(current_f32 > threshold_f32)
+        return None
+    
+    @property
+    def threshold_difference(self) -> Optional[float]:
+        """閾値との差分を計算"""
+        if self.threshold_value is not None and self.current_value is not None:
+            return float(np.float32(self.current_value - self.threshold_value))
+        return None
+    
+    def to_float32_dict(self) -> dict:
+        """Float32型で数値フィールドを含む辞書を返す"""
+        result = {
+            "symbol": self.symbol,
+            "timestamp": self.timestamp,
+            "alert_type": self.alert_type.value,
+            "severity": self.severity.value,
+            "message": self.message,
+            "condition": self.condition,
+            "metadata": self.metadata,
+            "acknowledged": self.acknowledged
+        }
+        if self.threshold_value is not None:
+            result["threshold_value"] = np.float32(self.threshold_value)
+        if self.current_value is not None:
+            result["current_value"] = np.float32(self.current_value)
+        return result

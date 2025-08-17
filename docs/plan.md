@@ -18,10 +18,29 @@
 - プロパティメソッド: range（高値-安値）、is_bullish（陽線判定）、body_size（実体サイズ）
 - 完了: [x]
 
-### Step 3: Pydanticモデルの定義 - Prediction/Alertモデル
+### Step 3: Pydanticモデルの定義 - Prediction/Alertモデル ✅
 - ファイル: src/common/models.py
-- 作業: Predictionモデル（予測値、信頼区間、タイムスタンプ）とAlertモデル（アラートタイプ、閾値、メッセージ）の作成
-- 完了: [ ]
+- 作業内容:
+  1. PredictionType Enum（PRICE, DIRECTION, VOLATILITY）の定義
+  2. Predictionモデルの実装:
+     - symbol, predicted_at, target_timestamp（必須フィールド）
+     - prediction_type, predicted_value（Float32制約）
+     - confidence_score（0.0-1.0の範囲制約）
+     - confidence_upper, confidence_lower（信頼区間、Float32制約）
+     - 信頼区間の論理的整合性検証（upper >= lower）
+     - プロパティ: confidence_range（信頼区間の幅）
+  3. AlertType Enum（PRICE_THRESHOLD, PATTERN_DETECTED, RISK_WARNING）の定義
+  4. AlertSeverity Enum（INFO, WARNING, CRITICAL）の定義
+  5. Alertモデルの実装:
+     - symbol, timestamp, alert_type, severity（必須フィールド）
+     - threshold_value（Float32制約、optional）
+     - current_value（Float32制約、optional）
+     - message（アラート詳細メッセージ）
+     - condition（トリガー条件の記録）
+     - プロパティ: is_critical（重要度判定）, threshold_exceeded（閾値超過判定）
+- テスト: tests/common/test_prediction_alert_models.py
+- 目標カバレッジ: 80%以上
+- 完了: [x]
 
 ### Step 4: 基底インターフェースの定義
 - ファイル: src/common/interfaces.py
@@ -51,11 +70,22 @@
 - 完了: [ ]
 
 ## 📊 進捗状況
-- 完了ステップ: 2/8
-- 進行中ステップ: Step 3（Prediction/Alertモデル）
-- 進捗率: 25%
+- 完了ステップ: 3/8
+- 進行中ステップ: Step 4（基底インターフェースの定義）
+- 進捗率: 37.5%
 - Step 1成果: テストカバレッジ95.65%達成
 - Step 2成果: テストカバレッジ82.14%達成
+- Step 3成果: 全体テストカバレッジ85.63%達成
+
+### Step 3実装チェックリスト ✅
+- [x] PredictionType, AlertType, AlertSeverity Enumの定義
+- [x] Predictionモデルの基本フィールド実装
+- [x] PredictionモデルのFloat32制約とバリデーション
+- [x] Predictionモデルのプロパティメソッド
+- [x] Alertモデルの基本フィールド実装
+- [x] AlertモデルのFloat32制約とバリデーション
+- [x] Alertモデルのプロパティメソッド
+- [x] ユニットテストの作成（目標カバレッジ80%以上）
 
 ## 🔍 実装詳細
 
@@ -137,6 +167,16 @@ class Config(BaseSettings):
 ```
 
 ## 🎯 次のアクション
-1. src/common/ディレクトリの作成
-2. 必要な依存パッケージのインストール（pydantic、pydantic-settings）
-3. Step 1から順番に実装を開始
+### Step 3の実装手順
+1. PredictionType, AlertType, AlertSeverity Enumの定義から開始
+2. Predictionモデルの実装（Step 1, 2と同様のパターンで）
+3. Alertモデルの実装（Float32制約を一貫して適用）
+4. 各モデルのプロパティメソッドを追加
+5. tests/common/test_prediction_alert_models.pyでテストを作成
+6. カバレッジ80%以上を確認してからコミット
+
+### 実装のポイント
+- Step 1, 2で確立したFloat32制約パターンを踏襲
+- 包括的なドキュメント文字列を各レベルで記載
+- バリデーションロジックを充実させる
+- プロパティメソッドで実用的な派生値を提供
