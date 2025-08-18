@@ -26,7 +26,7 @@ dependencies = [
     "pandas>=2.1.0",
     "pyarrow>=14.0.0",
     # MT5関連
-    "MetaTrader5>=5.0.45",
+    "metatrader5>=5.0.45",
     # データベース・ストレージ
     "influxdb-client>=1.38.0",
     "fastparquet>=2023.10.1",
@@ -58,6 +58,7 @@ dependencies = [
     # ユーティリティ
     "python-dotenv>=1.0.0",
     "schedule>=1.2.0",
+    "marimo>=0.14.17",
 ]
 
 [project.optional-dependencies]
