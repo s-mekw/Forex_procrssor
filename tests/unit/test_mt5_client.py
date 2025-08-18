@@ -111,35 +111,30 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # テスト実行
         result = self.connection_manager.connect(self.test_config)
         
-        # 現時点ではconnectメソッドが未実装のため、Noneが返される
-        # Step 6で実装後に以下のアサーションを有効化
+        # モック呼び出しの検証
+        self.mock_mt5.initialize.assert_called_once()
+        self.mock_mt5.login.assert_called_once_with(
+            login=self.test_config['account'],
+            password=self.test_config['password'],
+            server=self.test_config['server'],
+            timeout=self.test_config['timeout']
+        )
         
-        # モック呼び出しの検証（Step 6実装後に有効化）
-        # self.mock_mt5.initialize.assert_called_once()
-        # self.mock_mt5.login.assert_called_once_with(
-        #     login=self.test_config['account'],
-        #     password=self.test_config['password'],
-        #     server=self.test_config['server'],
-        #     timeout=self.test_config['timeout']
-        # )
+        # ログ出力の検証
+        self.mock_logger.info.assert_any_call("MT5接続を開始します...")
+        self.mock_logger.info.assert_any_call("MT5への接続に成功しました")
+        self.mock_logger.info.assert_any_call(f"ターミナル情報: 会社={mock_terminal_info.company}, ビルド={mock_terminal_info.build}")
+        self.mock_logger.info.assert_any_call(f"アカウント情報: ログイン={mock_account_info.login}, 残高={mock_account_info.balance}, レバレッジ={mock_account_info.leverage}")
         
-        # ログ出力の検証（Step 6実装後に有効化）
-        # self.mock_logger.info.assert_any_call("MT5接続を開始します...")
-        # self.mock_logger.info.assert_any_call("MT5への接続に成功しました")
-        # self.mock_logger.info.assert_any_call(f"ターミナル情報: 会社={mock_terminal_info.company}, ビルド={mock_terminal_info.build}")
-        # self.mock_logger.info.assert_any_call(f"アカウント情報: ログイン={mock_account_info.login}, 残高={mock_account_info.balance}, レバレッジ={mock_account_info.leverage}")
+        # 接続状態の検証
+        self.assertTrue(result)
+        self.assertTrue(self.connection_manager.is_connected())
         
-        # 接続状態の検証（Step 6実装後に有効化）
-        # self.assertTrue(result)
-        # self.assertTrue(self.connection_manager.is_connected())
-        
-        # 現時点ではモックの設定とインスタンス作成のテスト
-        self.assertTrue(self.mock_mt5.initialize.return_value)
-        self.assertTrue(self.mock_mt5.login.return_value)
-        self.assertEqual(mock_terminal_info.company, "Test Broker")
-        self.assertEqual(mock_account_info.balance, 10000.0)
-        self.assertIsNotNone(self.connection_manager)
-        self.assertFalse(self.connection_manager.is_connected())  # 初期状態は未接続
+        # ターミナル情報とアカウント情報が保存されているか確認
+        self.assertIsNotNone(self.connection_manager.terminal_info)
+        self.assertIsNotNone(self.connection_manager.account_info)
+        self.assertEqual(self.connection_manager.terminal_info.company, "Test Broker")
+        self.assertEqual(self.connection_manager.account_info.balance, 10000.0)
 
     def test_connection_failure(self):
         """接続失敗時のテスト
@@ -157,14 +152,11 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # テスト実行
         result = self.connection_manager.connect(self.test_config)
         
-        # 現時点ではconnectメソッドが未実装のため、Noneが返される
-        # Step 6で実装後に以下のアサーションを有効化
-        
-        # 初期化失敗時の検証（Step 6実装後に有効化）
-        # self.assertFalse(result)
-        # self.assertFalse(self.connection_manager.is_connected())
-        # self.mock_logger.error.assert_any_call("MT5の初期化に失敗しました: (500, 'MT5初期化エラー: ターミナルが見つかりません')")
-        # self.mock_mt5.login.assert_not_called()  # ログインは呼ばれない
+        # 初期化失敗時の検証
+        self.assertFalse(result)
+        self.assertFalse(self.connection_manager.is_connected())
+        self.mock_logger.error.assert_any_call("MT5の初期化に失敗しました: (500, 'MT5初期化エラー: ターミナルが見つかりません')")
+        self.mock_mt5.login.assert_not_called()  # ログインは呼ばれない
         
         # モックをリセット
         self.mock_mt5.reset_mock()
@@ -178,24 +170,19 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # テスト実行
         result = self.connection_manager.connect(self.test_config)
         
-        # ログイン失敗時の検証（Step 6実装後に有効化）
-        # self.assertFalse(result)
-        # self.assertFalse(self.connection_manager.is_connected())
-        # self.mock_mt5.initialize.assert_called_once()
-        # self.mock_mt5.login.assert_called_once_with(
-        #     login=self.test_config['account'],
-        #     password=self.test_config['password'],
-        #     server=self.test_config['server'],
-        #     timeout=self.test_config['timeout']
-        # )
-        # self.mock_logger.error.assert_any_call("MT5へのログインに失敗しました: (10004, '認証失敗: アカウントまたはパスワードが正しくありません')")
-        
-        # 現時点ではモックの設定確認のみ
-        self.assertTrue(self.mock_mt5.initialize.return_value)
-        self.assertFalse(self.mock_mt5.login.return_value)
-        self.assertEqual(self.mock_mt5.last_error.return_value[0], 10004)
-        self.assertIn("認証失敗", self.mock_mt5.last_error.return_value[1])
-        self.assertFalse(self.connection_manager.is_connected())  # 接続状態は未接続のまま
+        # ログイン失敗時の検証
+        self.assertFalse(result)
+        self.assertFalse(self.connection_manager.is_connected())
+        self.mock_mt5.initialize.assert_called_once()
+        self.mock_mt5.login.assert_called_once_with(
+            login=self.test_config['account'],
+            password=self.test_config['password'],
+            server=self.test_config['server'],
+            timeout=self.test_config['timeout']
+        )
+        self.mock_logger.error.assert_any_call("MT5へのログインに失敗しました: (10004, '認証失敗: アカウントまたはパスワードが正しくありません')")
+        # shutdownが呼ばれたか確認
+        self.mock_mt5.shutdown.assert_called_once()
 
     @patch('time.sleep')  # time.sleepをモック化
     def test_reconnection_with_exponential_backoff(self, mock_sleep):

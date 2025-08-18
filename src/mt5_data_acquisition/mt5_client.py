@@ -90,13 +90,116 @@ class MT5ConnectionManager:
         Returns:
             bool: 接続成功時True、失敗時False
         """
-        # 実装はStep 6で行う
-        pass
+        # 設定を保存
+        self._config = config
+        
+        # 接続開始ログ
+        self.logger.info("MT5接続を開始します...")
+        
+        # MT5が利用できない場合（テスト環境など）
+        if mt5 is None:
+            self.logger.error("MetaTrader5パッケージがインストールされていません")
+            return False
+        
+        try:
+            # 1. MT5の初期化
+            path = config.get('path')
+            if path:
+                # パスが指定されている場合
+                init_result = mt5.initialize(path=path)
+            else:
+                # パスが指定されていない場合（デフォルトパス使用）
+                init_result = mt5.initialize()
+            
+            if not init_result:
+                # 初期化失敗
+                error = mt5.last_error()
+                self.logger.error(f"MT5の初期化に失敗しました: {error}")
+                return False
+            
+            # 2. MT5へのログイン
+            login = config.get('account')
+            password = config.get('password')
+            server = config.get('server')
+            timeout = config.get('timeout', self.DEFAULT_TIMEOUT)
+            
+            # ログイン実行
+            login_result = mt5.login(
+                login=login,
+                password=password,
+                server=server,
+                timeout=timeout
+            )
+            
+            if not login_result:
+                # ログイン失敗
+                error = mt5.last_error()
+                self.logger.error(f"MT5へのログインに失敗しました: {error}")
+                # 初期化は成功したが、ログインに失敗した場合はshutdownする
+                mt5.shutdown()
+                return False
+            
+            # 3. 接続成功時の処理
+            # ターミナル情報の取得
+            self._terminal_info = mt5.terminal_info()
+            if self._terminal_info:
+                self.logger.info(f"ターミナル情報: 会社={self._terminal_info.company}, ビルド={self._terminal_info.build}")
+            
+            # アカウント情報の取得
+            self._account_info = mt5.account_info()
+            if self._account_info:
+                self.logger.info(f"アカウント情報: ログイン={self._account_info.login}, 残高={self._account_info.balance}, レバレッジ={self._account_info.leverage}")
+            
+            # 接続状態を更新
+            self._connected = True
+            
+            # 再試行カウンタをリセット
+            self._reset_retry_count()
+            
+            # 成功ログ
+            self.logger.info("MT5への接続に成功しました")
+            
+            return True
+            
+        except Exception as e:
+            # 予期しない例外の処理
+            self.logger.error(f"MT5接続中に予期しないエラーが発生しました: {e}")
+            # 念のためshutdownを呼び出す
+            try:
+                if mt5:
+                    mt5.shutdown()
+            except:
+                pass
+            return False
     
-    def disconnect(self):
-        """MT5から切断"""
-        # 実装はStep 6で行う
-        pass
+    def disconnect(self) -> None:
+        """MT5から切断
+        
+        MT5との接続を安全に切断し、内部状態をリセットします。
+        """
+        # MT5が利用できない場合は何もしない
+        if mt5 is None:
+            self.logger.warning("MetaTrader5パッケージがインストールされていないため、切断処理をスキップします")
+            return
+        
+        try:
+            # MT5のシャットダウン
+            if self._connected:
+                mt5.shutdown()
+                self.logger.info("MT5から切断しました")
+            
+            # 内部状態のリセット
+            self._connected = False
+            self._terminal_info = None
+            self._account_info = None
+            
+        except Exception as e:
+            # 切断時のエラーは警告として記録
+            self.logger.warning(f"MT5切断中にエラーが発生しました: {e}")
+            # それでも内部状態はリセットする
+            self._connected = False
+            self._terminal_info = None
+            self._account_info = None
     
     def is_connected(self) -> bool:
         """接続状態を返す
