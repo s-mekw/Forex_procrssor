@@ -25,7 +25,9 @@
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_pool_management -v)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_health_check -xvs)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py -v --tb=short --no-cov)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py -v --no-cov)"
+      "Bash(python -m pytest tests/unit/test_mt5_client.py -v --no-cov)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_max_retry_attempts tests/unit/test_mt5_client.py::TestMT5ConnectionManagerIntegration::test_integration_flow -v)",
+      "Bash(python:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

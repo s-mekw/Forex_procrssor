@@ -245,10 +245,57 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # side_effectの動作確認テストは削除しても良いが、検証のために残しておく
         self.assertIsNotNone(self.connection_manager)
 
-    @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
-    def test_max_retry_attempts(self):
-        """最大再試行回数のテスト"""
-        pass
+    @patch('time.sleep')
+    def test_max_retry_attempts(self, mock_sleep):
+        """最大再試行回数のテスト
+        
+        最大5回の試行で全て失敗するケースをテスト:
+        1. 全5回の試行が失敗
+        2. 指数バックオフの完全な動作確認
+        3. 最終的にFalseが返されることを確認
+        4. 適切なエラーログが出力されることを確認
+        """
+        # 初回接続を失敗に設定
+        self.mock_mt5.initialize.return_value = True
+        self.mock_mt5.login.return_value = False
+        self.mock_mt5.last_error.return_value = (10004, "ネットワークエラー: 接続できません")
+        
+        # 初回接続試行（失敗）
+        result = self.connection_manager.connect(self.test_config)
+        self.assertFalse(result)
+        
+        # 再接続も全て失敗するように設定
+        # side_effect: 5回全て失敗
+        self.mock_mt5.login.side_effect = [False, False, False, False, False]
+        
+        # 再接続の実行
+        reconnect_result = self.connection_manager.reconnect()
+        
+        # 再接続失敗の検証
+        self.assertFalse(reconnect_result)
+        self.assertFalse(self.connection_manager.is_connected())
+        
+        # time.sleepの呼び出し検証
+        # 期待される呼び出し: sleep(1), sleep(2), sleep(4), sleep(8)の4回
+        # 注意: 5回目は最後の試行なのでsleepしない
+        expected_sleep_calls = [call(1), call(2), call(4), call(8)]
+        mock_sleep.assert_has_calls(expected_sleep_calls)
+        self.assertEqual(mock_sleep.call_count, 4)
+        
+        # ログイン試行回数の検証
+        # 初回接続で1回 + 再接続で5回 = 合計6回のログイン試行
+        self.assertEqual(self.mock_mt5.login.call_count, 6)
+        
+        # ログ出力の検証
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 1/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 2/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 3/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 4/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 5/5)")
+        self.mock_logger.error.assert_any_call("再接続に失敗しました。最大試行回数に達しました")
+        
+        # 再試行カウンタが最大値になっていることを確認
+        self.assertEqual(self.connection_manager.retry_count, 5)
 
     def test_connection_pool_management(self):
         """接続プール管理のテスト
@@ -597,20 +644,167 @@ class TestMT5ConnectionManagerIntegration(unittest.TestCase):
     
     def setUp(self):
         """統合テスト用のセットアップ"""
-        # 統合テスト用の設定
-        self.integration_config = {
-            'enable_real_connection': False,  # テスト環境ではFalse
-            'test_timeout': 5000
+        # MT5モジュールのモック作成
+        self.mock_mt5 = MagicMock()
+        
+        # パッチの適用（MT5パッケージをモック化）
+        self.mt5_patcher = patch('mt5_data_acquisition.mt5_client.mt5', self.mock_mt5)
+        self.mt5_patcher.start()  # パッチャーを開始
+        
+        # ロガーのモック
+        self.mock_logger = MagicMock(spec=logging.Logger)
+        self.logger_patcher = patch('mt5_data_acquisition.mt5_client.logger', self.mock_logger)
+        self.logger_patcher.start()  # パッチャーを開始
+        
+        # MT5ConnectionManagerのインスタンスを作成
+        self.connection_manager = MT5ConnectionManager()
+        
+        # テスト用の設定
+        self.test_config = {
+            'account': 12345678,
+            'password': 'test_password',
+            'server': 'TestServer-Demo',
+            'timeout': 30000,
+            'path': None
         }
     
     def tearDown(self):
         """統合テスト用のクリーンアップ"""
-        pass
+        # パッチを停止
+        if hasattr(self, 'mt5_patcher'):
+            try:
+                self.mt5_patcher.stop()
+            except:
+                pass
+        
+        if hasattr(self, 'logger_patcher'):
+            try:
+                self.logger_patcher.stop()
+            except:
+                pass
+        
+        # モックのリセット
+        if hasattr(self, 'mock_mt5'):
+            self.mock_mt5.reset_mock()
+        
+        if hasattr(self, 'mock_logger'):
+            self.mock_logger.reset_mock()
     
-    @unittest.skip("統合テストは後のステップで実装")
-    def test_full_connection_lifecycle(self):
-        """接続の完全なライフサイクルテスト"""
-        pass
+    def test_integration_flow(self):
+        """完全な接続フローの統合テスト
+        
+        以下のフローをテスト:
+        1. 初期接続の確立
+        2. ヘルスチェックの実行
+        3. 接続プールでの管理
+        4. 意図的な切断
+        5. 再接続の実行
+        6. HealthCheckerとの統合
+        7. 最終的なクリーンアップ
+        """
+        from mt5_data_acquisition.mt5_client import ConnectionPool, HealthChecker
+        
+        # ========== 1. 初期接続の確立 ==========
+        # MT5モックを成功状態に設定
+        self.mock_mt5.initialize.return_value = True
+        self.mock_mt5.login.return_value = True
+        
+        # ターミナル情報とアカウント情報のモック
+        mock_terminal_info = MagicMock()
+        mock_terminal_info.company = "Test Broker"
+        mock_terminal_info.connected = True
+        mock_terminal_info.build = 3320
+        self.mock_mt5.terminal_info.return_value = mock_terminal_info
+        
+        mock_account_info = MagicMock()
+        mock_account_info.login = 12345678
+        mock_account_info.balance = 10000.0
+        mock_account_info.leverage = 100
+        self.mock_mt5.account_info.return_value = mock_account_info
+        
+        # 接続を確立
+        result = self.connection_manager.connect(self.test_config)
+        self.assertTrue(result, "初期接続が成功すべき")
+        self.assertTrue(self.connection_manager.is_connected())
+        
+        # ========== 2. ヘルスチェックの実行 ==========
+        health_result = self.connection_manager.health_check()
+        self.assertTrue(health_result, "接続済みでヘルスチェックは成功すべき")
+        
+        # ========== 3. 接続プールでの管理 ==========
+        # ConnectionPoolを作成して接続を管理
+        pool = ConnectionPool(self.test_config, max_connections=2)
+        
+        # 接続を取得
+        conn1 = pool.acquire()
+        self.assertIsNotNone(conn1, "プールから接続が取得できるべき")
+        self.assertIsInstance(conn1, MT5ConnectionManager)
+        
+        # プール状態の確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 1)
+        self.assertEqual(status['idle'], 0)
+        self.assertEqual(status['total'], 1)
+        
+        # 接続を返却
+        pool.release(conn1)
+        status = pool.get_status()
+        self.assertEqual(status['active'], 0)
+        self.assertEqual(status['idle'], 1)
+        
+        # ========== 4. 意図的な切断 ==========
+        self.connection_manager.disconnect()
+        self.assertFalse(self.connection_manager.is_connected(), "切断後は未接続状態になるべき")
+        
+        # 切断状態でのヘルスチェック（失敗するはず）
+        health_result = self.connection_manager.health_check()
+        self.assertFalse(health_result, "切断状態でヘルスチェックは失敗すべき")
+        
+        # ========== 5. 再接続の実行 ==========
+        # 再接続は成功するように設定
+        self.mock_mt5.login.side_effect = None  # side_effectをクリア
+        self.mock_mt5.login.return_value = True
+        
+        reconnect_result = self.connection_manager.reconnect()
+        self.assertTrue(reconnect_result, "再接続が成功すべき")
+        self.assertTrue(self.connection_manager.is_connected())
+        
+        # ========== 6. HealthCheckerとの統合 ==========
+        # HealthCheckerを作成して動作確認
+        health_checker = HealthChecker(
+            connection_manager=self.connection_manager,
+            interval=1,
+            auto_reconnect=True
+        )
+        
+        # HealthCheckerを開始
+        health_checker.start()
+        self.assertTrue(health_checker.is_running, "HealthCheckerが実行中であるべき")
+        
+        # 少し待機してからチェック実行を確認
+        import time
+        time.sleep(0.1)
+        
+        # HealthCheckerを停止
+        health_checker.stop()
+        self.assertFalse(health_checker.is_running, "HealthCheckerが停止しているべき")
+        
+        # ========== 7. 最終的なクリーンアップ ==========
+        # プールの全接続をクローズ
+        pool.close_all()
+        self.assertTrue(pool.is_closed, "プールがクローズされているべき")
+        
+        # 最終的な切断
+        self.connection_manager.disconnect()
+        self.assertFalse(self.connection_manager.is_connected())
+        
+        # MT5のshutdownが呼ばれたことを確認
+        self.mock_mt5.shutdown.assert_called()
+        
+        # ログ出力の確認（主要なもののみ）
+        self.mock_logger.info.assert_any_call("MT5への接続に成功しました")
+        self.mock_logger.info.assert_any_call("MT5から切断しました")
+        self.mock_logger.info.assert_any_call("再接続に成功しました (試行回数: 1)")
 
 
 @pytest.mark.unit
