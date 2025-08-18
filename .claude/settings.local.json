@@ -19,7 +19,10 @@
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success -xvs)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)"
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_pool_management -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v --tb=short --no-cov)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_pool_management -v)"
     ]
   },
   "enableAllProjectMcpServers": true,

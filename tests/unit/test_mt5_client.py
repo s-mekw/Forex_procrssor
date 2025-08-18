@@ -17,8 +17,8 @@ import time
 # srcディレクトリをパスに追加
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-# MT5ConnectionManagerのインポート
-from mt5_data_acquisition.mt5_client import MT5ConnectionManager
+# MT5ConnectionManagerとConnectionPoolのインポート
+from mt5_data_acquisition.mt5_client import MT5ConnectionManager, ConnectionPool
 
 
 class TestMT5ConnectionManager(unittest.TestCase):
@@ -250,10 +250,116 @@ class TestMT5ConnectionManager(unittest.TestCase):
         """最大再試行回数のテスト"""
         pass
 
-    @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
     def test_connection_pool_management(self):
-        """接続プール管理のテスト"""
-        pass
+        """接続プール管理のテスト
+        
+        ConnectionPoolクラスの基本機能をテストします：
+        1. 接続の取得（acquire）
+        2. 接続の返却（release）
+        3. 最大接続数制限の動作
+        4. プール状態の取得（get_status）
+        5. 全接続のクローズ（close_all）
+        """
+        # ConnectionPoolのインスタンス作成
+        pool = ConnectionPool(self.test_config, max_connections=2)
+        
+        # 初期状態の確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 0)
+        self.assertEqual(status['idle'], 0)
+        self.assertEqual(status['max_connections'], 2)
+        self.assertEqual(status['total'], 0)
+        
+        # 1. 最初の接続取得
+        # MT5のモックを成功状態に設定
+        self.mock_mt5.initialize.return_value = True
+        self.mock_mt5.login.return_value = True
+        
+        # ターミナル情報のモックオブジェクト作成
+        mock_terminal_info = MagicMock()
+        mock_terminal_info.company = "Test Broker"
+        mock_terminal_info.build = 3320
+        self.mock_mt5.terminal_info.return_value = mock_terminal_info
+        
+        # アカウント情報のモックオブジェクト作成
+        mock_account_info = MagicMock()
+        mock_account_info.login = 12345678
+        mock_account_info.balance = 10000.0
+        mock_account_info.leverage = 100
+        self.mock_mt5.account_info.return_value = mock_account_info
+        
+        conn1 = pool.acquire()
+        self.assertIsNotNone(conn1)
+        self.assertIsInstance(conn1, MT5ConnectionManager)
+        
+        # 接続取得後の状態確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 1)
+        self.assertEqual(status['idle'], 0)
+        self.assertEqual(status['total'], 1)
+        
+        # 2. 2番目の接続取得
+        conn2 = pool.acquire()
+        self.assertIsNotNone(conn2)
+        self.assertIsInstance(conn2, MT5ConnectionManager)
+        self.assertIsNot(conn1, conn2)  # 異なるインスタンスであることを確認
+        
+        # 最大接続数に達した状態の確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 2)
+        self.assertEqual(status['idle'], 0)
+        self.assertEqual(status['total'], 2)
+        
+        # 3. 最大接続数を超える取得試行（タイムアウト付き）
+        conn3 = pool.acquire(timeout=0.1)  # 0.1秒でタイムアウト
+        self.assertIsNone(conn3)  # 最大接続数に達しているため取得失敗
+        
+        # 4. 接続の返却
+        result = pool.release(conn1)
+        self.assertTrue(result)
+        
+        # 返却後の状態確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 1)
+        self.assertEqual(status['idle'], 1)
+        self.assertEqual(status['total'], 2)
+        
+        # 5. 返却された接続の再取得
+        conn3 = pool.acquire()
+        self.assertIsNotNone(conn3)
+        self.assertIs(conn3, conn1)  # 同じインスタンスが再利用されることを確認
+        
+        # 6. 全接続の返却
+        pool.release(conn2)
+        pool.release(conn3)
+        
+        status = pool.get_status()
+        self.assertEqual(status['active'], 0)
+        self.assertEqual(status['idle'], 2)
+        self.assertEqual(status['total'], 2)
+        
+        # 7. 全接続のクローズ
+        pool.close_all()
+        self.assertTrue(pool.is_closed)
+        
+        # クローズ後の状態確認
+        status = pool.get_status()
+        self.assertEqual(status['active'], 0)
+        self.assertEqual(status['idle'], 0)
+        self.assertEqual(status['total'], 0)
+        
+        # 8. クローズ後の接続取得試行
+        conn4 = pool.acquire()
+        self.assertIsNone(conn4)  # プールがクローズされているため取得失敗
+        
+        # コンテキストマネージャーのテスト
+        with ConnectionPool(self.test_config, max_connections=1) as test_pool:
+            # プール内での操作
+            conn = test_pool.acquire()
+            self.assertIsNotNone(conn)
+            test_pool.release(conn)
+        # withブロックを出ると自動的にclose_all()が呼ばれる
+        self.assertTrue(test_pool.is_closed)
 
     @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
     def test_health_check(self):

@@ -6,7 +6,8 @@ MetaTrader 5への接続管理、再接続ロジック、接続プール管理�
 
 import logging
 import time
-from typing import Optional, Dict, Any
+import threading
+from typing import Optional, Dict, Any, List
 
 # structlogを使用（可能な場合）
 try:
@@ -362,3 +363,235 @@ class MT5ConnectionManager:
         )
         self.logger.debug(f"バックオフ待機時間を計算: {delay}秒 (試行回数: {self._retry_count})")
         return delay
+
+
+class ConnectionPool:
+    """MT5接続プールの管理
+    
+    複数のMT5ConnectionManagerインスタンスを効率的に管理し、
+    接続の再利用とリソース管理を行います。
+    スレッドセーフな実装により、マルチスレッド環境での使用も可能です。
+    
+    Attributes:
+        DEFAULT_MAX_CONNECTIONS: デフォルトの最大接続数
+        DEFAULT_ACQUIRE_TIMEOUT: 接続取得のデフォルトタイムアウト時間（秒）
+    """
+    
+    DEFAULT_MAX_CONNECTIONS = 3
+    DEFAULT_ACQUIRE_TIMEOUT = 30  # 30秒
+    
+    def __init__(self, config: Dict[str, Any], max_connections: int = None):
+        """初期化メソッド
+        
+        Args:
+            config: MT5接続設定の辞書
+            max_connections: 最大接続数（デフォルト: 3）
+        """
+        self._config = config
+        self._max_connections = max_connections or self.DEFAULT_MAX_CONNECTIONS
+        
+        # プール管理
+        self._idle_connections: List[MT5ConnectionManager] = []  # アイドル接続
+        self._active_connections: List[MT5ConnectionManager] = []  # アクティブ接続
+        
+        # スレッドセーフティのためのロック
+        self._lock = threading.Lock()
+        self._connection_available = threading.Condition(self._lock)
+        
+        # ロガー
+        self.logger = logger
+        
+        # 状態フラグ
+        self._closed = False
+        
+        self.logger.info(f"接続プールを初期化しました (最大接続数: {self._max_connections})")
+    
+    def _create_connection(self) -> Optional[MT5ConnectionManager]:
+        """新しい接続を作成
+        
+        Returns:
+            新しいMT5ConnectionManagerインスタンス、作成失敗時はNone
+        """
+        try:
+            connection = MT5ConnectionManager(self._config)
+            if connection.connect(self._config):
+                self.logger.info("新しい接続を作成しました")
+                return connection
+            else:
+                self.logger.error("新しい接続の作成に失敗しました")
+                return None
+        except Exception as e:
+            self.logger.error(f"接続作成中にエラーが発生しました: {e}")
+            return None
+    
+    def acquire(self, timeout: Optional[float] = None) -> Optional[MT5ConnectionManager]:
+        """利用可能な接続を取得
+        
+        アイドルプールから接続を取得するか、新規作成します。
+        最大接続数に達している場合は待機またはNoneを返します。
+        
+        Args:
+            timeout: 接続取得のタイムアウト時間（秒）。Noneの場合はデフォルト値を使用
+        
+        Returns:
+            MT5ConnectionManagerインスタンス、取得失敗時はNone
+        """
+        if self._closed:
+            self.logger.error("プールがクローズされています")
+            return None
+        
+        timeout = timeout if timeout is not None else self.DEFAULT_ACQUIRE_TIMEOUT
+        deadline = time.time() + timeout if timeout > 0 else None
+        
+        with self._connection_available:
+            while True:
+                # アイドル接続があれば使用
+                if self._idle_connections:
+                    connection = self._idle_connections.pop(0)
+                    # 接続の健全性チェック
+                    if connection.is_connected():
+                        self._active_connections.append(connection)
+                        self.logger.debug(f"アイドルプールから接続を取得 (アクティブ: {len(self._active_connections)}, アイドル: {len(self._idle_connections)})")
+                        return connection
+                    else:
+                        # 接続が切れている場合は新しく作成を試みる
+                        self.logger.warning("アイドル接続が切断されていました。再作成を試みます")
+                        continue
+                
+                # 新規作成可能か確認
+                total_connections = len(self._active_connections) + len(self._idle_connections)
+                if total_connections < self._max_connections:
+                    # 新規作成
+                    connection = self._create_connection()
+                    if connection:
+                        self._active_connections.append(connection)
+                        self.logger.debug(f"新規接続を作成してアクティブに追加 (アクティブ: {len(self._active_connections)}, アイドル: {len(self._idle_connections)})")
+                        return connection
+                    else:
+                        self.logger.error("新規接続の作成に失敗しました")
+                        return None
+                
+                # 最大接続数に達している場合は待機
+                self.logger.debug(f"最大接続数に達しています。待機中... (最大: {self._max_connections})")
+                
+                # タイムアウトチェック
+                if deadline:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        self.logger.warning("接続取得がタイムアウトしました")
+                        return None
+                    # 待機（タイムアウト付き）
+                    if not self._connection_available.wait(timeout=remaining):
+                        self.logger.warning("接続取得がタイムアウトしました")
+                        return None
+                else:
+                    # 無限待機
+                    self._connection_available.wait()
+    
+    def release(self, connection: MT5ConnectionManager) -> bool:
+        """使用済み接続をプールに返却
+        
+        Args:
+            connection: 返却するMT5ConnectionManagerインスタンス
+        
+        Returns:
+            bool: 返却成功時True、失敗時False
+        """
+        if not connection:
+            self.logger.warning("Noneの接続を返却しようとしました")
+            return False
+        
+        with self._connection_available:
+            # アクティブ接続から削除
+            if connection in self._active_connections:
+                self._active_connections.remove(connection)
+                
+                # 接続の健全性をチェック
+                if connection.is_connected() and not self._closed:
+                    # アイドルプールに追加
+                    self._idle_connections.append(connection)
+                    self.logger.debug(f"接続をアイドルプールに返却 (アクティブ: {len(self._active_connections)}, アイドル: {len(self._idle_connections)})")
+                    # 待機中のスレッドに通知
+                    self._connection_available.notify()
+                    return True
+                else:
+                    # 接続が切れているか、プールがクローズされている場合は切断
+                    try:
+                        connection.disconnect()
+                        self.logger.info("不健全な接続を切断しました")
+                    except Exception as e:
+                        self.logger.error(f"接続の切断中にエラーが発生しました: {e}")
+                    return True
+            else:
+                self.logger.warning("アクティブプールに存在しない接続を返却しようとしました")
+                return False
+    
+    def close_all(self) -> None:
+        """全接続を切断してプールをクローズ
+        
+        アクティブおよびアイドルの全接続を切断し、
+        プールをクローズ状態にします。
+        """
+        with self._lock:
+            self._closed = True
+            
+            # アクティブ接続を切断
+            for connection in self._active_connections:
+                try:
+                    connection.disconnect()
+                    self.logger.debug("アクティブ接続を切断しました")
+                except Exception as e:
+                    self.logger.error(f"アクティブ接続の切断中にエラーが発生しました: {e}")
+            
+            # アイドル接続を切断
+            for connection in self._idle_connections:
+                try:
+                    connection.disconnect()
+                    self.logger.debug("アイドル接続を切断しました")
+                except Exception as e:
+                    self.logger.error(f"アイドル接続の切断中にエラーが発生しました: {e}")
+            
+            # プールをクリア
+            total_closed = len(self._active_connections) + len(self._idle_connections)
+            self._active_connections.clear()
+            self._idle_connections.clear()
+            
+            self.logger.info(f"接続プールをクローズしました (切断した接続数: {total_closed})")
+    
+    def get_status(self) -> Dict[str, int]:
+        """プールの現在の状態を取得
+        
+        Returns:
+            プール状態の辞書
+                - active: アクティブ接続数
+                - idle: アイドル接続数
+                - max_connections: 最大接続数
+                - total: 現在の総接続数
+        """
+        with self._lock:
+            status = {
+                'active': len(self._active_connections),
+                'idle': len(self._idle_connections),
+                'max_connections': self._max_connections,
+                'total': len(self._active_connections) + len(self._idle_connections)
+            }
+            self.logger.debug(f"プール状態: アクティブ={status['active']}, アイドル={status['idle']}, 最大={status['max_connections']}")
+            return status
+    
+    @property
+    def is_closed(self) -> bool:
+        """プールがクローズされているか確認
+        
+        Returns:
+            bool: クローズされている場合True
+        """
+        return self._closed
+    
+    def __enter__(self):
+        """コンテキストマネージャーのエンター"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """コンテキストマネージャーのイグジット"""
+        self.close_all()
+        return False
