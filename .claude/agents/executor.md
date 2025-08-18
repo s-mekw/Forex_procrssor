@@ -22,6 +22,15 @@ color: blue
 2. 実装内容を明確に記録
 3. エラーがあれば報告
 4. - Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
+5.    Testing Requirements
+   - Framework: `uv run --frozen pytest`
+   - Coverage: test edge cases and errors
+   - New features require tests
+   - Bug fixes require regression tests
+6. Ruff
+   - Format: `uv run --frozen ruff format .`
+   - Check: `uv run --frozen ruff check .`
+   - Fix: `uv run --frozen ruff check . --fix`
 
 ## 出力フォーマット
 ```markdown
