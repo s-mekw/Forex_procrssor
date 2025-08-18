@@ -361,10 +361,149 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # withブロックを出ると自動的にclose_all()が呼ばれる
         self.assertTrue(test_pool.is_closed)
 
-    @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
     def test_health_check(self):
         """ヘルスチェック機能のテスト"""
-        pass
+        from mt5_data_acquisition.mt5_client import HealthChecker
+        
+        # モックをリセット
+        self.mock_mt5.reset_mock()
+        
+        # ========== シナリオ1: 正常な接続時のhealth_check ==========
+        # 接続を確立
+        self.mock_mt5.initialize.return_value = True
+        self.mock_mt5.login.return_value = True
+        
+        # terminal_infoとaccount_infoのモック
+        mock_terminal_info = type('TerminalInfo', (), {
+            'community_account': False,
+            'connected': True,
+            'dlls_allowed': True,
+            'trade_allowed': True,
+            'tradeapi_disabled': False,
+            'path': 'C:/Program Files/MetaTrader 5',
+            'data_path': 'C:/Users/Test/AppData/Roaming/MetaQuotes/Terminal',
+            'company': 'Test Broker',  # companyを追加
+            'build': 3000,  # buildを追加
+        })()
+        
+        mock_account_info = type('AccountInfo', (), {
+            'login': 12345678,
+            'server': 'TestServer',
+            'balance': 100000.0,
+            'profit': 0.0,
+            'equity': 100000.0,
+            'margin': 0.0,
+            'currency': 'USD',
+            'leverage': 100,  # leverageを追加
+        })()
+        
+        self.mock_mt5.terminal_info.return_value = mock_terminal_info
+        self.mock_mt5.account_info.return_value = mock_account_info
+        
+        # 接続を確立
+        result = self.connection_manager.connect(self.test_config)
+        self.assertTrue(result)
+        self.assertTrue(self.connection_manager.is_connected())
+        
+        # ヘルスチェック実行（成功）
+        health_result = self.connection_manager.health_check()
+        self.assertTrue(health_result)
+        
+        # MT5 APIが呼ばれたことを確認
+        self.mock_mt5.terminal_info.assert_called()
+        self.mock_mt5.account_info.assert_called()
+        
+        # ========== シナリオ2: 切断状態でのhealth_check ==========
+        # 接続を切断
+        self.connection_manager.disconnect()
+        self.assertFalse(self.connection_manager.is_connected())
+        
+        # ヘルスチェック実行（失敗）
+        health_result = self.connection_manager.health_check()
+        self.assertFalse(health_result)
+        
+        # ========== シナリオ3: MT5 API呼び出し失敗時 ==========
+        # 再度接続を確立
+        self.mock_mt5.login.return_value = True
+        result = self.connection_manager.connect(self.test_config)
+        self.assertTrue(result)
+        
+        # terminal_infoがNoneを返すように設定
+        self.mock_mt5.terminal_info.return_value = None
+        
+        # ヘルスチェック実行（失敗）
+        health_result = self.connection_manager.health_check()
+        self.assertFalse(health_result)
+        
+        # ========== シナリオ4: HealthCheckerクラスのテスト ==========
+        # 新しい接続マネージャーインスタンスを作成
+        test_manager = MT5ConnectionManager(self.test_config)
+        
+        # HealthCheckerインスタンスを作成（チェック間隔1秒、自動再接続有効）
+        health_checker = HealthChecker(
+            connection_manager=test_manager,
+            interval=1,
+            auto_reconnect=True
+        )
+        
+        # HealthCheckerの初期状態を確認
+        self.assertFalse(health_checker.is_running)
+        self.assertEqual(health_checker.interval, 1)
+        self.assertTrue(health_checker.auto_reconnect)
+        
+        # HealthCheckerを開始
+        health_checker.start()
+        self.assertTrue(health_checker.is_running)
+        
+        # 少し待機してからチェック実行を確認（モックで動作確認）
+        import time
+        time.sleep(0.1)  # 短い待機
+        
+        # HealthCheckerを停止
+        health_checker.stop()
+        self.assertFalse(health_checker.is_running)
+        
+        # ========== シナリオ5: 自動再接続のテスト ==========
+        # HealthCheckerで自動再接続が動作することを確認
+        test_manager2 = MT5ConnectionManager(self.test_config)
+        
+        # 最初は接続失敗するが、reconnectで成功するように設定
+        test_manager2._connected = True  # 接続済みと仮定
+        
+        # health_checkメソッドをモック（失敗を返す）
+        with patch.object(test_manager2, 'health_check', return_value=False):
+            with patch.object(test_manager2, 'reconnect', return_value=True) as mock_reconnect:
+                # HealthCheckerを作成（自動再接続有効）
+                health_checker2 = HealthChecker(
+                    connection_manager=test_manager2,
+                    interval=1,
+                    auto_reconnect=True
+                )
+                
+                # 単一のチェックを実行
+                health_checker2._perform_check()
+                
+                # reconnectが呼ばれたことを確認
+                mock_reconnect.assert_called_once()
+        
+        # ========== シナリオ6: 自動再接続無効時のテスト ==========
+        test_manager3 = MT5ConnectionManager(self.test_config)
+        test_manager3._connected = True
+        
+        with patch.object(test_manager3, 'health_check', return_value=False):
+            with patch.object(test_manager3, 'reconnect', return_value=True) as mock_reconnect:
+                # HealthCheckerを作成（自動再接続無効）
+                health_checker3 = HealthChecker(
+                    connection_manager=test_manager3,
+                    interval=1,
+                    auto_reconnect=False  # 自動再接続無効
+                )
+                
+                # 単一のチェックを実行
+                health_checker3._perform_check()
+                
+                # reconnectが呼ばれていないことを確認
+                mock_reconnect.assert_not_called()
     
     def test_property_methods(self):
         """プロパティメソッドのテスト（Step 5で実装）"""

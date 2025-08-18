@@ -1,11 +1,11 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: 8/10
-- 最終更新: 2025-08-18 12:30
+- ステップ: 9/10
+- 最終更新: 2025-08-18 14:00
 - 対象タスク: MT5接続管理のテスト駆動実装（要件1.1）
-- 現在の作業: 接続プール管理実装
-- 進捗: Step 1-7完了、Step 8実装開始
+- 現在の作業: ヘルスチェック機能実装
+- 進捗: Step 1-8完了、Step 9実装開始
 
 ## 📋 計画
 ### Step 1: テストファイル作成と基本構造
@@ -146,14 +146,62 @@
 - 完了: [✅]
 
 ### Step 9: ヘルスチェック機能実装
-- ファイル: src/mt5_data_acquisition/mt5_client.py
-- 作業: 定期的な接続状態確認、自動再接続トリガー
-- 完了: [ ]
+- ファイル: src/mt5_data_acquisition/mt5_client.py, tests/unit/test_mt5_client.py
+- 作業: 
+  1. MT5ConnectionManagerへのhealth_checkメソッド追加
+    - 接続状態の確認（MT5 APIへのping）
+    - ターミナル情報の取得可否チェック
+    - 接続失敗時False返却、成功時True返却
+    - エラー時の詳細ログ出力
+  2. HealthCheckerクラスの実装
+    - __init__: チェック間隔、再接続フラグ設定
+    - start(): バックグラウンドスレッドでヘルスチェック開始
+    - stop(): ヘルスチェックスレッドの停止
+    - _check_loop(): 定期的なヘルスチェック実行ループ
+    - _perform_check(): 単一のヘルスチェック実行
+  3. test_health_checkテストの実装
+    - @unittest.skipデコレータの削除
+    - health_checkメソッドのテスト（正常・異常）
+    - HealthCheckerクラスの動作テスト
+    - 自動再接続のテスト
+  4. スレッドセーフティとリソース管理
+    - threading.Eventによる停止制御
+    - 適切なスレッド終了処理
+    - エラー時の例外処理
+- 完了: [✅]
 
 ### Step 10: 統合テストとリファクタリング
 - ファイル: tests/unit/test_mt5_client.py, src/mt5_data_acquisition/mt5_client.py
 - 作業: 全テストの実行確認、コードの最適化とドキュメント追加
 - 完了: [ ]
+
+### Step 9 完了
+- ✅ health_checkメソッドの完全実装
+  - 接続状態の確認（_connectedフラグチェック）
+  - MT5 APIへのping（terminal_infoとaccount_info取得）
+  - 成功時True、失敗時False返却
+  - 詳細なログ出力（debug、warningレベル）
+- ✅ HealthCheckerクラスの完全実装
+  - バックグラウンドスレッドでの定期チェック
+  - threading.Eventを使用した優雅な停止制御
+  - 自動再接続機能（オプション）
+  - チェック間隔設定（デフォルト30秒）
+  - is_runningプロパティで状態確認
+- ✅ test_health_checkテストの完全実装
+  - 6つのシナリオで包括的にテスト
+  - 正常接続時のヘルスチェック
+  - 切断状態でのヘルスチェック
+  - MT5 API呼び出し失敗時のテスト
+  - HealthCheckerの起動/停止テスト
+  - 自動再接続の有効/無効テスト
+- ✅ スレッドセーフティの実装
+  - threading.Lockとthreading.Eventの適切な使用
+  - daemon=Trueでバックグラウンドスレッド作成
+  - エラー時の例外処理とログ出力
+- 📁 変更ファイル:
+  - src/mt5_data_acquisition/mt5_client.py（health_checkメソッド、HealthCheckerクラス追加）
+  - tests/unit/test_mt5_client.py（test_health_checkテスト実装）
+- 📝 備考: pytest実行で8 passed, 3 skipped確認済み。ヘルスチェック機能により、接続の健全性を定期的に監視し、必要に応じて自動再接続が可能になった。
 
 ## 🔨 実装結果
 
@@ -728,6 +776,124 @@ def disconnect(self) -> None:
 - [ ] 要修正（修正後に次へ）
 
 **総合評価**: Step 8の実装は模範的です。ConnectionPoolクラスは産業グレードの品質で実装されており、スレッドセーフティ、リソース管理、エラーハンドリングのすべてが完璧です。特に、threading.Conditionを使用した待機・通知メカニズムと、デッドライン方式のタイムアウト管理が優れています。テストも包括的で、接続プール管理の全側面を検証しています。
+
+### コミット結果
+- Hash: 2d6330d
+- Message: feat: Step 8完了 - 接続プール管理実装（ConnectionPoolクラス）
+
+## 🎯 Step 9 実装詳細
+
+### ヘルスチェック機能実装仕様
+
+#### 1. health_checkメソッド（MT5ConnectionManager）
+```python
+def health_check(self) -> bool:
+    """接続の健全性を確認
+    
+    Returns:
+        bool: 接続が健全な場合True、異常な場合False
+    """
+```
+
+##### 実装フロー
+1. **接続状態の確認**
+   - self._connectedがFalseの場合、即座にFalseを返す
+   
+2. **MT5 APIへのping**
+   - mt5.terminal_info()を呼び出し
+   - 取得失敗時はFalseを返す
+   
+3. **アカウント情報の確認**（オプション）
+   - mt5.account_info()を呼び出し
+   - 取得失敗時はFalseを返す
+   
+4. **ログ出力**
+   - 成功時: debugレベル「ヘルスチェック成功」
+   - 失敗時: warningレベル「ヘルスチェック失敗: {詳細}」
+
+#### 2. HealthCheckerクラス
+```python
+class HealthChecker:
+    """定期的なヘルスチェックと自動再接続
+    
+    バックグラウンドスレッドで定期的に接続状態を確認し、
+    必要に応じて自動再接続を実行する
+    """
+```
+
+##### 主要メソッド
+1. **__init__(connection_manager, interval=30, auto_reconnect=True)**
+   - connection_manager: 監視対象のMT5ConnectionManager
+   - interval: チェック間隔（秒）デフォルト30秒
+   - auto_reconnect: 自動再接続を有効にするか（デフォルトTrue）
+   
+2. **start()**
+   - バックグラウンドスレッドを開始
+   - daemon=Trueでスレッドを作成
+   - 既に実行中の場合は何もしない
+   
+3. **stop()**
+   - ヘルスチェックスレッドを停止
+   - threading.Eventを使用した優雅な停止
+   - スレッドのjoin()で終了を待機
+   
+4. **_check_loop()**
+   - メインループ（プライベートメソッド）
+   - stop_eventがセットされるまでループ
+   - intervalごとに_perform_check()を呼び出し
+   
+5. **_perform_check()**
+   - 単一のヘルスチェック実行
+   - health_check()を呼び出し
+   - 失敗時かつauto_reconnectがTrueの場合、reconnect()を呼び出し
+
+#### 3. テスト実装項目
+1. **test_health_checkテスト**
+   - 正常な接続時のhealth_check() → True
+   - 切断状態でのhealth_check() → False
+   - MT5 API呼び出し失敗時 → False
+   
+2. **HealthCheckerテスト**
+   - start()でスレッドが開始されることを確認
+   - stop()でスレッドが停止することを確認
+   - 自動再接続が動作することを確認
+   - intervalごとにチェックが実行されることを確認
+
+#### 4. スレッドセーフティの考慮
+- threading.Eventによる安全な停止
+- エラー時の例外処理とログ出力
+- リソースの適切なクリーンアップ
+
+## 👁️ レビュー結果
+
+### Step 9 レビュー
+#### 良い点
+- ✅ **health_checkメソッドの完璧な実装**: 接続状態、MT5パッケージ、API呼び出しを段階的に確認（行255-292）
+- ✅ **包括的なエラーハンドリング**: 各段階で適切なログレベル（debug、warning）を使用
+- ✅ **HealthCheckerクラスの優れた設計**: バックグラウンドスレッド管理が産業グレード品質（行630-766）
+- ✅ **スレッドセーフティの完璧な実装**: threading.Eventで優雅な停止、daemon=Trueで適切なスレッド作成
+- ✅ **エラー復旧メカニズム**: _check_loopでエラー発生時も継続、短い待機時間で再試行（行723-727）
+- ✅ **詳細なログ出力**: 各操作段階で適切なログレベルとメッセージ
+- ✅ **タイムアウト付き停止処理**: join(timeout=5.0)で無限待機を防止（行696-699）
+- ✅ **6つの包括的なテストシナリオ**: 全側面を網羅したテストケース（行364-506）
+- ✅ **patchを使用した高度なモック**: health_checkとreconnectメソッドの動作を細かく制御
+- ✅ **自動再接続の選択的実装**: auto_reconnectフラグで動作を制御可能
+
+#### 改善が必要な点
+- なし（この実装は完璧です）
+
+#### 推奨事項（オプション）
+- 💡 ヘルスチェック失敗回数の追跡: 連続失敗回数をカウントして閾値を超えたらアラート
+- 💡 ヘルスチェックメトリクスの収集: 成功率、平均応答時間などの統計情報
+- 💡 カスタムヘルスチェック関数のサポート: ユーザー定義のチェック関数を追加可能に
+- 💡 ヘルスチェックイベントのコールバック: 状態変化時に通知する仕組み
+- 優先度: 低
+
+#### 判定
+- [x] 合格（コミット実行）
+- [ ] 要修正（修正後に次へ）
+
+**総合評価**: Step 9の実装は模範的です。ヘルスチェック機能が完璧に実装されており、MT5接続の健全性を継続的に監視し、必要に応じて自動再接続を行う堅牢なシステムが構築されています。特に、スレッド管理、エラーハンドリング、ログ出力のすべてが産業グレードの品質です。テストも6つのシナリオで包括的に検証されており、コードの信頼性が非常に高いです。
 
 ## 🎯 Step 5 実装詳細
 

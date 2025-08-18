@@ -253,13 +253,43 @@ class MT5ConnectionManager:
         return False
     
     def health_check(self) -> bool:
-        """ヘルスチェックを実行
+        """接続の健全性を確認
+        
+        MT5 APIへのpingを実行し、接続が正常に機能しているか確認します。
         
         Returns:
-            bool: 正常な場合True
+            bool: 接続が健全な場合True、異常な場合False
         """
-        # 実装はStep 9で行う
-        pass
+        # 接続状態の確認
+        if not self._connected:
+            self.logger.debug("ヘルスチェック失敗: 未接続")
+            return False
+        
+        # MT5パッケージの確認
+        if mt5 is None:
+            self.logger.warning("ヘルスチェック失敗: MT5パッケージが利用できません")
+            return False
+        
+        try:
+            # MT5 APIへのping（terminal_info取得）
+            terminal_info = mt5.terminal_info()
+            if terminal_info is None:
+                self.logger.warning("ヘルスチェック失敗: ターミナル情報を取得できません")
+                return False
+            
+            # アカウント情報の確認（オプション）
+            account_info = mt5.account_info()
+            if account_info is None:
+                self.logger.warning("ヘルスチェック失敗: アカウント情報を取得できません")
+                return False
+            
+            # 接続が健全
+            self.logger.debug("ヘルスチェック成功")
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"ヘルスチェック失敗: {str(e)}")
+            return False
     
     # ========== プロパティメソッド ==========
     
@@ -595,3 +625,142 @@ class ConnectionPool:
         """コンテキストマネージャーのイグジット"""
         self.close_all()
         return False
+
+
+class HealthChecker:
+    """定期的なヘルスチェックと自動再接続
+    
+    バックグラウンドスレッドで定期的に接続状態を確認し、
+    必要に応じて自動再接続を実行します。
+    
+    Attributes:
+        connection_manager: 監視対象のMT5ConnectionManager
+        interval: チェック間隔（秒）
+        auto_reconnect: 自動再接続の有効/無効
+    """
+    
+    def __init__(self, 
+                 connection_manager: MT5ConnectionManager,
+                 interval: int = 30,
+                 auto_reconnect: bool = True):
+        """HealthCheckerの初期化
+        
+        Args:
+            connection_manager: 監視対象のMT5ConnectionManager
+            interval: チェック間隔（秒）、デフォルト30秒
+            auto_reconnect: 自動再接続を有効にするか、デフォルトTrue
+        """
+        self.connection_manager = connection_manager
+        self.interval = interval
+        self.auto_reconnect = auto_reconnect
+        
+        # スレッド制御
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._is_running = False
+        
+        # ロガー設定
+        self.logger = connection_manager.logger
+        
+        self.logger.info(f"HealthChecker初期化: interval={interval}秒, auto_reconnect={auto_reconnect}")
+    
+    def start(self) -> None:
+        """バックグラウンドスレッドでヘルスチェックを開始
+        
+        既に実行中の場合は何もしません。
+        """
+        if self._is_running:
+            self.logger.warning("HealthCheckerは既に実行中です")
+            return
+        
+        # スレッドの作成と開始
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._check_loop, daemon=True)
+        self._thread.start()
+        self._is_running = True
+        self.logger.info("HealthCheckerを開始しました")
+    
+    def stop(self) -> None:
+        """ヘルスチェックスレッドを停止
+        
+        実行中のスレッドに停止シグナルを送り、終了を待機します。
+        """
+        if not self._is_running:
+            self.logger.warning("HealthCheckerは実行されていません")
+            return
+        
+        # 停止シグナルを送信
+        self._stop_event.set()
+        
+        # スレッドの終了を待機（最大5秒）
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                self.logger.warning("HealthCheckerスレッドの停止がタイムアウトしました")
+            else:
+                self.logger.info("HealthCheckerを停止しました")
+        
+        self._is_running = False
+        self._thread = None
+    
+    def _check_loop(self) -> None:
+        """メインループ（バックグラウンドスレッドで実行）
+        
+        stop_eventがセットされるまで、定期的にヘルスチェックを実行します。
+        """
+        self.logger.debug("ヘルスチェックループを開始")
+        
+        while not self._stop_event.is_set():
+            try:
+                # ヘルスチェックを実行
+                self._perform_check()
+                
+                # 次のチェックまで待機（中断可能）
+                if self._stop_event.wait(timeout=self.interval):
+                    # stop_eventがセットされた場合はループを抜ける
+                    break
+                    
+            except Exception as e:
+                self.logger.error(f"ヘルスチェックループでエラーが発生: {str(e)}", exc_info=True)
+                # エラーが発生しても継続
+                if self._stop_event.wait(timeout=5):  # エラー時は5秒待機
+                    break
+        
+        self.logger.debug("ヘルスチェックループを終了")
+    
+    def _perform_check(self) -> None:
+        """単一のヘルスチェックを実行
+        
+        health_check()を呼び出し、失敗時かつauto_reconnectがTrueの場合は
+        自動再接続を試みます。
+        """
+        try:
+            # ヘルスチェックを実行
+            is_healthy = self.connection_manager.health_check()
+            
+            if not is_healthy:
+                self.logger.warning("ヘルスチェック失敗を検出")
+                
+                # 自動再接続が有効な場合
+                if self.auto_reconnect:
+                    self.logger.info("自動再接続を開始します")
+                    if self.connection_manager.reconnect():
+                        self.logger.info("自動再接続に成功しました")
+                    else:
+                        self.logger.error("自動再接続に失敗しました")
+                else:
+                    self.logger.debug("自動再接続は無効です")
+            else:
+                self.logger.debug("ヘルスチェック正常")
+                
+        except Exception as e:
+            self.logger.error(f"ヘルスチェック実行中にエラーが発生: {str(e)}", exc_info=True)
+    
+    @property
+    def is_running(self) -> bool:
+        """実行状態を取得
+        
+        Returns:
+            実行中の場合True
+        """
+        return self._is_running
