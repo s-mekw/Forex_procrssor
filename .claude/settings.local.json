@@ -14,7 +14,8 @@
       "Bash(python:*)",
       "WebFetch(domain:docs.marimo.io)",
       "mcp__serena__find_file",
-      "mcp__serena__find_symbol"
+      "mcp__serena__find_symbol",
+      "Bash(uv add:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

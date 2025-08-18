@@ -222,3 +222,8 @@ module = [
     "plotly.*",
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "psutil>=7.0.0",
+]

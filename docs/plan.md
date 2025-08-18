@@ -5,12 +5,12 @@
 ### タスク選択
 - 対象タスクは `../.kiro/specs/Forex_procrssor/tasks.md` を参照し、対応するチェックリスト/説明/要件番号を確認してください。
 - 現在の対象タスク: 
-  - [ ] 3. MT5接続管理のテスト駆動実装
-  - tests/unit/test_mt5_client.pyに接続成功/失敗/再接続のテストケースを作成
-  - src/mt5_data_acquisition/mt5_client.pyにMT5ConnectionManagerクラスを実装
-  - 指数バックオフによる再接続ロジックを実装（最大5回試行）
-  - 接続プール管理とヘルスチェック機能を追加
-  - _要件: 1.1_
+  - [ ] 4. リアルタイムティックデータ取得の実装
+    - tests/unit/test_tick_fetcher.pyにティックデータ取得とバリデーションのテストを作成
+    - src/mt5_data_acquisition/tick_fetcher.pyにTickDataStreamerクラスを実装
+    - 非同期ストリーミングとリングバッファ（10,000件）を実装
+    - スパイクフィルター（3σルール）による異常値除外を追加
+    - _要件: 1.2_
 - 
 ### 参照ドキュメント（必読）
 - 実装タスク一覧: `../.kiro/specs/Forex_procrssor/tasks.md`
@@ -37,79 +37,107 @@
 ### 作業メモ欄（自由記述）
 - ここには「選択タスク」「対象ファイル」「追加の参照リンク」「決定事項」などを簡潔に記録してください。
 
-## 実装詳細計画
+---
 
-### テスト駆動開発（TDD）フロー
-1. **テストを先に書く** - 失敗するテストから始める
-2. **最小限の実装** - テストが通る最小限のコードを書く
-3. **リファクタリング** - コードを改善する
+## 📋 タスク4 実装計画
 
-### Step 1-4: テストケース作成（tests/unit/test_mt5_client.py）
-```python
-# 必要なテストケース
-- test_connection_success: 接続成功シナリオ
-- test_connection_failure: 接続失敗シナリオ
-- test_connection_timeout: タイムアウトシナリオ
-- test_reconnection_with_backoff: 指数バックオフ再接続
-- test_max_retry_attempts: 最大5回の再試行
-- test_terminal_info_logging: ターミナル情報のログ出力
-- test_account_info_logging: アカウント情報のログ出力
-```
+### Step 1: テストケースの作成
+- ファイル: tests/unit/test_tick_fetcher.py
+- 作業: TickDataStreamerクラスのテストケースを作成
+  - 正常なストリーミング開始のテスト
+  - リングバッファのサイズ制限テスト
+  - スパイクフィルター（3σ）のテスト
+  - バックプレッシャー制御のテスト
+  - エラー時の再購読テスト
+- 完了: [x]
 
-### Step 5-7: MT5ConnectionManager実装（src/mt5_data_acquisition/mt5_client.py）
-```python
-class MT5ConnectionManager:
-    # 設定
-    - login: int
-    - password: str
-    - server: str
-    - timeout: int = 30000
-    - max_retries: int = 5
-    - base_delay: float = 1.0
-    
-    # メソッド
-    - async def connect() -> bool
-    - async def disconnect() -> None
-    - async def _exponential_backoff(attempt: int) -> float
-    - def _log_terminal_info() -> None
-    - def _log_account_info() -> None
-```
+### Step 2: TickDataStreamerクラスの基本実装
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: クラスの基本構造と初期化メソッドを実装
+  - __init__メソッドの実装（設定パラメータ定義）
+  - リングバッファ（collections.deque）の初期化
+  - 統計量（平均、標準偏差）の初期化
+  - ロガー設定
+- 完了: [ ]
 
-### Step 8-9: 高度な機能実装
-```python
-# 接続プール管理
-class ConnectionPool:
-    - connections: Dict[str, MT5ConnectionManager]
-    - max_connections: int = 5
-    - async def get_connection(symbol: str) -> MT5ConnectionManager
-    - async def release_connection(symbol: str) -> None
+### Step 3: MT5ティックデータ取得メソッドの実装
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: MT5 APIを使用したティック取得機能を実装
+  - _subscribe_to_ticksメソッド（MT5購読）
+  - _unsubscribe_from_ticksメソッド（購読解除）
+  - _process_tickメソッド（Tickモデル変換）
+- 完了: [ ]
 
-# ヘルスチェック
-class HealthChecker:
-    - check_interval: float = 10.0
-    - async def start_monitoring() -> None
-    - async def check_connection_health() -> HealthStatus
-    - async def trigger_reconnection() -> None
-```
+### Step 4: 非同期ストリーミング機能の実装
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: asyncioベースの非同期ストリーミングを実装
+  - stream_ticksメソッド（非同期ジェネレータ）
+  - _handle_backpressureメソッド（バックプレッシャー制御）
+  - _emit_eventメソッド（10ms以内のイベント発火）
+- 完了: [ ]
 
-### 依存ライブラリ
-- MetaTrader5（MT5 API）
-- pytest（テスト）
-- pytest-asyncio（非同期テスト）
-- unittest.mock（モック）
-- structlog（構造化ログ）
+### Step 5: スパイクフィルターの実装
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: 3σルールによる異常値検出と除外機能
+  - _update_statisticsメソッド（平均・標準偏差の更新）
+  - _is_spikeメソッド（3σルール判定）
+  - _filter_spikeメソッド（異常値除外処理）
+  - 統計量の動的更新（ローリングウィンドウ）
+- 完了: [ ]
 
-### エラーハンドリング
-```python
-class MT5ConnectionError(Exception):
-    """MT5接続エラーの基底クラス"""
-    pass
+### Step 6: エラーハンドリングと再購読機能
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: 堅牢なエラー処理と自動復旧機能
+  - _handle_stream_errorメソッド（エラー処理）
+  - _auto_resubscribeメソッド（自動再購読）
+  - サーキットブレーカーパターンの実装
+  - エラーログの構造化出力
+- 完了: [ ]
 
-class MT5TimeoutError(MT5ConnectionError):
-    """接続タイムアウトエラー"""
-    pass
+### Step 7: パフォーマンス最適化
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: 10ms以内のレイテンシ達成
+  - メモリプールの実装（事前割り当て）
+  - Float32への効率的な変換
+  - 非同期処理の最適化
+  - プロファイリングとベンチマーク
+- 完了: [ ]
 
-class MT5AuthenticationError(MT5ConnectionError):
-    """認証エラー"""
-    pass
-```
+### Step 8: 統合テストの実装
+- ファイル: tests/integration/test_tick_streaming.py
+- 作業: エンドツーエンドの統合テスト
+  - MT5ConnectionManagerとの統合テスト
+  - 実際のストリーミングシミュレーション
+  - レイテンシ測定テスト
+  - 長時間実行の安定性テスト
+- 完了: [ ]
+
+### Step 9: ドキュメント作成
+- ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 作業: docstringとコメントの追加
+  - クラス・メソッドのdocstring作成
+  - 使用例の追加
+  - パラメータ説明の詳細化
+  - 設計上の注意点の記載
+- 完了: [ ]
+
+### Step 10: 最終確認とレビュー
+- ファイル: 全関連ファイル
+- 作業: 品質保証とパフォーマンス確認
+  - 全テストケースの実行と確認
+  - メモリリークチェック
+  - パフォーマンス測定（10ms以内）
+  - コードレビューと改善
+- 完了: [ ]
+
+## 🔧 技術的な決定事項
+- **リングバッファ**: `collections.deque(maxlen=10000)`を使用
+- **統計計算**: NumPyを使用せず、Pythonネイティブで実装（パフォーマンス優先）
+- **非同期処理**: `asyncio`と`async/await`パターンを使用
+- **スパイクフィルター**: ローリングウィンドウ（1000件）で統計量を更新
+- **エラー処理**: サーキットブレーカーパターン（失敗5回で一時停止）
+
+## 📚 参考リンク
+- MT5 Python API: https://www.mql5.com/en/docs/python_metatrader5
+- asyncio ドキュメント: https://docs.python.org/3/library/asyncio.html
+- collections.deque: https://docs.python.org/3/library/collections.html#collections.deque
