@@ -25,6 +25,10 @@ color: purple
    - Coverage: test edge cases and errors
    - New features require tests
    - Bug fixes require regression tests
+   Ruff
+   - Format: `uv run --frozen ruff format .`
+   - Check: `uv run --frozen ruff check .`
+   - Fix: `uv run --frozen ruff check . --fix`
 2. **品質**: 読みやすく保守しやすいか
 3. **セキュリティ**: 脆弱性はないか
 4. **パフォーマンス**: 効率的か

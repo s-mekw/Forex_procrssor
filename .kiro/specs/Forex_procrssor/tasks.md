@@ -9,7 +9,7 @@
   - pyproject.tomlにテストカバレッジ設定を追加（最小カバレッジ80%）
   - _要件: 1.1, 2.1_
 
-- [ ] 2. 共通データモデルとインターフェース定義
+- [X] 2. 共通データモデルとインターフェース定義
   - src/common/models.pyにPydanticモデルを作成：Tick、OHLC、Prediction、Alert
   - Float32を標準データ型として定義（メモリ効率最適化）
   - src/common/interfaces.pyに基底クラスを定義：DataFetcher、DataProcessor、StorageHandler、Predictor
@@ -18,7 +18,7 @@
 
 ## フェーズ2: MT5データ取得基盤
 
-- [ ] 3. MT5接続管理のテスト駆動実装
+- [X] 3. MT5接続管理のテスト駆動実装
   - tests/unit/test_mt5_client.pyに接続成功/失敗/再接続のテストケースを作成
   - src/mt5_data_acquisition/mt5_client.pyにMT5ConnectionManagerクラスを実装
   - 指数バックオフによる再接続ロジックを実装（最大5回試行）
