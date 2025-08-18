@@ -220,51 +220,30 @@ class TestMT5ConnectionManager(unittest.TestCase):
         # 再接続の実行
         reconnect_result = self.connection_manager.reconnect()
         
-        # 現時点ではreconnectメソッドが未実装のため、Noneが返される
-        # Step 7で実装後に以下のアサーションを有効化
+        # 再接続成功の検証
+        self.assertTrue(reconnect_result)
+        self.assertTrue(self.connection_manager.is_connected())
         
-        # 再接続成功の検証（Step 7実装後に有効化）
-        # self.assertTrue(reconnect_result)
-        # self.assertTrue(self.connection_manager.is_connected())
-        
-        # time.sleepの呼び出し検証（Step 7実装後に有効化）
+        # time.sleepの呼び出し検証
         # 期待される呼び出し: sleep(1), sleep(2) の2回（3回目で成功するため）
-        # expected_sleep_calls = [call(1), call(2)]
-        # mock_sleep.assert_has_calls(expected_sleep_calls)
-        # self.assertEqual(mock_sleep.call_count, 2)
+        expected_sleep_calls = [call(1), call(2)]
+        mock_sleep.assert_has_calls(expected_sleep_calls)
+        self.assertEqual(mock_sleep.call_count, 2)
         
-        # ログイン試行回数の検証（Step 7実装後に有効化）
+        # ログイン試行回数の検証
         # 初回接続で1回 + 再接続で3回 = 合計4回のログイン試行
-        # self.assertEqual(self.mock_mt5.login.call_count, 4)
+        self.assertEqual(self.mock_mt5.login.call_count, 4)
         
-        # ログ出力の検証（Step 7実装後に有効化）
-        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 1/5)")
-        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 2/5)")
-        # self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 3/5)")
-        # self.mock_logger.info.assert_any_call("再接続に成功しました (試行回数: 3)")
-        # self.mock_logger.warning.assert_any_call("接続失敗。1秒後に再試行します...")
-        # self.mock_logger.warning.assert_any_call("接続失敗。2秒後に再試行します...")
+        # ログ出力の検証
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 1/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 2/5)")
+        self.mock_logger.info.assert_any_call("再接続を試行します... (試行回数: 3/5)")
+        self.mock_logger.info.assert_any_call("再接続に成功しました (試行回数: 3)")
+        self.mock_logger.warning.assert_any_call("接続失敗。1秒後に再試行します...")
+        self.mock_logger.warning.assert_any_call("接続失敗。2秒後に再試行します...")
         
-        # 現時点ではモックの設定確認のみ
+        # side_effectの動作確認テストは削除しても良いが、検証のために残しておく
         self.assertIsNotNone(self.connection_manager)
-        # side_effectはiteratorなので、直接長さを確認できない
-        # 代わりにモックの動作を確認
-        self.assertFalse(self.connection_manager.is_connected())  # reconnectメソッド未実装のため
-        
-        # side_effectの動作確認（テスト用）
-        # モックをリセットして手動で動作確認
-        self.mock_mt5.reset_mock()
-        self.mock_mt5.login.side_effect = [False, False, True]
-        results = []
-        for _ in range(3):
-            try:
-                results.append(self.mock_mt5.login())
-            except StopIteration:
-                break
-        self.assertEqual(results, [False, False, True])
-        
-        # time.sleepが呼ばれていないことを確認（reconnectメソッド未実装のため）
-        mock_sleep.assert_not_called()
 
     @unittest.skip("MT5ConnectionManagerクラスが未実装のためスキップ")
     def test_max_retry_attempts(self):
@@ -326,24 +305,25 @@ class TestMT5ConnectionManager(unittest.TestCase):
         self.assertEqual(self.connection_manager.retry_count, 2)
         
         # _calculate_backoff_delayメソッドのテスト
-        self.connection_manager._retry_count = 0
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 1.0)
-        
+        # retry_count - 1の計算式になったため、期待値を更新
         self.connection_manager._retry_count = 1
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 2.0)
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 1.0)  # 2^(1-1) = 1
         
         self.connection_manager._retry_count = 2
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 4.0)
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 2.0)  # 2^(2-1) = 2
         
         self.connection_manager._retry_count = 3
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 8.0)
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 4.0)  # 2^(3-1) = 4
         
         self.connection_manager._retry_count = 4
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 8.0)  # 2^(4-1) = 8
+        
+        self.connection_manager._retry_count = 5
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)  # 2^(5-1) = 16
         
         # 最大待機時間のテスト
         self.connection_manager._retry_count = 10  # 非常に大きな再試行回数
-        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)
+        self.assertAlmostEqual(self.connection_manager._calculate_backoff_delay(), 16.0)  # 最大値でクリップ
     
     def test_config_with_custom_values(self):
         """カスタム設定値でのインスタンス化テスト（Step 5で実装）"""

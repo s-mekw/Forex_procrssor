@@ -215,10 +215,41 @@ class MT5ConnectionManager:
         指数バックオフアルゴリズムを使用した再接続
         
         Returns:
-            bool: 再接続成功時True
+            bool: 再接続成功時True、全試行失敗時False
         """
-        # 実装はStep 7で行う
-        pass
+        # 既存の接続がある場合は切断
+        if self._connected:
+            self.disconnect()
+        
+        # 再試行カウンタをリセット
+        self._reset_retry_count()
+        
+        # 最大再試行回数までループ
+        for attempt in range(1, self._max_retries + 1):
+            # 再試行カウンタをインクリメント
+            self._increment_retry_count()
+            
+            # 再接続試行のログ
+            self.logger.info(f"再接続を試行します... (試行回数: {attempt}/{self._max_retries})")
+            
+            # 接続を試みる
+            if self.connect(self._config):
+                # 接続成功
+                self.logger.info(f"再接続に成功しました (試行回数: {attempt})")
+                return True
+            
+            # 接続失敗 - 最後の試行でない場合は待機
+            if attempt < self._max_retries:
+                # バックオフ待機時間を計算
+                delay = self._calculate_backoff_delay()
+                self.logger.warning(f"接続失敗。{int(delay)}秒後に再試行します...")
+                
+                # 指数バックオフによる待機
+                time.sleep(delay)
+        
+        # 全試行失敗
+        self.logger.error("再接続に失敗しました。最大試行回数に達しました")
+        return False
     
     def health_check(self) -> bool:
         """ヘルスチェックを実行
@@ -319,13 +350,14 @@ class MT5ConnectionManager:
         """現在の再試行回数から待機時間を計算
         
         指数バックオフアルゴリズムを使用して待機時間を計算します。
-        待機時間 = min(初期待機時間 * (バックオフ係数 ^ 再試行回数), 最大待機時間)
+        待機時間 = min(初期待機時間 * (バックオフ係数 ^ (再試行回数-1)), 最大待機時間)
         
         Returns:
             計算された待機時間（秒）
         """
+        # 再試行回数-1を使用（最初の失敗後は1秒、2回目の失敗後は2秒...）
         delay = min(
-            self._retry_delay * (self.BACKOFF_FACTOR ** self._retry_count),
+            self._retry_delay * (self.BACKOFF_FACTOR ** (self._retry_count - 1)),
             self.DEFAULT_MAX_DELAY
         )
         self.logger.debug(f"バックオフ待機時間を計算: {delay}秒 (試行回数: {self._retry_count})")

@@ -15,7 +15,11 @@
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_property_methods -v)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v --tb=short)",
       "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_config_with_custom_values -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -k \"not connection_success and not connection_failure and not reconnection\" -xvs)"
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -k \"not connection_success and not connection_failure and not reconnection\" -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)"
     ]
   },
   "enableAllProjectMcpServers": true,
