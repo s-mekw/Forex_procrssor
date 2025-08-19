@@ -9,7 +9,9 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, AsyncGenerator
+import numpy as np
 
 # structlogを使用（可能な場合）
 try:
@@ -22,6 +24,14 @@ except ImportError:
 
     logger = logging.getLogger(__name__)
 
+# MT5パッケージのインポート（テスト時はモックされる）
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    # テスト環境や開発環境でMT5がインストールされていない場合のフォールバック
+    mt5 = None
+
+from common.models import Tick
 from mt5_data_acquisition.mt5_client import MT5ConnectionManager
 
 
@@ -107,9 +117,6 @@ class TickDataStreamer:
             stats_window_size=stats_window_size,
         )
 
-        # プロパティとして直接アクセス可能にする
-        self.backpressure_threshold = backpressure_threshold
-
         # MT5接続マネージャー
         self.connection_manager = mt5_client or MT5ConnectionManager()
 
@@ -150,8 +157,6 @@ class TickDataStreamer:
         Returns:
             float: バッファ使用率（0.0～1.0）
         """
-        if self.config.buffer_size == 0:
-            return 0.0
         return len(self.buffer) / self.config.buffer_size
 
     @property
@@ -206,6 +211,15 @@ class TickDataStreamer:
         """
         return self.config.spike_threshold
 
+    @property
+    def backpressure_threshold(self) -> float:
+        """バックプレッシャー閾値を取得
+
+        Returns:
+            float: バックプレッシャー発動閾値（0.0～1.0）
+        """
+        return self.config.backpressure_threshold
+
     def __repr__(self) -> str:
         """文字列表現
 
@@ -220,3 +234,201 @@ class TickDataStreamer:
             f"is_connected={self.is_connected}"
             f")"
         )
+
+    async def subscribe_to_ticks(self) -> bool:
+        """MT5のティックデータ購読を開始
+
+        Returns:
+            bool: 購読成功時True、失敗時False
+        """
+        try:
+            # MT5が利用可能か確認
+            if mt5 is None:
+                self.logger.warning("MT5 is not available")
+                return False
+
+            # MT5接続確認
+            if not self.is_connected:
+                self.logger.info("Connecting to MT5...")
+                # ConnectionManagerのconnectメソッドは同期的
+                if hasattr(self.connection_manager, "connect"):
+                    # 接続設定が必要な場合はconnection_managerの設定を使用
+                    if not self.connection_manager._connected:
+                        self.logger.error("MT5 connection failed")
+                        return False
+
+            # シンボル情報取得
+            symbol_info = mt5.symbol_info(self.config.symbol)
+            if symbol_info is None:
+                self.logger.error(f"Symbol {self.config.symbol} not found")
+                raise ValueError(f"Symbol {self.config.symbol} not found")
+
+            # シンボルが取引可能か確認
+            if not symbol_info.visible:
+                # シンボルを表示状態にする
+                if not mt5.symbol_select(self.config.symbol, True):
+                    self.logger.error(f"Failed to select symbol {self.config.symbol}")
+                    raise RuntimeError(f"Failed to select symbol {self.config.symbol}")
+
+            self.is_subscribed = True
+            self.logger.info(
+                f"Subscribed to {self.config.symbol}", symbol=self.config.symbol
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"Subscription failed: {e}", error=str(e), symbol=self.config.symbol
+            )
+            self.is_subscribed = False
+            return False
+
+    async def unsubscribe(self) -> bool:
+        """MT5のティックデータ購読を解除
+
+        Returns:
+            bool: 購読解除成功時True、失敗時False
+        """
+        try:
+            # ストリーミング停止
+            self.is_streaming = False
+            self.is_subscribed = False
+
+            # 実行中のタスクがあればキャンセル
+            if self._current_task and not self._current_task.done():
+                self._current_task.cancel()
+                try:
+                    await self._current_task
+                except asyncio.CancelledError:
+                    pass
+
+            # MT5が利用可能な場合、シンボルの選択を解除
+            if mt5 is not None and self.config.symbol:
+                # シンボルの選択解除（MarketWatchから非表示にする）
+                mt5.symbol_select(self.config.symbol, False)
+
+            self.logger.info(
+                f"Unsubscribed from {self.config.symbol}", symbol=self.config.symbol
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"Unsubscribe failed: {e}", error=str(e), symbol=self.config.symbol
+            )
+            return False
+
+    def _process_tick(self, mt5_tick: Any) -> Tick:
+        """MT5ティックデータをTickモデルに変換
+
+        Args:
+            mt5_tick: MT5のSymbolInfoTickオブジェクト
+
+        Returns:
+            Tick: 変換されたTickモデル
+        """
+        # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
+        timestamp = datetime.fromtimestamp(mt5_tick.time, tz=timezone.utc)
+
+        # Tickモデルの作成（Float32変換はモデル内で行われる）
+        tick = Tick(
+            symbol=self.config.symbol,
+            timestamp=timestamp,
+            bid=float(mt5_tick.bid),
+            ask=float(mt5_tick.ask),
+            volume=float(mt5_tick.volume) if hasattr(mt5_tick, "volume") else 0.0,
+        )
+
+        # リングバッファに追加
+        self.buffer.append(tick)
+
+        # 統計情報の更新用にバッファに追加
+        self._stats_buffer.append(tick.mid_price)
+
+        return tick
+
+    def _fetch_latest_tick(self) -> Any:
+        """MT5から最新のティックデータを取得
+
+        Returns:
+            MT5のSymbolInfoTickオブジェクト、または取得失敗時None
+        """
+        if mt5 is None:
+            self.logger.warning("MT5 is not available")
+            return None
+
+        try:
+            # 最新のティック情報を取得
+            tick = mt5.symbol_info_tick(self.config.symbol)
+
+            if tick is None:
+                self.logger.warning(f"No tick data available for {self.config.symbol}")
+                return None
+
+            # ティックの有効性確認（bid/askが正の値であること）
+            if tick.bid <= 0 or tick.ask <= 0:
+                self.logger.warning(
+                    f"Invalid tick data: bid={tick.bid}, ask={tick.ask}",
+                    symbol=self.config.symbol,
+                )
+                return None
+
+            return tick
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to fetch tick: {e}", error=str(e), symbol=self.config.symbol
+            )
+            return None
+
+    async def stream_ticks(self) -> AsyncGenerator[Tick, None]:
+        """非同期でティックデータをストリーミング
+
+        Yields:
+            Tick: ティックデータ
+
+        Raises:
+            RuntimeError: 購読されていない場合
+        """
+        if not self.is_subscribed:
+            raise RuntimeError(
+                "Not subscribed to tick data. Call subscribe_to_ticks() first."
+            )
+
+        self.is_streaming = True
+        self.logger.info(f"Starting tick stream for {self.config.symbol}")
+
+        try:
+            while self.is_streaming and self.is_subscribed:
+                # 最新のティックを取得
+                mt5_tick = self._fetch_latest_tick()
+
+                if mt5_tick is not None:
+                    # Tickモデルに変換して処理
+                    tick = self._process_tick(mt5_tick)
+
+                    # バックプレッシャーチェック
+                    if self.buffer_usage > self.config.backpressure_threshold:
+                        self.logger.warning(
+                            f"Buffer usage high: {self.buffer_usage:.2%}",
+                            symbol=self.config.symbol,
+                        )
+                        # TODO: バックプレッシャー処理を実装
+
+                    # ティックを送出
+                    yield tick
+
+                # 次のティックまで少し待機（10ms以内のレイテンシ目標）
+                await asyncio.sleep(0.005)  # 5ms待機
+
+        except asyncio.CancelledError:
+            self.logger.info(f"Tick stream cancelled for {self.config.symbol}")
+            raise
+        except Exception as e:
+            self.logger.error(
+                f"Stream error: {e}", error=str(e), symbol=self.config.symbol
+            )
+            raise
+        finally:
+            self.is_streaming = False
+            self.logger.info(f"Tick stream stopped for {self.config.symbol}")
