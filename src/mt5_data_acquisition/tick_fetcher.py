@@ -7,9 +7,11 @@ MetaTrader 5からリアルタイムでティックデータを取得し、
 
 import asyncio
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, AsyncGenerator, Callable
 
 # structlogを使用（可能な場合）
@@ -32,6 +34,173 @@ except ImportError:
 
 from common.models import Tick
 from mt5_data_acquisition.mt5_client import MT5ConnectionManager
+
+
+class CircuitBreakerState(Enum):
+    """サーキットブレーカーの状態"""
+    CLOSED = "CLOSED"  # 正常動作中
+    OPEN = "OPEN"      # 遮断中
+    HALF_OPEN = "HALF_OPEN"  # 復旧試行中
+
+
+class CircuitBreaker:
+    """サーキットブレーカーパターンの実装
+    
+    一定回数の失敗後に処理を一時停止し、
+    システムの安定性を保護します。
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        reset_timeout: float = 30.0,
+        success_threshold: int = 1
+    ):
+        """初期化
+        
+        Args:
+            failure_threshold: 失敗カウントの閾値（この回数失敗でOPEN状態へ）
+            reset_timeout: リセット時間（秒、OPEN状態からHALF_OPEN状態への移行時間）
+            success_threshold: 成功カウントの閾値（HALF_OPEN状態からCLOSED状態への復帰に必要な成功回数）
+        """
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.success_threshold = success_threshold
+        
+        self.state = CircuitBreakerState.CLOSED
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time: float | None = None
+        self.last_state_change_time = time.time()
+    
+    def call(self, func: Callable, *args, **kwargs) -> Any:
+        """関数呼び出しを保護
+        
+        Args:
+            func: 呼び出す関数
+            *args: 関数の位置引数
+            **kwargs: 関数のキーワード引数
+            
+        Returns:
+            Any: 関数の戻り値
+            
+        Raises:
+            Exception: サーキットブレーカーがOPEN状態の場合
+        """
+        # 状態チェックと自動復旧
+        self._check_state()
+        
+        if self.state == CircuitBreakerState.OPEN:
+            raise Exception(f"Circuit breaker is open (failures: {self.failure_count})")
+        
+        try:
+            # 関数実行
+            result = func(*args, **kwargs)
+            
+            # 成功時の処理
+            self._on_success()
+            return result
+            
+        except Exception as e:
+            # 失敗時の処理
+            self._on_failure()
+            raise e
+    
+    async def async_call(self, func: Callable, *args, **kwargs) -> Any:
+        """非同期関数呼び出しを保護
+        
+        Args:
+            func: 呼び出す非同期関数
+            *args: 関数の位置引数
+            **kwargs: 関数のキーワード引数
+            
+        Returns:
+            Any: 関数の戻り値
+            
+        Raises:
+            Exception: サーキットブレーカーがOPEN状態の場合
+        """
+        # 状態チェックと自動復旧
+        self._check_state()
+        
+        if self.state == CircuitBreakerState.OPEN:
+            raise Exception(f"Circuit breaker is open (failures: {self.failure_count})")
+        
+        try:
+            # 非同期関数実行
+            result = await func(*args, **kwargs)
+            
+            # 成功時の処理
+            self._on_success()
+            return result
+            
+        except Exception as e:
+            # 失敗時の処理
+            self._on_failure()
+            raise e
+    
+    def _check_state(self) -> None:
+        """状態をチェックし、必要に応じて自動復旧"""
+        if self.state == CircuitBreakerState.OPEN:
+            # タイムアウト経過をチェック
+            if self.last_failure_time and (time.time() - self.last_failure_time) >= self.reset_timeout:
+                # HALF_OPEN状態へ移行
+                self.state = CircuitBreakerState.HALF_OPEN
+                self.success_count = 0
+                self.last_state_change_time = time.time()
+    
+    def _on_success(self) -> None:
+        """成功時の処理"""
+        if self.state == CircuitBreakerState.HALF_OPEN:
+            self.success_count += 1
+            if self.success_count >= self.success_threshold:
+                # CLOSED状態へ復帰
+                self.state = CircuitBreakerState.CLOSED
+                self.failure_count = 0
+                self.success_count = 0
+                self.last_state_change_time = time.time()
+        elif self.state == CircuitBreakerState.CLOSED:
+            # 失敗カウントをリセット
+            self.failure_count = 0
+    
+    def _on_failure(self) -> None:
+        """失敗時の処理"""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        
+        if self.state == CircuitBreakerState.HALF_OPEN:
+            # HALF_OPEN状態での失敗は即座にOPEN状態へ
+            self.state = CircuitBreakerState.OPEN
+            self.last_state_change_time = time.time()
+        elif self.state == CircuitBreakerState.CLOSED:
+            # 失敗カウントが閾値を超えたらOPEN状態へ
+            if self.failure_count >= self.failure_threshold:
+                self.state = CircuitBreakerState.OPEN
+                self.last_state_change_time = time.time()
+    
+    def reset(self) -> None:
+        """サーキットブレーカーを手動リセット"""
+        self.state = CircuitBreakerState.CLOSED
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time = None
+        self.last_state_change_time = time.time()
+    
+    @property
+    def is_open(self) -> bool:
+        """OPEN状態かどうか"""
+        self._check_state()
+        return self.state == CircuitBreakerState.OPEN
+    
+    @property
+    def is_closed(self) -> bool:
+        """CLOSED状態かどうか"""
+        return self.state == CircuitBreakerState.CLOSED
+    
+    @property
+    def is_half_open(self) -> bool:
+        """HALF_OPEN状態かどうか"""
+        return self.state == CircuitBreakerState.HALF_OPEN
 
 
 @dataclass
@@ -79,6 +248,9 @@ class TickDataStreamer:
         mt5_client: MT5ConnectionManager | None = None,
         backpressure_delay: float = 0.01,
         statistics_window: int | None = None,  # 別名サポート
+        max_retries: int = 5,  # 最大リトライ回数
+        circuit_breaker_threshold: int = 5,  # サーキットブレーカー失敗閾値
+        circuit_breaker_timeout: float = 30.0,  # サーキットブレーカータイムアウト
     ):
         """初期化メソッド
 
@@ -91,6 +263,9 @@ class TickDataStreamer:
             mt5_client: MT5接続マネージャー（オプション）
             backpressure_delay: バックプレッシャー時の遅延時間（秒、デフォルト: 0.01）
             statistics_window: stats_window_sizeの別名（テスト互換性用）
+            max_retries: 最大リトライ回数（デフォルト: 5）
+            circuit_breaker_threshold: サーキットブレーカー失敗閾値（デフォルト: 5）
+            circuit_breaker_timeout: サーキットブレーカータイムアウト（秒、デフォルト: 30.0）
 
         Raises:
             ValueError: 無効なパラメータが指定された場合
@@ -148,6 +323,24 @@ class TickDataStreamer:
 
         # ロガーの設定
         self.logger = logger
+        
+        # エラーハンドリング設定
+        self.max_retries = max_retries
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=circuit_breaker_threshold,
+            reset_timeout=circuit_breaker_timeout
+        )
+        
+        # エラー統計
+        self.error_stats: dict[str, Any] = {
+            "total_errors": 0,
+            "connection_errors": 0,
+            "data_errors": 0,
+            "timeout_errors": 0,
+            "last_error": None,
+            "last_error_time": None,
+            "resubscribe_count": 0
+        }
 
         # 内部管理用
         self._stats_buffer_bid: deque = deque(maxlen=stats_window_size)
@@ -292,6 +485,15 @@ class TickDataStreamer:
             int: 統計計算用のウィンドウサイズ
         """
         return self.config.stats_window_size
+    
+    @property
+    def circuit_breaker_open(self) -> bool:
+        """サーキットブレーカーがOPEN状態かどうか
+        
+        Returns:
+            bool: OPEN状態の場合True
+        """
+        return self.circuit_breaker.is_open
 
     def __repr__(self) -> str:
         """文字列表現
@@ -916,21 +1118,38 @@ class TickDataStreamer:
                 except Exception as e:
                     # エラー処理と再試行ロジック
                     retry_count += 1
-                    self.logger.error(
-                        f"Stream error (retry {retry_count}/{max_retries}): {e}",
-                        error=str(e),
-                        symbol=self.config.symbol
-                    )
                     
-                    # エラーイベント発火
-                    await self._emit_error_event(e)
+                    # 構造化エラーログ
+                    await self._handle_stream_error(e, {
+                        "retry_count": retry_count,
+                        "max_retries": max_retries,
+                        "operation": "stream_ticks"
+                    })
                     
                     if retry_count >= max_retries:
                         self.logger.error(
-                            f"Max retries exceeded. Stopping stream.",
+                            f"Max retries exceeded. Attempting auto-resubscribe.",
                             symbol=self.config.symbol
                         )
-                        raise
+                        
+                        # 自動再購読を試行
+                        resubscribe_success = await self._auto_resubscribe()
+                        
+                        if resubscribe_success:
+                            # 再購読成功、リトライカウントをリセット
+                            retry_count = 0
+                            self.logger.info(
+                                "Resuming stream after successful resubscribe",
+                                symbol=self.config.symbol
+                            )
+                            continue
+                        else:
+                            # 再購読失敗、ストリームを停止
+                            self.logger.error(
+                                "Auto-resubscribe failed. Stopping stream.",
+                                symbol=self.config.symbol
+                            )
+                            raise
                     
                     # エクスポネンシャルバックオフ
                     await asyncio.sleep(0.1 * (2 ** retry_count))
@@ -986,3 +1205,205 @@ class TickDataStreamer:
         async for tick in self.stream_ticks():
             # ストリーミングループ（実際の処理はstream_ticksで行う）
             pass
+    
+    # 6.2: 自動再購読メカニズム
+    async def _auto_resubscribe(self) -> bool:
+        """自動再購読を実行
+        
+        エクスポネンシャルバックオフで再試行します。
+        
+        Returns:
+            bool: 再購読成功時True、失敗時False
+        """
+        self.logger.info(
+            "Starting auto-resubscribe",
+            symbol=self.config.symbol,
+            attempt=1,
+            max_retries=self.max_retries
+        )
+        
+        for retry_count in range(self.max_retries):
+            try:
+                # エクスポネンシャルバックオフ（1, 2, 4, 8, 16秒）
+                if retry_count > 0:
+                    delay = min(2 ** (retry_count - 1), 16)
+                    self.logger.info(
+                        f"Waiting {delay}s before retry {retry_count + 1}/{self.max_retries}",
+                        symbol=self.config.symbol,
+                        delay=delay
+                    )
+                    await asyncio.sleep(delay)
+                
+                # 再購読試行
+                success = await self.subscribe_to_ticks()
+                
+                if success:
+                    self.logger.info(
+                        f"Auto-resubscribe successful on attempt {retry_count + 1}",
+                        symbol=self.config.symbol
+                    )
+                    
+                    # 統計をリセット
+                    self.error_stats["resubscribe_count"] += 1
+                    
+                    # サーキットブレーカーをリセット
+                    self.circuit_breaker.reset()
+                    
+                    return True
+                    
+            except Exception as e:
+                self.logger.error(
+                    f"Auto-resubscribe attempt {retry_count + 1} failed: {e}",
+                    symbol=self.config.symbol,
+                    error=str(e)
+                )
+                
+        # 全リトライ失敗
+        self.logger.error(
+            f"Auto-resubscribe failed after {self.max_retries} attempts",
+            symbol=self.config.symbol
+        )
+        return False
+    
+    # 6.3: エラーログの構造化
+    def _classify_error(self, error: Exception) -> str:
+        """エラーを分類
+        
+        Args:
+            error: 発生したエラー
+            
+        Returns:
+            str: エラータイプ（ConnectionError、DataError、TimeoutError、UnknownError）
+        """
+        error_str = str(error).lower()
+        
+        if any(keyword in error_str for keyword in ["connection", "connect", "socket", "network"]):
+            return "ConnectionError"
+        elif any(keyword in error_str for keyword in ["data", "invalid", "corrupt", "format"]):
+            return "DataError"
+        elif any(keyword in error_str for keyword in ["timeout", "timed out"]):
+            return "TimeoutError"
+        else:
+            return "UnknownError"
+    
+    async def _handle_stream_error(self, error: Exception, context: dict[str, Any] | None = None) -> None:
+        """ストリームエラーを処理
+        
+        エラーを分類し、構造化ログを出力します。
+        
+        Args:
+            error: 発生したエラー
+            context: エラーコンテキスト情報
+        """
+        # エラー分類
+        error_type = self._classify_error(error)
+        
+        # エラー統計を更新
+        self.error_stats["total_errors"] += 1
+        self.error_stats[f"{error_type.lower()}s"] = self.error_stats.get(f"{error_type.lower()}s", 0) + 1
+        self.error_stats["last_error"] = str(error)
+        self.error_stats["last_error_time"] = datetime.now(tz=timezone.utc)
+        
+        # 構造化ログ出力
+        log_data = {
+            "error_type": error_type,
+            "error_message": str(error),
+            "symbol": self.config.symbol,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "total_errors": self.error_stats["total_errors"],
+            "circuit_breaker_state": self.circuit_breaker.state.value,
+            "buffer_usage": f"{self.buffer_usage:.2%}",
+        }
+        
+        # コンテキスト情報があれば追加
+        if context:
+            log_data.update(context)
+        
+        # エラーレベルに応じてログ出力
+        if error_type == "ConnectionError":
+            self.logger.error("Connection error occurred", **log_data)
+        elif error_type == "TimeoutError":
+            self.logger.warning("Timeout error occurred", **log_data)
+        else:
+            self.logger.error("Stream error occurred", **log_data)
+        
+        # エラーイベントを発火
+        await self._emit_error_event(error)
+    
+    def _log_error(self, error: Exception, context: dict[str, Any] | None = None) -> None:
+        """エラーログを構造化して出力（同期版）
+        
+        Args:
+            error: 発生したエラー
+            context: エラーコンテキスト情報
+        """
+        # エラー分類
+        error_type = self._classify_error(error)
+        
+        # 構造化ログデータ
+        log_data = {
+            "error_type": error_type,
+            "error_message": str(error),
+            "symbol": self.config.symbol,
+        }
+        
+        # コンテキスト情報があれば追加
+        if context:
+            log_data.update(context)
+        
+        # ログ出力
+        self.logger.error("Error occurred", **log_data)
+    
+    # 6.4: サーキットブレーカー統合
+    async def _fetch_tick_with_retry(self) -> Any:
+        """リトライ機能付きでティックを取得
+        
+        サーキットブレーカーパターンを使用して保護します。
+        
+        Returns:
+            Any: MT5ティックデータ、または取得失敗時None
+            
+        Raises:
+            Exception: サーキットブレーカーがOPEN状態の場合
+        """
+        try:
+            # サーキットブレーカー経由で実行
+            return await self.circuit_breaker.async_call(
+                self._fetch_latest_tick_async
+            )
+        except Exception as e:
+            if "Circuit breaker is open" in str(e):
+                # サーキットブレーカーが開いている
+                self.logger.warning(
+                    "Circuit breaker is open, skipping tick fetch",
+                    symbol=self.config.symbol,
+                    failures=self.circuit_breaker.failure_count
+                )
+                raise
+            else:
+                # その他のエラー
+                await self._handle_stream_error(e, {
+                    "operation": "fetch_tick",
+                    "retry_count": self.circuit_breaker.failure_count
+                })
+                return None
+    
+    async def _fetch_latest_tick_async(self) -> Any:
+        """MT5から最新のティックデータを非同期で取得
+        
+        Returns:
+            MT5のSymbolInfoTickオブジェクト、または取得失敗時はエラーをraise
+        """
+        # 同期メソッドを非同期で実行
+        tick = self._fetch_latest_tick()
+        if tick is None:
+            raise Exception("Failed to fetch tick data")
+        return tick
+    
+    def _reset_circuit_breaker(self) -> None:
+        """サーキットブレーカーを手動リセット"""
+        self.circuit_breaker.reset()
+        self.logger.info(
+            "Circuit breaker reset",
+            symbol=self.config.symbol
+        )
