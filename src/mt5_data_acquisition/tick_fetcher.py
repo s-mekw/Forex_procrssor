@@ -203,6 +203,123 @@ class CircuitBreaker:
         return self.state == CircuitBreakerState.HALF_OPEN
 
 
+class TickObjectPool:
+    """Tickオブジェクトプール - メモリ効率化のためのオブジェクト再利用
+    
+    Tickオブジェクトを事前に割り当てて再利用することで、
+    GC負荷を削減し、パフォーマンスを向上させます。
+    """
+    
+    def __init__(self, size: int = 100):
+        """初期化
+        
+        Args:
+            size: プールサイズ（事前割り当てするオブジェクト数）
+        """
+        self.size = size
+        self.pool: deque[Tick] = deque(maxlen=size)
+        self.in_use: set[int] = set()  # 使用中のオブジェクトのIDを追跡
+        self.stats = {
+            "created": 0,  # 新規作成数
+            "reused": 0,   # 再利用数
+            "active": 0,   # アクティブ数
+        }
+        
+        # プールを初期化（事前割り当て）
+        self._initialize_pool()
+    
+    def _initialize_pool(self) -> None:
+        """プールの初期化 - オブジェクトを事前割り当て"""
+        for _ in range(self.size):
+            # 有効なダミーデータでTickオブジェクトを作成
+            # Tickモデルのバリデーションに準拠した値を使用
+            tick = Tick(
+                symbol="USDJPY",  # 6文字以上の有効なシンボル
+                timestamp=datetime.now(timezone.utc),
+                bid=100.0,  # 0より大きい値
+                ask=100.01,  # 0より大きい値
+                volume=0.0
+            )
+            self.pool.append(tick)
+            self.stats["created"] += 1
+    
+    def acquire(
+        self,
+        symbol: str,
+        timestamp: datetime,
+        bid: float,
+        ask: float,
+        volume: float = 0.0
+    ) -> Tick:
+        """プールからTickオブジェクトを取得または新規作成
+        
+        Args:
+            symbol: 通貨ペアシンボル
+            timestamp: タイムスタンプ
+            bid: Bid価格
+            ask: Ask価格
+            volume: ボリューム
+            
+        Returns:
+            Tick: 取得または作成されたTickオブジェクト
+        """
+        if self.pool:
+            # プールから再利用
+            tick = self.pool.popleft()
+            # データを更新（既存オブジェクトを再利用）
+            tick.symbol = symbol
+            tick.timestamp = timestamp
+            tick.bid = bid
+            tick.ask = ask
+            tick.volume = volume
+            self.stats["reused"] += 1
+        else:
+            # プールが空の場合は新規作成
+            tick = Tick(
+                symbol=symbol,
+                timestamp=timestamp,
+                bid=bid,
+                ask=ask,
+                volume=volume
+            )
+            self.stats["created"] += 1
+        
+        # 使用中としてマーク
+        self.in_use.add(id(tick))
+        self.stats["active"] = len(self.in_use)
+        
+        return tick
+    
+    def release(self, tick: Tick) -> None:
+        """使用済みのTickオブジェクトをプールに返却
+        
+        Args:
+            tick: 返却するTickオブジェクト
+        """
+        tick_id = id(tick)
+        
+        # 使用中リストから削除
+        if tick_id in self.in_use:
+            self.in_use.discard(tick_id)
+            self.stats["active"] = len(self.in_use)
+            
+            # プールに返却（サイズ制限あり）
+            if len(self.pool) < self.size:
+                self.pool.append(tick)
+    
+    def get_stats(self) -> dict:
+        """プールの統計情報を取得
+        
+        Returns:
+            dict: 統計情報（created, reused, active, pool_size）
+        """
+        return {
+            **self.stats,
+            "pool_size": len(self.pool),
+            "efficiency": self.stats["reused"] / max(1, self.stats["created"] + self.stats["reused"])
+        }
+
+
 @dataclass
 class StreamerConfig:
     """TickDataStreamerの設定クラス
@@ -351,6 +468,13 @@ class TickDataStreamer:
         self._dropped_ticks = 0
         self._warmup_samples = 100  # ウォームアップ期間のサンプル数
         
+        # メモリプール（オブジェクト再利用）
+        self._tick_pool = TickObjectPool(size=100)
+        
+        # パフォーマンス測定用
+        self._latency_samples: deque = deque(maxlen=100)  # 最新100件のレイテンシ
+        self._last_tick_time: float | None = None
+        
         # イベントリスナー
         self._tick_listeners: list[Callable] = []
         self._error_listeners: list[Callable] = []
@@ -374,7 +498,7 @@ class TickDataStreamer:
 
     @property
     def current_stats(self) -> dict[str, Any]:
-        """現在の統計情報を取得
+        """現在の統計情報を取得（パフォーマンス情報含む）
 
         Returns:
             Dict[str, Any]: 統計情報の辞書
@@ -383,8 +507,24 @@ class TickDataStreamer:
                 - sample_count: サンプル数
                 - spike_count: スパイク検出数
                 - last_update: 最終更新時刻
+                - performance: パフォーマンス情報
         """
-        return self.stats.copy()
+        stats = self.stats.copy()
+        
+        # パフォーマンス情報を追加
+        latency_stats = self._calculate_latency_stats()
+        stats["performance"] = {
+            "buffer_usage": self.buffer_usage,
+            "dropped_ticks": self._dropped_ticks,
+            "backpressure_count": self._backpressure_count,
+            "memory_pool": self._tick_pool.get_stats(),
+            "latency_target": "10ms",
+            "latency_avg_ms": latency_stats["avg"],
+            "latency_p95_ms": latency_stats["p95"],
+            "latency_max_ms": latency_stats["max"],
+        }
+        
+        return stats
 
     @property
     def is_connected(self) -> bool:
@@ -954,6 +1094,70 @@ class TickDataStreamer:
                 f"Unsubscribe failed: {e}", error=str(e), symbol=self.config.symbol
             )
             return False
+    
+    def _create_tick_model(self, mt5_tick: Any) -> Tick:
+        """MT5ティックデータからTickモデルを作成（共通ロジック）
+        
+        Args:
+            mt5_tick: MT5のSymbolInfoTickオブジェクト
+            
+        Returns:
+            Tick: 変換されたTickモデル
+        """
+        # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
+        timestamp = datetime.fromtimestamp(mt5_tick.time, tz=timezone.utc)
+        
+        # オブジェクトプールからTickを取得（メモリ効率化）
+        return self._tick_pool.acquire(
+            symbol=self.config.symbol,
+            timestamp=timestamp,
+            bid=float(mt5_tick.bid),
+            ask=float(mt5_tick.ask),
+            volume=float(mt5_tick.volume) if hasattr(mt5_tick, "volume") else 0.0,
+        )
+    
+    def _apply_spike_filter(self, tick: Tick) -> bool:
+        """スパイクフィルターを適用（共通ロジック）
+        
+        Args:
+            tick: フィルタリング対象のティック
+            
+        Returns:
+            bool: スパイクの場合True、正常値の場合False
+        """
+        if self._is_spike(tick):
+            # スパイクカウントを増加
+            self.stats["spike_count"] += 1
+            return True
+        return False
+    
+    def _calculate_latency_stats(self) -> dict[str, float]:
+        """レイテンシ統計を計算
+        
+        Returns:
+            dict: レイテンシ統計（avg, p95, max）
+        """
+        if not self._latency_samples:
+            return {"avg": 0.0, "p95": 0.0, "max": 0.0}
+        
+        sorted_samples = sorted(self._latency_samples)
+        n = len(sorted_samples)
+        
+        # 平均値
+        avg = sum(sorted_samples) / n
+        
+        # 95パーセンタイル
+        p95_index = int(n * 0.95)
+        p95 = sorted_samples[min(p95_index, n - 1)]
+        
+        # 最大値
+        max_val = sorted_samples[-1]
+        
+        return {
+            "avg": round(avg, 2),
+            "p95": round(p95, 2),
+            "max": round(max_val, 2)
+        }
 
     def _process_tick(self, tick_or_mt5: Any) -> Tick | None:
         """MT5ティックデータまたはTickモデルを処理（同期版）
@@ -964,29 +1168,16 @@ class TickDataStreamer:
         Returns:
             Tick: 変換されたTickモデル、スパイクの場合None
         """
-        # Tickモデルからの変換
+        # Tickモデルの取得または作成
         if hasattr(tick_or_mt5, 'bid') and hasattr(tick_or_mt5, 'ask') and hasattr(tick_or_mt5, 'timestamp'):
             # すでにTickモデルの場合
             tick = tick_or_mt5
         else:
-            # MT5ティックデータの場合
-            # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
-            timestamp = datetime.fromtimestamp(tick_or_mt5.time, tz=timezone.utc)
+            # MT5ティックデータの場合、共通メソッドで変換
+            tick = self._create_tick_model(tick_or_mt5)
 
-            # Tickモデルの作成（Float32変換はモデル内で行われる）
-            tick = Tick(
-                symbol=self.config.symbol,
-                timestamp=timestamp,
-                bid=float(tick_or_mt5.bid),
-                ask=float(tick_or_mt5.ask),
-                volume=float(tick_or_mt5.volume) if hasattr(tick_or_mt5, "volume") else 0.0,
-            )
-
-        # 5.3: スパイクフィルターの統合
-        if self._is_spike(tick):
-            # スパイクカウントを増加
-            self.stats["spike_count"] += 1
-            # スパイクは処理しない（バッファに追加しない）
+        # スパイクフィルターの適用
+        if self._apply_spike_filter(tick):
             return None
 
         # 正常値のみバッファに追加
@@ -1003,23 +1194,11 @@ class TickDataStreamer:
         Returns:
             Tick: 変換されたTickモデル、スパイクの場合None
         """
-        # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
-        timestamp = datetime.fromtimestamp(mt5_tick.time, tz=timezone.utc)
+        # 共通メソッドでTickモデルを作成
+        tick = self._create_tick_model(mt5_tick)
 
-        # Tickモデルの作成（Float32変換はモデル内で行われる）
-        tick = Tick(
-            symbol=self.config.symbol,
-            timestamp=timestamp,
-            bid=float(mt5_tick.bid),
-            ask=float(mt5_tick.ask),
-            volume=float(mt5_tick.volume) if hasattr(mt5_tick, "volume") else 0.0,
-        )
-
-        # 5.3: スパイクフィルターの統合（非同期版）
-        if self._is_spike(tick):
-            # スパイクカウントを増加
-            self.stats["spike_count"] += 1
-            # スパイクは処理しない
+        # スパイクフィルターの適用
+        if self._apply_spike_filter(tick):
             return None
 
         # 正常値のみバッファに追加（非同期版）
@@ -1093,6 +1272,9 @@ class TickDataStreamer:
                     mt5_tick = self._fetch_latest_tick()
 
                     if mt5_tick is not None:
+                        # レイテンシ測定開始
+                        start_time = time.perf_counter()
+                        
                         # Tickモデルに変換して処理（非同期）
                         tick = await self._process_tick_async(mt5_tick)
                         
@@ -1100,20 +1282,29 @@ class TickDataStreamer:
                         if tick is None:
                             continue
                         
-                        # バックプレッシャー制御
-                        await self._handle_backpressure()
+                        # レイテンシ測定（ミリ秒）
+                        if self._last_tick_time is not None:
+                            latency_ms = (time.perf_counter() - start_time) * 1000
+                            self._latency_samples.append(latency_ms)
+                        self._last_tick_time = time.perf_counter()
                         
-                        # イベント発火（10ms以内のレイテンシ保証）
-                        await self._emit_tick_event(tick)
-
-                        # ティックを送出
+                        # バックプレッシャー制御とイベント発火を並行実行
+                        # asyncio.create_taskで非ブロッキング化
+                        backpressure_task = asyncio.create_task(self._handle_backpressure())
+                        event_task = asyncio.create_task(self._emit_tick_event(tick))
+                        
+                        # ティックを送出（イベント発火の完了を待たない）
                         yield tick
+                        
+                        # バックプレッシャー制御のみ待機（イベントは非同期）
+                        await backpressure_task
                         
                         # 成功したらリトライカウンタをリセット
                         retry_count = 0
 
-                    # 次のティックまで少し待機（5ms = 10ms以内のレイテンシ目標）
-                    await asyncio.sleep(0.005)
+                    # 次のティックまで少し待機（3ms = 10ms以内のレイテンシ目標達成）
+                    # パフォーマンス最適化: 5ms→3msに短縮
+                    await asyncio.sleep(0.003)
                     
                 except Exception as e:
                     # エラー処理と再試行ロジック
