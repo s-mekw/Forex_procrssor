@@ -25,7 +25,7 @@
   - 接続プール管理とヘルスチェック機能を追加
   - _要件: 1.1_
 
-- [ ] 4. リアルタイムティックデータ取得の実装
+- [X] 4. リアルタイムティックデータ取得の実装
   - tests/unit/test_tick_fetcher.pyにティックデータ取得とバリデーションのテストを作成
   - src/mt5_data_acquisition/tick_fetcher.pyにTickDataStreamerクラスを実装
   - 非同期ストリーミングとリングバッファ（10,000件）を実装
