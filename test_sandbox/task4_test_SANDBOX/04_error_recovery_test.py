@@ -24,7 +24,7 @@ from src.mt5_data_acquisition.tick_fetcher import (
     MT5ConnectionError, SubscriptionError, CircuitBreakerOpenError
 )
 from src.common.models import Tick
-from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer
+from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer, STREAMING_CONFIG
 from utils.display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, format_timestamp

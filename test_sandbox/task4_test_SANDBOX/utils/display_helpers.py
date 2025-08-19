@@ -86,6 +86,20 @@ def create_stats_table(stats: Dict[str, Any]) -> Table:
         table.add_row("Buffer Usage", format_percentage(stats["buffer_usage"] * 100))
     if "dropped_ticks" in stats:
         table.add_row("Dropped Ticks", str(stats["dropped_ticks"]))
+    if "z_score_bid" in stats:
+        z_score = stats["z_score_bid"]
+        if abs(z_score) > 2.0:
+            color = "red" if abs(z_score) > 3.0 else "yellow"
+            table.add_row("Z-Score Bid", f"[{color}]{z_score:.2f}σ[/{color}]")
+        else:
+            table.add_row("Z-Score Bid", f"{z_score:.2f}σ")
+    if "z_score_ask" in stats:
+        z_score = stats["z_score_ask"]
+        if abs(z_score) > 2.0:
+            color = "red" if abs(z_score) > 3.0 else "yellow"
+            table.add_row("Z-Score Ask", f"[{color}]{z_score:.2f}σ[/{color}]")
+        else:
+            table.add_row("Z-Score Ask", f"{z_score:.2f}σ")
     
     return table
 

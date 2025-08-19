@@ -17,7 +17,7 @@ from rich.console import Console
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
 from src.common.models import Tick
-from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer, DISPLAY_CONFIG
+from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer, STREAMING_CONFIG, DISPLAY_CONFIG
 from utils.display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, create_live_display, format_price, format_timestamp,
@@ -151,7 +151,8 @@ async def stream_and_display(symbol: str, duration: int = 60):
     print_info(f"Streaming for {duration} seconds... Press Ctrl+C to stop")
     
     # ストリーミング開始
-    streaming_task = await streamer.start_streaming()
+    await streamer.start_streaming()
+    streaming_task = streamer._current_task
     
     # ライブ表示を開始
     try:
@@ -169,7 +170,7 @@ async def stream_and_display(symbol: str, duration: int = 60):
                 live.update(create_live_display(**display_manager.get_display_data()))
                 
                 # ストリーミングタスクの状態をチェック
-                if streaming_task.done():
+                if streaming_task and streaming_task.done():
                     print_warning("Streaming task ended unexpectedly")
                     break
                     
@@ -194,7 +195,7 @@ async def main():
     """メイン関数"""
     # テストパラメータ
     symbol = TEST_SYMBOLS["default"]
-    duration = 30  # 秒
+    duration = 12  # 秒
     
     try:
         await stream_and_display(symbol, duration)

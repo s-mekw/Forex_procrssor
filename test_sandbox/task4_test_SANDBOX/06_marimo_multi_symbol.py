@@ -46,7 +46,7 @@ def __():
     from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
     from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
     from src.common.models import Tick
-    from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer
+    from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer, STREAMING_CONFIG
     
     return mo, asyncio, np, pd, go, make_subplots, datetime, timedelta, defaultdict, deque, Dict, List
 

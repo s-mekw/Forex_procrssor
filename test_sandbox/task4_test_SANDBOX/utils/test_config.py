@@ -20,7 +20,7 @@ MT5_CONFIG = {
 TEST_SYMBOLS = {
     "major": ["EURUSD", "GBPUSD", "USDJPY", "USDCHF"],
     "minor": ["EURJPY", "GBPJPY", "AUDUSD", "NZDUSD"],
-    "default": "EURUSD",
+    "default": "EURJPY",
 }
 
 # ストリーミング設定

@@ -22,7 +22,7 @@ from rich.text import Text
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
 from src.common.models import Tick
-from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer
+from utils.test_config import get_mt5_config, TEST_SYMBOLS, create_tick_streamer, STREAMING_CONFIG
 from utils.display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, format_percentage, format_price
@@ -171,7 +171,7 @@ def create_buffer_display(monitor: BufferMonitor, streamer: TickDataStreamer) ->
     # エラー統計
     error_stats = streamer.error_stats
     for error_type, count in error_stats.items():
-        if count > 0:
+        if count is not None and count > 0:
             perf_table.add_row(f"Errors ({error_type})", str(count))
     
     layout["performance"].update(perf_table)
@@ -214,7 +214,8 @@ async def monitor_buffer(symbol: str, duration: int = 60):
     print_info(f"Monitoring for {duration} seconds... Press Ctrl+C to stop")
     
     # ストリーミング開始
-    streaming_task = await streamer.start_streaming()
+    await streamer.start_streaming()
+    streaming_task = streamer._current_task
     
     # 監視を開始
     try:
