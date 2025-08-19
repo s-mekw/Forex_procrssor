@@ -145,11 +145,14 @@ class TestSpikeFilter:
         # 正常なティックデータを追加して統計量を安定させる
         normal_bid = 150.0
         for i in range(100):
+            bid_value = normal_bid + np.random.normal(0, 0.001)
+            # Ask は常に Bid より大きくなるようにする
+            ask_value = bid_value + 0.002 + abs(np.random.normal(0, 0.0005))
             tick = Tick(
                 timestamp=datetime.utcnow(),
                 symbol="USDJPY",
-                bid=normal_bid + np.random.normal(0, 0.001),
-                ask=normal_bid + 0.002 + np.random.normal(0, 0.001),
+                bid=bid_value,
+                ask=ask_value,
                 volume=1000.0
             )
             streamer._add_to_buffer(tick)
@@ -162,7 +165,7 @@ class TestSpikeFilter:
             timestamp=datetime.utcnow(),
             symbol="USDJPY",
             bid=normal_bid + 0.002,
-            ask=normal_bid + 0.004,
+            ask=normal_bid + 0.005,  # Bidより確実に大きい値
             volume=1000.0
         )
         assert streamer._is_spike(normal_tick) is False
@@ -185,13 +188,16 @@ class TestSpikeFilter:
         
         streamer = TickDataStreamer(symbol="USDJPY")
         
-        # 正常なティックデータで初期化
-        for i in range(50):
+        # 正常なティックデータで初期化（ウォームアップ期間100件以上）
+        for i in range(110):
+            bid_value = 150.0 + np.random.normal(0, 0.001)
+            # Ask は常に Bid より大きくなるようにする
+            ask_value = bid_value + 0.002 + abs(np.random.normal(0, 0.0005))
             tick = Tick(
                 timestamp=datetime.utcnow(),
                 symbol="USDJPY",
-                bid=150.0 + np.random.normal(0, 0.001),
-                ask=150.002 + np.random.normal(0, 0.001),
+                bid=bid_value,
+                ask=ask_value,
                 volume=1000.0
             )
             streamer._process_tick(tick)

@@ -78,6 +78,7 @@ class TickDataStreamer:
         stats_window_size: int = 1000,
         mt5_client: MT5ConnectionManager | None = None,
         backpressure_delay: float = 0.01,
+        statistics_window: int | None = None,  # 別名サポート
     ):
         """初期化メソッド
 
@@ -89,6 +90,7 @@ class TickDataStreamer:
             stats_window_size: 統計計算用のウィンドウサイズ（デフォルト: 1000）
             mt5_client: MT5接続マネージャー（オプション）
             backpressure_delay: バックプレッシャー時の遅延時間（秒、デフォルト: 0.01）
+            statistics_window: stats_window_sizeの別名（テスト互換性用）
 
         Raises:
             ValueError: 無効なパラメータが指定された場合
@@ -106,6 +108,10 @@ class TickDataStreamer:
         if backpressure_threshold <= 0 or backpressure_threshold > 1:
             raise ValueError("Backpressure threshold must be between 0 and 1")
 
+        # statistics_window が指定されていれば stats_window_size を上書き
+        if statistics_window is not None:
+            stats_window_size = statistics_window
+            
         if stats_window_size <= 0:
             raise ValueError("Stats window size must be positive")
 
@@ -127,8 +133,10 @@ class TickDataStreamer:
 
         # 統計情報の初期化
         self.stats: dict[str, Any] = {
-            "mean": 0.0,
-            "std": 0.0,
+            "mean_bid": 0.0,
+            "std_bid": 0.0,
+            "mean_ask": 0.0,
+            "std_ask": 0.0,
             "sample_count": 0,
             "spike_count": 0,
             "last_update": None,
@@ -142,11 +150,13 @@ class TickDataStreamer:
         self.logger = logger
 
         # 内部管理用
-        self._stats_buffer: deque = deque(maxlen=stats_window_size)
+        self._stats_buffer_bid: deque = deque(maxlen=stats_window_size)
+        self._stats_buffer_ask: deque = deque(maxlen=stats_window_size)
         self._current_task: asyncio.Task | None = None
         self._buffer_lock = asyncio.Lock()
         self._backpressure_count = 0
         self._dropped_ticks = 0
+        self._warmup_samples = 100  # ウォームアップ期間のサンプル数
         
         # イベントリスナー
         self._tick_listeners: list[Callable] = []
@@ -229,6 +239,59 @@ class TickDataStreamer:
             float: バックプレッシャー発動閾値（0.0～1.0）
         """
         return self.config.backpressure_threshold
+    
+    @property
+    def mean_bid(self) -> float | None:
+        """Bidの平均値を取得
+        
+        Returns:
+            float | None: Bidの平均値、計算されていない場合None
+        """
+        if self.stats["sample_count"] < 2:
+            return None
+        return self.stats["mean_bid"]
+    
+    @property
+    def std_bid(self) -> float | None:
+        """Bidの標準偏差を取得
+        
+        Returns:
+            float | None: Bidの標準偏差、計算されていない場合None
+        """
+        if self.stats["sample_count"] < 2:
+            return None
+        return self.stats["std_bid"]
+    
+    @property
+    def mean_ask(self) -> float | None:
+        """Askの平均値を取得
+        
+        Returns:
+            float | None: Askの平均値、計算されていない場合None
+        """
+        if self.stats["sample_count"] < 2:
+            return None
+        return self.stats["mean_ask"]
+    
+    @property
+    def std_ask(self) -> float | None:
+        """Askの標準偏差を取得
+        
+        Returns:
+            float | None: Askの標準偏差、計算されていない場合None
+        """
+        if self.stats["sample_count"] < 2:
+            return None
+        return self.stats["std_ask"]
+    
+    @property
+    def statistics_window(self) -> int:
+        """統計ウィンドウサイズを取得
+        
+        Returns:
+            int: 統計計算用のウィンドウサイズ
+        """
+        return self.config.stats_window_size
 
     def __repr__(self) -> str:
         """文字列表現
@@ -255,8 +318,12 @@ class TickDataStreamer:
         # バッファがフルの場合、古いデータは自動的に削除される（deque maxlenの機能）
         self.buffer.append(tick)
         
-        # 統計用バッファにも追加
-        self._stats_buffer.append(tick.mid_price)
+        # 統計用バッファにも追加（Bid/Ask個別）
+        self._stats_buffer_bid.append(tick.bid)
+        self._stats_buffer_ask.append(tick.ask)
+        
+        # 統計量の更新
+        self._update_statistics()
     
     async def add_tick(self, tick: Tick) -> None:
         """ティックをバッファに追加（非同期スレッドセーフ版）
@@ -291,7 +358,14 @@ class TickDataStreamer:
         """バッファをクリア"""
         async with self._buffer_lock:
             self.buffer.clear()
-            self._stats_buffer.clear()
+            self._stats_buffer_bid.clear()
+            self._stats_buffer_ask.clear()
+            # 統計情報もリセット
+            self.stats["sample_count"] = 0
+            self.stats["mean_bid"] = 0.0
+            self.stats["std_bid"] = 0.0
+            self.stats["mean_ask"] = 0.0
+            self.stats["std_ask"] = 0.0
             self.logger.info("Buffer cleared", symbol=self.config.symbol)
     
     def get_buffer_snapshot(self) -> list[Tick]:
@@ -466,6 +540,135 @@ class TickDataStreamer:
                     listener(level, usage)
             except Exception as e:
                 self.logger.error(f"Error in backpressure listener: {e}")
+    
+    # 5.1: 統計計算の基盤実装
+    def _calculate_mean_std(self, values: list[float]) -> tuple[float, float]:
+        """平均と標準偏差を計算（Pythonネイティブ実装）
+        
+        Args:
+            values: 値のリスト
+            
+        Returns:
+            tuple[float, float]: (平均, 標準偏差)
+        """
+        if not values:
+            return 0.0, 0.0
+        
+        n = len(values)
+        if n == 1:
+            return values[0], 0.0
+        
+        # 平均を計算
+        mean = sum(values) / n
+        
+        # 分散を計算
+        variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+        
+        # 標準偏差は分散の平方根
+        std = variance ** 0.5
+        
+        return mean, std
+    
+    def _update_statistics(self) -> None:
+        """統計量を更新（ローリングウィンドウベース）
+        
+        最新のstats_window_size個のデータから統計量を計算します。
+        ウォームアップ期間（最初の100件）は特別扱いします。
+        """
+        # サンプル数を更新
+        self.stats["sample_count"] = len(self._stats_buffer_bid)
+        
+        # ウォームアップ期間中は統計を計算しない
+        if self.stats["sample_count"] < self._warmup_samples:
+            # ウォームアップ中でも基本的な統計は計算
+            if self.stats["sample_count"] >= 2:
+                # Bid統計
+                bid_values = list(self._stats_buffer_bid)
+                self.stats["mean_bid"], self.stats["std_bid"] = self._calculate_mean_std(bid_values)
+                
+                # Ask統計
+                ask_values = list(self._stats_buffer_ask)
+                self.stats["mean_ask"], self.stats["std_ask"] = self._calculate_mean_std(ask_values)
+            return
+        
+        # 統計量の計算（ローリングウィンドウ）
+        # Bid統計
+        bid_values = list(self._stats_buffer_bid)
+        self.stats["mean_bid"], self.stats["std_bid"] = self._calculate_mean_std(bid_values)
+        
+        # Ask統計  
+        ask_values = list(self._stats_buffer_ask)
+        self.stats["mean_ask"], self.stats["std_ask"] = self._calculate_mean_std(ask_values)
+        
+        # 最終更新時刻
+        self.stats["last_update"] = datetime.now(tz=timezone.utc)
+    
+    # 5.2: スパイク判定ロジック
+    def _calculate_z_score(self, value: float, mean: float, std: float) -> float:
+        """Zスコアを計算
+        
+        Args:
+            value: 評価する値
+            mean: 平均
+            std: 標準偏差
+            
+        Returns:
+            float: Zスコア
+        """
+        if std == 0:
+            return 0.0
+        return abs((value - mean) / std)
+    
+    def _is_spike(self, tick: Tick) -> bool:
+        """スパイク（異常値）かどうかを判定
+        
+        3σルールに基づいて異常値を検出します。
+        ウォームアップ期間中はスパイク判定を行いません。
+        
+        Args:
+            tick: 判定対象のティック
+            
+        Returns:
+            bool: スパイクの場合True
+        """
+        # ウォームアップ期間中はスパイク判定しない
+        if self.stats["sample_count"] < self._warmup_samples:
+            return False
+        
+        # 統計量が計算されていない場合はスパイク判定しない
+        if self.stats["std_bid"] == 0 or self.stats["std_ask"] == 0:
+            return False
+        
+        # Bid/Ask個別にZスコアを計算
+        z_score_bid = self._calculate_z_score(
+            tick.bid, 
+            self.stats["mean_bid"], 
+            self.stats["std_bid"]
+        )
+        z_score_ask = self._calculate_z_score(
+            tick.ask,
+            self.stats["mean_ask"],
+            self.stats["std_ask"]
+        )
+        
+        # いずれかが閾値を超えたらスパイク
+        is_spike_bid = z_score_bid > self.config.spike_threshold
+        is_spike_ask = z_score_ask > self.config.spike_threshold
+        
+        if is_spike_bid or is_spike_ask:
+            self.logger.warning(
+                "Spike detected",
+                symbol=self.config.symbol,
+                timestamp=tick.timestamp.isoformat(),
+                bid=tick.bid,
+                ask=tick.ask,
+                z_score_bid=f"{z_score_bid:.2f}",
+                z_score_ask=f"{z_score_ask:.2f}",
+                threshold=self.config.spike_threshold
+            )
+            return True
+        
+        return False
 
     async def subscribe_to_ticks(self) -> bool:
         """MT5のティックデータ購読を開始
@@ -577,23 +780,26 @@ class TickDataStreamer:
                 volume=float(tick_or_mt5.volume) if hasattr(tick_or_mt5, "volume") else 0.0,
             )
 
-        # TODO: スパイクフィルターの実装
-        # if self._is_spike(tick):
-        #     return None
+        # 5.3: スパイクフィルターの統合
+        if self._is_spike(tick):
+            # スパイクカウントを増加
+            self.stats["spike_count"] += 1
+            # スパイクは処理しない（バッファに追加しない）
+            return None
 
-        # リングバッファに追加
+        # 正常値のみバッファに追加
         self._add_to_buffer(tick)
 
         return tick
     
-    async def _process_tick_async(self, mt5_tick: Any) -> Tick:
+    async def _process_tick_async(self, mt5_tick: Any) -> Tick | None:
         """MT5ティックデータをTickモデルに変換（非同期版）
 
         Args:
             mt5_tick: MT5のSymbolInfoTickオブジェクト
 
         Returns:
-            Tick: 変換されたTickモデル
+            Tick: 変換されたTickモデル、スパイクの場合None
         """
         # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
         timestamp = datetime.fromtimestamp(mt5_tick.time, tz=timezone.utc)
@@ -607,7 +813,14 @@ class TickDataStreamer:
             volume=float(mt5_tick.volume) if hasattr(mt5_tick, "volume") else 0.0,
         )
 
-        # リングバッファに追加（非同期版）
+        # 5.3: スパイクフィルターの統合（非同期版）
+        if self._is_spike(tick):
+            # スパイクカウントを増加
+            self.stats["spike_count"] += 1
+            # スパイクは処理しない
+            return None
+
+        # 正常値のみバッファに追加（非同期版）
         await self.add_tick(tick)
 
         return tick
@@ -680,6 +893,10 @@ class TickDataStreamer:
                     if mt5_tick is not None:
                         # Tickモデルに変換して処理（非同期）
                         tick = await self._process_tick_async(mt5_tick)
+                        
+                        # スパイクフィルターで除外された場合はスキップ
+                        if tick is None:
+                            continue
                         
                         # バックプレッシャー制御
                         await self._handle_backpressure()

@@ -1,11 +1,11 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: タスク4実装中 - Step 4完了、Step 5準備
-- 最終更新: 2025-08-19 09:40
+- ステップ: タスク4実装中 - Step 5完了
+- 最終更新: 2025-08-19 10:00
 - フェーズ: Phase2 - MT5データ取得基盤
-- 進捗: 40% (Step 1-4完了、Step 5-10残り)
-- テスト状態: 9/20テストがPASSED (45%)
+- 進捗: 50% (Step 1-5完了、Step 6-10残り)
+- テスト状態: 11/20テストがPASSED (55%)
 
 ## 📌 現在のタスク
 **タスク4: リアルタイムティックデータ取得の実装**
@@ -55,6 +55,26 @@
 
 ## 🔨 実装結果
 
+### Step 5 完了 (2025-08-19 10:00)
+- ✅ スパイクフィルター（3σルール）の完全実装
+- 📁 変更ファイル: src/mt5_data_acquisition/tick_fetcher.py
+- 📝 実装内容:
+  - 統計計算の基盤（_calculate_mean_std、_update_statistics）
+  - Bid/Ask個別の統計管理（mean_bid、std_bid、mean_ask、std_ask）
+  - ローリングウィンドウ（1000件）での統計更新
+  - ウォームアップ期間（最初の100件）の処理
+  - Zスコア計算による異常値判定（_calculate_z_score、_is_spike）
+  - スパイクフィルター統合（_process_tick、_process_tick_async）
+  - 統計プロパティの追加（mean_bid、std_bid、mean_ask、std_ask）
+- 🧪 テスト結果: 11個のテストがPASSED状態（+2個増加）
+  - test_spike_detection_with_3_sigma_rule: XPASS（動作確認）
+  - test_spike_filter_removes_outliers: XPASS（フィルタリング確認）
+  - test_statistics_update_with_rolling_window: XPASS（統計更新確認）
+- 📊 統計情報:
+  - スパイク検出ログが構造化されて出力される
+  - spike_countが正確にカウントアップされる
+  - 異常値はバッファに追加されない
+
 ### Step 4 完了 (2025-08-19 09:40)
 - ✅ 非同期ストリーミング機能の完全実装
 - 📁 変更ファイル: src/mt5_data_acquisition/tick_fetcher.py
@@ -100,6 +120,50 @@
 
 ## 👁️ レビュー結果
 
+### Step 5 レビュー (2025-08-19 10:05)
+#### 良い点
+- ✅ 統計計算の基盤が堅牢（_calculate_mean_std メソッドでPythonネイティブ実装）
+- ✅ Bid/Ask個別の統計管理が適切（mean_bid、std_bid、mean_ask、std_ask）
+- ✅ ローリングウィンドウ（1000件）での統計更新が効率的（dequeのmaxlen活用）
+- ✅ ウォームアップ期間（最初の100件）の処理が正確
+- ✅ Zスコア計算による異常値判定が数学的に正しい（3σルール）
+- ✅ スパイクフィルターが正しく統合されている（_process_tick、_process_tick_async両方）
+- ✅ スパイク検出時の構造化ログが詳細（bid/ask個別のZスコア、タイムスタンプ）
+- ✅ spike_countが正確にカウントアップされる実装
+- ✅ 異常値はバッファに追加されない仕様が正しく実装
+- ✅ 統計プロパティが適切に追加（mean_bid、std_bid、mean_ask、std_ask）
+- ✅ テスト結果: スパイクフィルター関連の3つのテストがXPASS（期待通り動作）
+  - test_spike_detection_with_3_sigma_rule: XPASS
+  - test_spike_filter_removes_outliers: XPASS  
+  - test_statistics_update_with_rolling_window: XPASS
+
+#### 改善点
+- ⚠️ _process_tick_asyncと_process_tickで重複コードがある（Tickモデル作成部分）
+- 優先度: 低（リファクタリング候補だが、動作に影響なし）
+- ⚠️ statistics_windowパラメータの別名サポートがややトリッキー（line 81, 112-113）
+- 優先度: 低（テスト互換性のための措置、削除可能）
+
+#### 判定
+- [x] 合格（次のステップへ進む）
+
+### 合格理由
+1. Step 5の要件をすべて満たしている
+   - ✅ 統計計算の基盤（_calculate_mean_std、_update_statistics）
+   - ✅ Bid/Ask個別の統計管理
+   - ✅ ローリングウィンドウ（1000件）での統計更新
+   - ✅ ウォームアップ期間（100件）の処理
+   - ✅ 3σルールによる異常値検出（_calculate_z_score、_is_spike）
+   - ✅ スパイクフィルターの統合（_process_tick、_process_tick_async）
+2. 11個のテストがPASSED/XPASS状態（55%）
+3. スパイクフィルター関連の3つのテストすべてがXPASS（正常動作）
+4. ログ出力例から異常値検出が正しく機能していることを確認
+   - z_score_bid=98.01、z_score_ask=96.11（明らかに3σを超過）
+5. 改善点は軽微で次のステップで対処可能
+
+### コミット結果
+- Hash: ebf98a1
+- Message: feat: Step 5完了 - スパイクフィルター（3σルール）の完全実装
+
 ### Step 4 レビュー (2025-08-19 09:45)
 #### 良い点
 - ✅ リングバッファの実装が完全かつ効率的（dequeのmaxlen活用、スレッドセーフ）
@@ -130,6 +194,10 @@
 3. パフォーマンス要件（10ms以内）を達成可能な設計
 4. エラーハンドリングが堅牢（リトライ、バックプレッシャー）
 5. 改善点は次のステップで対処可能
+
+### コミット結果
+- Hash: 188dcf8
+- Message: feat: Step 4完了 - 非同期ストリーミング機能の完全実装
 
 ### Step 1 レビュー
 #### 良い点
@@ -233,59 +301,9 @@
 
 ## 📝 次のステップ
 
-### Step 5: スパイクフィルターの実装
+### Step 6: エラーハンドリングと再購読機能
 - 📁 対象ファイル: src/mt5_data_acquisition/tick_fetcher.py
-- 🎯 目標: 3σルールによる異常値検出と除外機能
-- ⏱️ 見積時間: 45分
+- 🎯 目標: 堅牢なエラー処理と自動復旧機能
+- ⏱️ 見積時間: 40分
+- 📊 進捗: 0%
 
-#### 実装タスクリスト（詳細版）
-
-##### 4.1 バックプレッシャー制御の実装 (15分)
-- **メソッド**: `_handle_backpressure()`
-- **実装内容**:
-  - バッファ使用率の計算（self.buffer_usage プロパティ活用）
-  - 閾値超過時の処理:
-    - 80%超過: 警告ログ出力 + 待機時間10ms
-    - 90%超過: エラーログ + 待機時間50ms
-    - 100%到達: データドロップ + メトリクス更新
-  - 統計情報の更新（backpressure_count追加）
-  - 非同期待機の実装（asyncio.sleep使用）
-
-##### 4.2 リングバッファの完全動作実装 (10分)
-- **メソッド**: `_add_to_buffer()`, `get_buffer_snapshot()`
-- **実装内容**:
-  - スレッドセーフな追加処理（asyncio.Lock使用）
-  - バッファオーバーフロー時の自動削除
-  - スナップショット取得（現在のバッファのコピー）
-  - バッファクリアメソッド（clear_buffer）
-
-##### 4.3 イベント発火メカニズム (10分)
-- **メソッド**: `_emit_tick_event()`, `add_tick_listener()`, `remove_tick_listener()`
-- **実装内容**:
-  - イベントリスナーのリスト管理
-  - 非同期コールバックの実行（asyncio.create_task）
-  - 10ms以内のレイテンシ保証（タイムスタンプ計測）
-  - エラーハンドリング（リスナー実行失敗時）
-
-##### 4.4 stream_ticksメソッドの完全実装 (10分)
-- **改善内容**:
-  - バックプレッシャー制御の統合
-  - エラー時の自動再試行（最大3回）
-  - ストリーミング状態フラグの管理
-  - グレースフルシャットダウンの実装
-  - パフォーマンスメトリクスの収集
-
-#### 期待されるテスト結果
-- 🟢 test_async_streaming_start_stop: PASSED
-- 🟢 test_async_tick_generation: PASSED  
-- 🟢 test_streaming_latency_under_10ms: PASSED
-- 🟢 test_backpressure_handling: PASSED
-- 🟢 test_backpressure_with_data_drop: PASSED
-- 🟡 test_ring_buffer_size_limit: XFAIL → PASSED（実装により解決）
-- 🟡 test_buffer_overflow_handling: XFAIL → PASSED（実装により解決）
-
-#### 実装の優先順位
-1. リングバッファの完全動作（基盤となる機能）
-2. バックプレッシャー制御（データ保護）
-3. stream_ticksメソッドの改善（統合）
-4. イベント発火メカニズム（拡張機能）
