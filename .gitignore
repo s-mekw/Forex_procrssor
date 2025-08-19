@@ -45,9 +45,6 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Test sandbox
-test_sandbox/
-
 # Translations
 *.mo
 *.pot

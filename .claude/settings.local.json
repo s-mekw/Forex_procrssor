@@ -10,27 +10,14 @@
       "mcp__serena__get_symbols_overview",
       "mcp__serena__write_memory",
       "Bash(git add:*)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_reconnection_with_exponential_backoff -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_property_methods -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v --tb=short)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_config_with_custom_values -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -k \"not connection_success and not connection_failure and not reconnection\" -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_success tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_failure -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_pool_management -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager -v --tb=short --no-cov)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_connection_pool_management -v)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_health_check -xvs)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py -v --tb=short --no-cov)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py -v --no-cov)",
-      "Bash(python -m pytest tests/unit/test_mt5_client.py::TestMT5ConnectionManager::test_max_retry_attempts tests/unit/test_mt5_client.py::TestMT5ConnectionManagerIntegration::test_integration_flow -v)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py*)",
       "Bash(python:*)",
       "WebFetch(domain:docs.marimo.io)",
       "mcp__serena__find_file",
-      "mcp__serena__find_symbol"
+      "mcp__serena__find_symbol",
+      "Bash(uv add:*)",
+      "mcp__serena__read_memory",
+      "mcp__serena__think_about_collected_information"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -38,7 +25,7 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "Explanatory",
+  "outputStyle": "default",
   "comment": "Claude Code Settings - Simplified Configuration",
   "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }
