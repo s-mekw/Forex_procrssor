@@ -78,7 +78,7 @@ class TestTickDataStreamerInitialization:
 class TestRingBuffer:
     """リングバッファ機能のテスト"""
 
-    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    # @pytest.mark.xfail(reason="TickDataStreamer未実装")  # XFAILを解除
     def test_ring_buffer_size_limit(self):
         """リングバッファのサイズ制限をテスト"""
         from mt5_data_acquisition.tick_fetcher import TickDataStreamer
@@ -104,7 +104,7 @@ class TestRingBuffer:
         last_tick = streamer.buffer[-1]
         assert last_tick.bid == pytest.approx(150.149, rel=1e-3)
 
-    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    # @pytest.mark.xfail(reason="TickDataStreamer未実装")  # XFAILを解除
     def test_ring_buffer_fifo_behavior(self):
         """リングバッファのFIFO動作をテスト"""
         from mt5_data_acquisition.tick_fetcher import TickDataStreamer
@@ -663,3 +663,163 @@ class TestPerformanceMetrics:
         import sys
         tick_size = sys.getsizeof(streamer.buffer[0])
         assert tick_size < 500, f"Tick object size {tick_size} bytes is too large"
+
+
+class TestEdgeCases:
+    """エッジケースと異常系のテスト"""
+
+    def test_extreme_spike_detection(self):
+        """極端なスパイク値の検出をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDJPY", spike_threshold=3.0)
+        
+        # 正常値でウォームアップ
+        base_price = 150.0
+        for i in range(100):
+            bid_variation = np.random.normal(0, 0.0005)  # より小さな変動
+            ask_variation = np.random.normal(0, 0.0005)
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDJPY",
+                bid=base_price + bid_variation,
+                ask=base_price + 0.002 + ask_variation,  # 常にbidより高い
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        initial_count = len(streamer.buffer)
+        
+        # 極端なスパイク（100σ相当）
+        extreme_spike = Tick(
+            timestamp=datetime.utcnow(),
+            symbol="USDJPY",
+            bid=base_price + 10.0,  # 10円の異常値
+            ask=base_price + 10.002,
+            volume=1000.0
+        )
+        
+        processed = streamer._process_tick(extreme_spike)
+        
+        # スパイクが検出され、バッファに追加されないこと
+        assert processed is None
+        assert len(streamer.buffer) == initial_count
+        assert streamer.stats["spike_count"] > 0
+
+    def test_zero_and_negative_prices(self):
+        """ゼロまたは負の価格の処理をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDJPY")
+        
+        # ゼロ価格のティック（Pydanticのバリデーションで検出される）
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="greater than 0"):
+            zero_tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDJPY",
+                bid=0.0,
+                ask=0.002,
+                volume=1000.0
+            )
+        
+        # 負の価格のティック
+        with pytest.raises(ValidationError, match="greater than 0"):
+            negative_tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDJPY",
+                bid=-150.0,
+                ask=-149.998,
+                volume=1000.0
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_buffer_access(self):
+        """複数の非同期タスクからの同時バッファアクセスをテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDJPY", buffer_size=1000)
+        
+        async def add_ticks(start_price: float, count: int):
+            """非同期でティックを追加"""
+            for i in range(count):
+                tick = Tick(
+                    timestamp=datetime.utcnow(),
+                    symbol="USDJPY",
+                    bid=start_price + i * 0.001,
+                    ask=start_price + 0.002 + i * 0.001,
+                    volume=1000.0
+                )
+                await streamer.add_tick(tick)
+                await asyncio.sleep(0.001)
+        
+        # 3つの非同期タスクから同時にティックを追加
+        tasks = [
+            add_ticks(150.0, 100),
+            add_ticks(151.0, 100),
+            add_ticks(152.0, 100)
+        ]
+        
+        await asyncio.gather(*tasks)
+        
+        # バッファへの追加が正常に行われたこと
+        assert len(streamer.buffer) <= 1000
+        assert streamer.stats["total_ticks"] >= 200  # スパイクフィルターで一部除外される可能性
+
+    def test_memory_pool_exhaustion(self):
+        """メモリプールが枯渇した場合の動作をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        
+        streamer = TickDataStreamer(symbol="USDJPY")
+        
+        # オブジェクトプールの全オブジェクトを取得
+        acquired_objects = []
+        for _ in range(100):  # プールサイズ
+            obj = streamer._tick_pool.acquire()
+            acquired_objects.append(obj)
+        
+        # プール枯渇後も新規作成できること
+        additional_obj = streamer._tick_pool.acquire()
+        assert additional_obj is not None
+        assert streamer._tick_pool.stats["created"] > 100
+        
+        # オブジェクトを解放
+        for obj in acquired_objects:
+            streamer._tick_pool.release(obj)
+        
+        # プール効率が回復すること
+        assert streamer._tick_pool.stats["efficiency"] > 0.8
+
+    @pytest.mark.asyncio
+    async def test_rapid_subscribe_unsubscribe(self):
+        """高速な購読・購読解除の繰り返しをテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        
+        # 直接パラメータを渡す
+        
+        # MT5クライアントのモック
+        mock_mt5_client = MagicMock()
+        mock_mt5_client.is_connected = True
+        mock_mt5_client.symbol_info = MagicMock(return_value=MagicMock(visible=True))
+        mock_mt5_client.symbol_select = MagicMock(return_value=True)
+        
+        streamer = TickDataStreamer(symbol="USDJPY", mt5_client=mock_mt5_client)
+        
+        # 10回の高速な購読・購読解除
+        for i in range(10):
+            await streamer.subscribe_to_ticks()
+            assert streamer.is_subscribed
+            
+            await streamer.unsubscribe()
+            assert not streamer.is_subscribed
+            
+            # 短い待機
+            await asyncio.sleep(0.01)
+        
+        # リソースリークがないこと
+        assert len(streamer._tick_listeners) == 0
+        assert len(streamer._error_listeners) == 0
+        assert len(streamer._backpressure_listeners) == 0

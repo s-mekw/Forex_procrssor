@@ -10,9 +10,10 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
+from typing import Any, Callable
 
 # structlogを使用（可能な場合）
 try:
@@ -34,6 +35,37 @@ except ImportError:
 
 from common.models import Tick
 from mt5_data_acquisition.mt5_client import MT5ConnectionManager
+
+
+# カスタム例外クラス
+class TickFetcherError(Exception):
+    """TickDataStreamer用の基底例外クラス"""
+    pass
+
+
+class MT5ConnectionError(TickFetcherError):
+    """MT5接続関連のエラー"""
+    pass
+
+
+class SubscriptionError(TickFetcherError):
+    """購読関連のエラー"""
+    pass
+
+
+class DataError(TickFetcherError):
+    """データ処理関連のエラー"""
+    pass
+
+
+class BackpressureError(TickFetcherError):
+    """バックプレッシャー関連のエラー"""
+    pass
+
+
+class CircuitBreakerOpenError(TickFetcherError):
+    """サーキットブレーカーが開いている状態でのエラー"""
+    pass
 
 
 class CircuitBreakerState(Enum):
@@ -92,7 +124,7 @@ class CircuitBreaker:
         self._check_state()
 
         if self.state == CircuitBreakerState.OPEN:
-            raise Exception(f"Circuit breaker is open (failures: {self.failure_count})")
+            raise CircuitBreakerOpenError(f"Circuit breaker is open (failures: {self.failure_count})")
 
         try:
             # 関数実行
@@ -125,7 +157,7 @@ class CircuitBreaker:
         self._check_state()
 
         if self.state == CircuitBreakerState.OPEN:
-            raise Exception(f"Circuit breaker is open (failures: {self.failure_count})")
+            raise CircuitBreakerOpenError(f"Circuit breaker is open (failures: {self.failure_count})")
 
         try:
             # 非同期関数実行
@@ -239,7 +271,7 @@ class TickObjectPool:
             # Tickモデルのバリデーションに準拠した値を使用
             tick = Tick(
                 symbol="USDJPY",  # 6文字以上の有効なシンボル
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 bid=100.0,  # 0より大きい値
                 ask=100.01,  # 0より大きい値
                 volume=0.0,
@@ -986,7 +1018,7 @@ class TickDataStreamer:
         )
 
         # 最終更新時刻
-        self.stats["last_update"] = datetime.now(tz=timezone.utc)
+        self.stats["last_update"] = datetime.now(tz=UTC)
 
     # 5.2: スパイク判定ロジック
     def _calculate_z_score(self, value: float, mean: float, std: float) -> float:
@@ -1155,7 +1187,7 @@ class TickDataStreamer:
             Tick: 変換されたTickモデル
         """
         # タイムスタンプの変換（MT5はUNIXタイムスタンプを返す）
-        timestamp = datetime.fromtimestamp(mt5_tick.time, tz=timezone.utc)
+        timestamp = datetime.fromtimestamp(mt5_tick.time, tz=UTC)
 
         # オブジェクトプールからTickを取得（メモリ効率化）
         return self._tick_pool.acquire(
@@ -1557,14 +1589,14 @@ class TickDataStreamer:
             self.error_stats.get(f"{error_type.lower()}s", 0) + 1
         )
         self.error_stats["last_error"] = str(error)
-        self.error_stats["last_error_time"] = datetime.now(tz=timezone.utc)
+        self.error_stats["last_error_time"] = datetime.now(tz=UTC)
 
         # 構造化ログ出力
         log_data = {
             "error_type": error_type,
             "error_message": str(error),
             "symbol": self.config.symbol,
-            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "timestamp": datetime.now(tz=UTC).isoformat(),
             "total_errors": self.error_stats["total_errors"],
             "circuit_breaker_state": self.circuit_breaker.state.value,
             "buffer_usage": f"{self.buffer_usage:.2%}",
