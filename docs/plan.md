@@ -54,11 +54,13 @@
 ### Step 2: TickDataStreamerクラスの基本実装
 - ファイル: src/mt5_data_acquisition/tick_fetcher.py
 - 作業: クラスの基本構造と初期化メソッドを実装
+  - StreamerConfigデータクラスの定義
   - __init__メソッドの実装（設定パラメータ定義）
   - リングバッファ（collections.deque）の初期化
   - 統計量（平均、標準偏差）の初期化
+  - プロパティメソッド（buffer_usage, current_stats, is_connected）
   - ロガー設定
-- 完了: [ ]
+- 完了: [x]
 
 ### Step 3: MT5ティックデータ取得メソッドの実装
 - ファイル: src/mt5_data_acquisition/tick_fetcher.py

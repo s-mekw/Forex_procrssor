@@ -18,14 +18,14 @@ import numpy as np
 # srcディレクトリをパスに追加
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-# まだ実装されていないため、テスト実行時はスキップ
-pytestmark = pytest.mark.skip(reason="TickDataStreamer実装前のテスト定義")
+# Step 2で実装部分のテストのみ実行可能にする
+# pytestmark = pytest.mark.skip(reason="TickDataStreamer実装前のテスト定義")
 
 
 class TestTickDataStreamerInitialization:
     """TickDataStreamerクラスの初期化テスト"""
 
-    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    # @pytest.mark.xfail(reason="TickDataStreamer未実装")
     def test_initialization_with_default_parameters(self):
         """デフォルトパラメータでの初期化をテスト"""
         from mt5_data_acquisition.tick_fetcher import TickDataStreamer
@@ -39,7 +39,7 @@ class TestTickDataStreamerInitialization:
         assert streamer.buffer.maxlen == 10000
         assert streamer.is_streaming is False
 
-    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    # @pytest.mark.xfail(reason="TickDataStreamer未実装")
     def test_initialization_with_custom_parameters(self):
         """カスタムパラメータでの初期化をテスト"""
         from mt5_data_acquisition.tick_fetcher import TickDataStreamer
@@ -57,7 +57,7 @@ class TestTickDataStreamerInitialization:
         assert streamer.backpressure_threshold == 0.8
         assert streamer.buffer.maxlen == 5000
 
-    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    # @pytest.mark.xfail(reason="TickDataStreamer未実装")
     def test_initialization_with_invalid_parameters(self):
         """無効なパラメータでの初期化時のエラーをテスト"""
         from mt5_data_acquisition.tick_fetcher import TickDataStreamer
