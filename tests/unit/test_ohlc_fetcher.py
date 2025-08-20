@@ -109,8 +109,9 @@ def mock_mt5_client():
     client.is_connected = Mock(return_value=True)
     client.terminal_info = Mock()
     client.account_info = Mock()
-    # MT5Configのモック
-    client._config = Mock()
+    # MT5Configのモック（新しいget_config()メソッドを使用）
+    client.get_config = Mock(return_value=Mock())
+    client._config = Mock()  # 後方互換性のため残す
     return client
 
 
@@ -130,6 +131,7 @@ def sample_config():
 # ===========================
 # 統合テスト用ヘルパー関数
 # ===========================
+
 
 def generate_large_ohlc_dataset(
     num_bars: int,
@@ -653,6 +655,37 @@ class TestHelperFunctions:
         assert fetcher._is_gap(timedelta(minutes=91), expected_interval) is True
         assert fetcher._is_gap(timedelta(minutes=120), expected_interval) is True
 
+    def test_create_empty_lazyframe(self, mock_mt5_client):
+        """空のLazyFrame生成メソッドのテスト"""
+        # Arrange
+        fetcher = HistoricalDataFetcher(mt5_client=mock_mt5_client)
+
+        # Act
+        empty_df = fetcher._create_empty_lazyframe()
+
+        # Assert
+        assert isinstance(empty_df, pl.LazyFrame)
+        # DataFrameに変換して検証
+        df = empty_df.collect()
+        assert len(df) == 0
+        assert list(df.columns) == [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "spread",
+        ]
+        # 型チェック
+        assert df.schema["timestamp"] == pl.Datetime("us")
+        assert df.schema["open"] == pl.Float32
+        assert df.schema["high"] == pl.Float32
+        assert df.schema["low"] == pl.Float32
+        assert df.schema["close"] == pl.Float32
+        assert df.schema["volume"] == pl.Float32
+        assert df.schema["spread"] == pl.Int32
+
 
 # ===========================
 # 統合テスト
@@ -704,7 +737,9 @@ class TestIntegrationScenarios:
         with patch("MetaTrader5.copy_rates_range", side_effect=mock_copy_rates_range):
             with patch("MetaTrader5.initialize", return_value=True):
                 with patch("MetaTrader5.shutdown"):
-                    with patch("MetaTrader5.symbol_info", return_value=mock_symbol_info):
+                    with patch(
+                        "MetaTrader5.symbol_info", return_value=mock_symbol_info
+                    ):
                         with patch("MetaTrader5.symbol_select", return_value=True):
                             # Act
                             fetcher = HistoricalDataFetcher(
@@ -712,7 +747,7 @@ class TestIntegrationScenarios:
                                 config={
                                     "batch_size": 10000,
                                     "max_workers": 4,
-                                }
+                                },
                             )
 
                             # 接続
@@ -738,7 +773,9 @@ class TestIntegrationScenarios:
 
                             # データの順序確認
                             timestamps = df_collected["timestamp"].to_list()
-                            assert timestamps == sorted(timestamps), "データが時系列順になっていない"
+                            assert timestamps == sorted(timestamps), (
+                                "データが時系列順になっていない"
+                            )
 
                             # カラムの確認
                             expected_columns = [
@@ -791,17 +828,23 @@ class TestIntegrationScenarios:
             # 成功する場合はデータを返す
             from_ts = int(date_from.timestamp())
             to_ts = int(date_to.timestamp())
-            mask = (successful_data["time"] >= from_ts) & (successful_data["time"] <= to_ts)
+            mask = (successful_data["time"] >= from_ts) & (
+                successful_data["time"] <= to_ts
+            )
             return successful_data[mask]
 
         # シンボル情報のモック
         mock_symbol_info = Mock()
         mock_symbol_info.visible = True
 
-        with patch("MetaTrader5.copy_rates_range", side_effect=mock_copy_rates_with_errors):
+        with patch(
+            "MetaTrader5.copy_rates_range", side_effect=mock_copy_rates_with_errors
+        ):
             with patch("MetaTrader5.initialize", return_value=True):
                 with patch("MetaTrader5.shutdown"):
-                    with patch("MetaTrader5.symbol_info", return_value=mock_symbol_info):
+                    with patch(
+                        "MetaTrader5.symbol_info", return_value=mock_symbol_info
+                    ):
                         with patch("MetaTrader5.symbol_select", return_value=True):
                             # Act
                             fetcher = HistoricalDataFetcher(
@@ -809,7 +852,7 @@ class TestIntegrationScenarios:
                                 config={
                                     "batch_size": 500,
                                     "max_workers": 2,
-                                }
+                                },
                             )
 
                             # 接続
@@ -830,7 +873,9 @@ class TestIntegrationScenarios:
 
                             # 部分的にでもデータが取得できていることを確認
                             assert len(df_collected) > 0
-                            assert len(df_collected) < 1000  # 一部失敗のため完全ではない
+                            assert (
+                                len(df_collected) < 1000
+                            )  # 一部失敗のため完全ではない
 
                             # データの整合性確認
                             assert not df_collected["open"].is_null().any()
@@ -876,7 +921,9 @@ class TestIntegrationScenarios:
         with patch("MetaTrader5.copy_rates_range", side_effect=mock_copy_rates_fast):
             with patch("MetaTrader5.initialize", return_value=True):
                 with patch("MetaTrader5.shutdown"):
-                    with patch("MetaTrader5.symbol_info", return_value=mock_symbol_info):
+                    with patch(
+                        "MetaTrader5.symbol_info", return_value=mock_symbol_info
+                    ):
                         with patch("MetaTrader5.symbol_select", return_value=True):
                             # メモリ使用量の初期値
                             initial_memory = measure_memory_usage()
@@ -888,7 +935,7 @@ class TestIntegrationScenarios:
                                 config={
                                     "batch_size": 10000,
                                     "max_workers": 1,
-                                }
+                                },
                             )
                             fetcher_single.connect()
 
@@ -906,7 +953,9 @@ class TestIntegrationScenarios:
                             time_single = time.time() - start_single
                             memory_single = measure_memory_usage() - initial_memory
 
-                            print(f"シングルスレッド完了: {time_single:.2f}秒, メモリ増加: {memory_single:.2f} MB")
+                            print(
+                                f"シングルスレッド完了: {time_single:.2f}秒, メモリ増加: {memory_single:.2f} MB"
+                            )
 
                             # Act - 並列処理
                             fetcher_parallel = HistoricalDataFetcher(
@@ -914,7 +963,7 @@ class TestIntegrationScenarios:
                                 config={
                                     "batch_size": 10000,
                                     "max_workers": 4,
-                                }
+                                },
                             )
                             fetcher_parallel.connect()
 
@@ -932,25 +981,84 @@ class TestIntegrationScenarios:
                             time_parallel = time.time() - start_parallel
                             memory_parallel = measure_memory_usage() - initial_memory
 
-                            print(f"並列処理完了: {time_parallel:.2f}秒, メモリ増加: {memory_parallel:.2f} MB")
+                            print(
+                                f"並列処理完了: {time_parallel:.2f}秒, メモリ増加: {memory_parallel:.2f} MB"
+                            )
 
                             # Assert - パフォーマンス基準
                             print(f"\n速度向上率: {time_single / time_parallel:.2f}倍")
 
                             # データの一致確認
-                            assert len(df_single) == len(df_parallel), "並列処理とシングルスレッドのデータ数が一致しない"
+                            assert len(df_single) == len(df_parallel), (
+                                "並列処理とシングルスレッドのデータ数が一致しない"
+                            )
 
                             # パフォーマンス基準（モック環境での目標値）
-                            assert time_parallel < time_single * 0.8, "並列処理が期待した速度向上を達成していない"
+                            assert time_parallel < time_single * 0.8, (
+                                "並列処理が期待した速度向上を達成していない"
+                            )
 
                             # メモリ使用量の確認（1GBを超えないこと）
-                            assert memory_parallel < 1000, f"メモリ使用量が過大: {memory_parallel:.2f} MB"
+                            assert memory_parallel < 1000, (
+                                f"メモリ使用量が過大: {memory_parallel:.2f} MB"
+                            )
 
                             # データ品質の確認
                             assert len(df_parallel) > 0
-                            assert df_parallel["timestamp"].is_sorted(), "並列処理後のデータが順序を保持していない"
+                            assert df_parallel["timestamp"].is_sorted(), (
+                                "並列処理後のデータが順序を保持していない"
+                            )
 
                             print("\nパフォーマンステスト合格")
+
+
+class TestImprovements:
+    """改善項目の動作確認テスト"""
+
+    def test_error_message_detail(self, mock_mt5_client):
+        """詳細なエラーメッセージのテスト"""
+        # Arrange
+        fetcher = HistoricalDataFetcher(mt5_client=mock_mt5_client)
+        fetcher._connected = True
+        symbol = "USDJPY"
+        timeframe = "H1"
+        start_date = datetime(2024, 1, 1)
+        end_date = datetime(2024, 1, 2)
+
+        # MT5のcopy_rates_rangeで例外を発生させる
+        with patch("MetaTrader5.symbol_info") as mock_symbol_info:
+            mock_symbol_info.return_value = Mock(visible=True)
+            with patch("MetaTrader5.copy_rates_range") as mock_copy_rates:
+                mock_copy_rates.side_effect = Exception("MT5 connection lost")
+
+                # Act & Assert
+                with pytest.raises(RuntimeError) as exc_info:
+                    fetcher.fetch_ohlc_data(
+                        symbol, timeframe, start_date, end_date, use_batch=False
+                    )
+
+                # エラーメッセージに詳細情報が含まれることを確認
+                error_msg = str(exc_info.value)
+                assert symbol in error_msg
+                assert timeframe in error_msg
+                assert str(start_date) in error_msg
+                assert str(end_date) in error_msg
+                assert "MT5 connection lost" in error_msg
+
+    def test_mt5_get_config(self, mock_mt5_client):
+        """MT5ConnectionManagerのget_config()メソッドのテスト"""
+        # Arrange
+        config_data = {"account": 12345, "server": "test_server"}
+        mock_mt5_client.get_config.return_value = config_data
+        fetcher = HistoricalDataFetcher(mt5_client=mock_mt5_client)
+
+        # Act
+        # connect()メソッド内でget_config()が呼ばれることを確認
+        fetcher.connect()
+
+        # Assert
+        mock_mt5_client.get_config.assert_called_once()
+        mock_mt5_client.connect.assert_called_once_with(config_data)
 
 
 class TestRetryMechanism:

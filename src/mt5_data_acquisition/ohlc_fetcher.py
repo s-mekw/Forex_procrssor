@@ -104,13 +104,14 @@ class HistoricalDataFetcher:
             bool: 接続成功の場合True、失敗の場合False
         """
         try:
-            if self._connected:
+            if self.is_connected():
                 logger.debug("Already connected to MT5")
                 return True
 
             # リトライロジックを適用してMT5接続を試行
             def _connect_internal():
-                if not self.mt5_client.connect(self.mt5_client._config):
+                config = self.mt5_client.get_config()
+                if not self.mt5_client.connect(config):
                     raise ConnectionError("Failed to connect to MT5")
                 return True
 
@@ -165,6 +166,34 @@ class HistoricalDataFetcher:
         """デストラクタ"""
         if hasattr(self, "_connected") and self._connected:
             self.disconnect()
+
+    def _create_empty_lazyframe(self) -> pl.LazyFrame:
+        """空のOHLC LazyFrameを生成
+
+        Returns:
+            pl.LazyFrame: 適切な型定義を持つ空のLazyFrame
+        """
+        return pl.LazyFrame(
+            {
+                "timestamp": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": [],
+                "spread": [],
+            }
+        ).cast(
+            {
+                "timestamp": pl.Datetime("us"),
+                "open": pl.Float32,
+                "high": pl.Float32,
+                "low": pl.Float32,
+                "close": pl.Float32,
+                "volume": pl.Float32,
+                "spread": pl.Int32,
+            }
+        )
 
     def fetch_ohlc_data(
         self,
@@ -285,27 +314,7 @@ class HistoricalDataFetcher:
             if not batch_results:
                 logger.warning(f"No data returned for {symbol} {timeframe}")
                 # 空のLazyFrameを返す
-                return pl.LazyFrame(
-                    {
-                        "timestamp": [],
-                        "open": [],
-                        "high": [],
-                        "low": [],
-                        "close": [],
-                        "volume": [],
-                        "spread": [],
-                    }
-                ).cast(
-                    {
-                        "timestamp": pl.Datetime("us"),
-                        "open": pl.Float32,
-                        "high": pl.Float32,
-                        "low": pl.Float32,
-                        "close": pl.Float32,
-                        "volume": pl.Float32,
-                        "spread": pl.Int32,
-                    }
-                )
+                return self._create_empty_lazyframe()
 
             # バッチ結果を結合（LazyFrameのまま処理）
             combined_df = pl.concat(batch_results, how="vertical")
@@ -334,27 +343,7 @@ class HistoricalDataFetcher:
                 if rates is None or len(rates) == 0:
                     logger.warning(f"No data returned for {symbol} {timeframe}")
                     # 空のLazyFrameを返す
-                    return pl.LazyFrame(
-                        {
-                            "timestamp": [],
-                            "open": [],
-                            "high": [],
-                            "low": [],
-                            "close": [],
-                            "volume": [],
-                            "spread": [],
-                        }
-                    ).cast(
-                        {
-                            "timestamp": pl.Datetime("us"),
-                            "open": pl.Float32,
-                            "high": pl.Float32,
-                            "low": pl.Float32,
-                            "close": pl.Float32,
-                            "volume": pl.Float32,
-                            "spread": pl.Int32,
-                        }
-                    )
+                    return self._create_empty_lazyframe()
 
                 logger.info(f"Retrieved {len(rates)} bars")
 
@@ -388,7 +377,10 @@ class HistoricalDataFetcher:
 
             except Exception as e:
                 logger.error(f"Error fetching OHLC data: {e}")
-                raise RuntimeError(f"Failed to fetch OHLC data: {e}") from e
+                raise RuntimeError(
+                    f"Failed to fetch OHLC data for {symbol} ({timeframe}) "
+                    f"from {start_date} to {end_date}: {e}"
+                ) from e
 
     def _calculate_batch_dates(
         self,
@@ -520,28 +512,7 @@ class HistoricalDataFetcher:
                 # リトライ後も失敗した場合
                 logger.error(f"Error fetching batch {i} after retries: {e}")
                 # バッチ失敗時は空のLazyFrameを追加して続行
-                empty_df = pl.LazyFrame(
-                    {
-                        "timestamp": [],
-                        "open": [],
-                        "high": [],
-                        "low": [],
-                        "close": [],
-                        "volume": [],
-                        "spread": [],
-                    }
-                ).cast(
-                    {
-                        "timestamp": pl.Datetime("us"),
-                        "open": pl.Float32,
-                        "high": pl.Float32,
-                        "low": pl.Float32,
-                        "close": pl.Float32,
-                        "volume": pl.Float32,
-                        "spread": pl.Int32,
-                    }
-                )
-                batch_results.append(empty_df)
+                batch_results.append(self._create_empty_lazyframe())
 
         return batch_results
 
