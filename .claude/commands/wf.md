@@ -9,11 +9,12 @@ description: ワークフローループ実行（計画→実装→レビュー�
 
 ### ワークフローループ
 ```
+0. @general-purpose → 以下の1 ,2 3, 4, 5のループが守られていることを監視する
 1. @agent-planner → 計画作成/更新（前処理: `docs/context.md` と `docs/plan.md` を読み込む）
 2. @agent-executor → 1 ステップのみ実装（前処理: `docs/context.md` と `docs/plan.md` を読み込む）
 3. @agent-reviewer → 実装をレビュー（前処理: `docs/context.md` と `docs/plan.md` を読み込む）
 4. レビュー結果判定：
-   - 必須修正あり → @agent-executorで修正 → 3へ
+   - 修正あり → @agent-executorで修正 → 3へ
    - 修正なし → 次へ
 5. 進捗確認：
    - 未完了 → 1へ戻る
