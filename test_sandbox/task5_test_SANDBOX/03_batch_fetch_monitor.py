@@ -325,13 +325,17 @@ def main():
             memory_mb = df.estimated_size("mb")
             total_memory += memory_mb
             
+            # カラム名を確認
+            time_col = "timestamp" if "timestamp" in df.columns else "time"
+            last_close = df.row(-1, named=True)["close"]
+            
             summary_table.add_row(
                 symbol,
                 f"{len(df):,}",
                 f"{memory_mb:.2f}",
-                str(df["time"].min()),
-                str(df["time"].max()),
-                format_price(df["close"][-1])
+                str(df[time_col].min()),
+                str(df[time_col].max()),
+                format_price(last_close)
             )
         
         console.print(summary_table)

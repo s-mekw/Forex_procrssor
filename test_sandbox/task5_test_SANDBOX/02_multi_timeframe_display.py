@@ -87,7 +87,9 @@ class MultiTimeframeAnalyzer:
             df = self.data[tf]
             
             # トレンド方向
-            trend = "↑" if df["close"][-1] > df["close"][0] else "↓"
+            first_close = df.row(0, named=True)["close"]
+            last_close = df.row(-1, named=True)["close"]
+            trend = "↑" if last_close > first_close else "↓"
             metrics["Trend Direction"].append(trend)
             
             # ボラティリティ（平均範囲）
@@ -95,9 +97,10 @@ class MultiTimeframeAnalyzer:
             metrics["Volatility"].append(f"{avg_range:.5f}")
             
             # ボリューム比率（平均に対する最新）
-            if "tick_volume" in df.columns:
-                avg_volume = df["tick_volume"].mean()
-                last_volume = df["tick_volume"][-1]
+            volume_col = "volume" if "volume" in df.columns else "tick_volume"
+            if volume_col in df.columns:
+                avg_volume = df[volume_col].mean()
+                last_volume = df.row(-1, named=True)[volume_col]
                 volume_ratio = last_volume / avg_volume if avg_volume > 0 else 0
                 metrics["Volume Ratio"].append(f"{volume_ratio:.2f}x")
             else:
@@ -108,10 +111,10 @@ class MultiTimeframeAnalyzer:
             metrics["Price Range"].append(f"{price_range:.5f}")
             
             # 最新キャンドルタイプ
-            last_bar = df[-1]
-            if abs(last_bar["close"] - last_bar["open"]) < (last_bar["high"] - last_bar["low"]) * 0.1:
+            last_row = df.row(-1, named=True)  # 最後の行を辞書として取得
+            if abs(last_row["close"] - last_row["open"]) < (last_row["high"] - last_row["low"]) * 0.1:
                 candle_type = "Doji"
-            elif last_bar["close"] > last_bar["open"]:
+            elif last_row["close"] > last_row["open"]:
                 candle_type = "Bullish"
             else:
                 candle_type = "Bearish"
@@ -260,8 +263,10 @@ def main():
                 # 簡単な統計
                 if len(df) > 0:
                     print_info(f"  Records: {len(df)}")
-                    print_info(f"  Latest Close: {df['close'][-1]:.5f}")
-                    print_info(f"  Average Volume: {df['tick_volume'].mean():.0f}" if 'tick_volume' in df.columns else "  Volume: N/A")
+                    last_close = df.row(-1, named=True)["close"]
+                    print_info(f"  Latest Close: {last_close:.5f}")
+                    volume_col = "volume" if "volume" in df.columns else "tick_volume"
+                    print_info(f"  Average Volume: {df[volume_col].mean():.0f}" if volume_col in df.columns else "  Volume: N/A")
         
         # タイムフレーム間の整合性チェック
         print_section("Data Consistency Check")
@@ -273,24 +278,28 @@ def main():
             
             if m1_df is not None and m5_df is not None and len(m1_df) >= 5 and len(m5_df) >= 1:
                 # 最新のM5バーに対応するM1バーを取得
-                m5_last = m5_df[-1]
-                m5_time = m5_last["time"]
+                m5_last = m5_df.row(-1, named=True)
+                time_col = "timestamp" if "timestamp" in m5_df.columns else "time"
+                m5_time = m5_last[time_col]
                 
                 # M1データから対応する5本を探す
+                m1_time_col = "timestamp" if "timestamp" in m1_df.columns else "time"
                 m1_corresponding = m1_df.filter(
-                    (pl.col("time") >= m5_time - timedelta(minutes=4)) &
-                    (pl.col("time") <= m5_time)
+                    (pl.col(m1_time_col) >= m5_time - timedelta(minutes=4)) &
+                    (pl.col(m1_time_col) <= m5_time)
                 )
                 
                 if len(m1_corresponding) == 5:
                     # 集計して比較
                     m1_high = m1_corresponding["high"].max()
                     m1_low = m1_corresponding["low"].min()
-                    m1_volume = m1_corresponding["tick_volume"].sum() if "tick_volume" in m1_corresponding.columns else 0
+                    m1_volume_col = "volume" if "volume" in m1_corresponding.columns else "tick_volume"
+                    m1_volume = m1_corresponding[m1_volume_col].sum() if m1_volume_col in m1_corresponding.columns else 0
                     
                     m5_high = m5_last["high"]
                     m5_low = m5_last["low"]
-                    m5_volume = m5_last["tick_volume"] if "tick_volume" in m5_df.columns else 0
+                    m5_volume_col = "volume" if "volume" in m5_df.columns else "tick_volume"
+                    m5_volume = m5_last[m5_volume_col] if m5_volume_col in m5_last else 0
                     
                     print_info("M1 vs M5 Consistency:")
                     print_info(f"  M5 High: {m5_high:.5f}, M1 Aggregated High: {m1_high:.5f}")
