@@ -26,6 +26,104 @@ MT5から履歴OHLCデータを効率的に取得するHistoricalDataFetcherク�
 - 作業: クラスの基本構造と初期化メソッドを実装
 - 完了: [x]
 
+## 👁️ Step 2 詳細レビュー結果（2025-01-20）
+
+### レビュー対象範囲
+- **ファイル**: src/mt5_data_acquisition/ohlc_fetcher.py（19-168行目）
+- **レビュー項目**: クラス基本構造、初期化、接続管理、リソース管理
+
+### ✅ 良い点
+
+1. **優れたクラス設計**
+   - クラス定数の適切な定義（DEFAULT_BATCH_SIZE、DEFAULT_MAX_WORKERS等）
+   - 包括的で明確なdocstring（Google形式）
+   - 時間足マッピングが完全かつ正確（M1〜MN全対応）
+
+2. **MT5ConnectionManagerとの適切な連携**
+   - 依存性注入パターンの採用（mt5_clientの外部注入可能）
+   - ConfigManager経由での設定管理（デフォルト時）
+   - mt5_clientの適切なプロパティアクセス（terminal_info、account_info）
+
+3. **堅牢な接続管理**
+   - リトライ機能付きconnectメソッド（_retry_with_backoff使用）
+   - 接続状態の適切な管理（_connected、_terminal_info、_account_info）
+   - is_connectedでの二重チェック（内部状態＋MT5ConnectionManager状態）
+
+4. **優れたリソース管理**
+   - コンテキストマネージャーの正しい実装（__enter__/__exit__）
+   - デストラクタでの確実なクリーンアップ（__del__）
+   - hasattrによる安全なプロパティチェック
+
+5. **柔軟な設定管理**
+   - ConfigManagerを使用した階層的設定（環境変数、TOML、デフォルト値）
+   - 設定の外部注入可能（configパラメータ）
+   - get()メソッドによる安全なデフォルト値取得
+
+6. **適切なエラーハンドリング**
+   - connectメソッドでの例外キャッチと適切なログ出力
+   - リトライ失敗時のFalse返却（例外を再発生させない設計）
+   - 詳細なログ出力でデバッグが容易
+
+### ⚠️ 改善が推奨される点
+
+1. **MT5ConnectionManagerの_configへの直接アクセス**
+   - **優先度: 中**
+   - 113行目: `self.mt5_client.connect(self.mt5_client._config)`
+   - プライベート属性`_config`への直接アクセスは避けるべき
+   - **推奨**: MT5ConnectionManagerにconfig取得用のpublicメソッドを追加
+
+2. **重複する接続チェック**
+   - **優先度: 低**
+   - connectメソッド内で`if self._connected`のチェックがあるが、is_connectedメソッドと重複
+   - **推奨**: `if self.is_connected()`を使用して一貫性を保つ
+
+3. **ConfigManagerのシングルトン依存**
+   - **優先度: 低**
+   - ConfigManagerがシングルトンパターンを使用しているため、テスト時の分離が困難
+   - **推奨**: 将来的にはファクトリパターンやDIコンテナの検討
+
+### 🔍 技術的確認事項
+
+1. **ConfigManagerのロード状態**
+   - get_config()呼び出し前にload_config()が必要だが、どこで実行されているか
+   - エントリーポイントでの初期化を前提としている可能性
+
+2. **MT5ConnectionManagerの設定受け渡し**
+   - connectメソッドで設定を再度渡す必要性
+   - 初期化時の設定と接続時の設定の違い
+
+3. **リトライパラメータの妥当性**
+   - max_retries=3（デフォルト）は適切
+   - initial_delay=1.0秒、backoff_factor=2.0も妥当
+
+### 📊 コード品質メトリクス
+
+- **Ruffチェック**: ✅ エラー0件
+- **型ヒント**: ✅ 完備（Union型、Optional型の適切な使用）
+- **docstring**: ✅ 包括的（Google形式準拠）
+- **命名規約**: ✅ PEP 8準拠
+- **複雑度**: ✅ 適切（各メソッドは単一責任）
+
+### 🎯 判定
+
+#### ✅ **合格** - Step 3へ進むことを推奨
+
+実装は全体的に高品質で、要件を満たしています。指摘した改善点は軽微で、システムの動作に影響しません。
+
+### 💡 推奨アクション（オプション）
+
+1. **短期的**（現フェーズ内）
+   - MT5ConnectionManagerの_configアクセスをpublicメソッド経由に変更
+   - 接続チェックの一貫性改善
+
+2. **中期的**（次フェーズ）
+   - ConfigManagerの初期化フローの文書化
+   - 設定管理のテスト容易性向上
+
+3. **長期的**（将来）
+   - DIコンテナの導入検討
+   - 設定管理の階層化とバリデーション強化
+
 ### Step 3: MT5からのOHLCデータ取得メソッド
 - ファイル: src/mt5_data_acquisition/ohlc_fetcher.py
 - 作業: fetch_ohlc_dataメソッドの基本実装（単一リクエスト）
