@@ -160,6 +160,7 @@ class HistoricalDataFetcher:
         end_date: datetime,
         use_batch: bool = True,
         use_parallel: bool = False,
+        detect_gaps: bool = True,
     ) -> pl.LazyFrame:
         """MT5から指定期間のOHLCデータを取得
 
@@ -170,6 +171,7 @@ class HistoricalDataFetcher:
             end_date: 終了日時（UTC）
             use_batch: バッチ処理を使用するか（デフォルト: True）
             use_parallel: 並列処理を使用するか（デフォルト: False）
+            detect_gaps: 欠損期間を検出するか（デフォルト: True）
 
         Returns:
             pl.LazyFrame: OHLCデータを含むPolars LazyFrame
@@ -243,9 +245,19 @@ class HistoricalDataFetcher:
             )
 
             # 並列処理でデータ取得
-            return self._fetch_parallel(
+            result_df = self._fetch_parallel(
                 symbol, mt5_timeframe, start_date, end_date, timeframe
             )
+
+            # 欠損検出を実行（有効な場合）
+            if detect_gaps:
+                missing_periods = self.detect_missing_periods(result_df, timeframe)
+                if missing_periods:
+                    logger.warning(
+                        f"Found {len(missing_periods)} missing periods in the data"
+                    )
+
+            return result_df
 
         # バッチ処理の判定（10,000バー以上の場合、または明示的に指定された場合）
         elif use_batch and (estimated_bars > self.batch_size or self.batch_size > 0):
@@ -285,7 +297,17 @@ class HistoricalDataFetcher:
             combined_df = pl.concat(batch_results, how="vertical")
 
             # タイムスタンプでソートして重複を除外
-            return combined_df.unique("timestamp").sort("timestamp")
+            result_df = combined_df.unique("timestamp").sort("timestamp")
+
+            # 欠損検出を実行（有効な場合）
+            if detect_gaps:
+                missing_periods = self.detect_missing_periods(result_df, timeframe)
+                if missing_periods:
+                    logger.warning(
+                        f"Found {len(missing_periods)} missing periods in the data"
+                    )
+
+            return result_df
 
         else:
             # 通常の単一リクエスト処理
@@ -337,8 +359,18 @@ class HistoricalDataFetcher:
                     }
                 )
 
-                # LazyFrameに変換して返す
-                return df.lazy()
+                # LazyFrameに変換
+                result_df = df.lazy()
+
+                # 欠損検出を実行（有効な場合）
+                if detect_gaps:
+                    missing_periods = self.detect_missing_periods(result_df, timeframe)
+                    if missing_periods:
+                        logger.warning(
+                            f"Found {len(missing_periods)} missing periods in the data"
+                        )
+
+                return result_df
 
             except Exception as e:
                 logger.error(f"Error fetching OHLC data: {e}")
@@ -696,3 +728,155 @@ class HistoricalDataFetcher:
         # 全結果を結合し、タイムスタンプ順にソート、重複を除去
         combined = pl.concat(results, how="vertical_relaxed")
         return combined.unique("timestamp").sort("timestamp")
+
+    def detect_missing_periods(
+        self,
+        df: pl.LazyFrame,
+        timeframe: str,
+    ) -> list[dict]:
+        """取得したOHLCデータから欠損期間を検出
+
+        Args:
+            df: OHLCデータを含むLazyFrame
+            timeframe: 時間足（"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"）
+
+        Returns:
+            List[dict]: 欠損期間のリスト
+                - start: 欠損開始時刻（datetime）
+                - end: 欠損終了時刻（datetime）
+                - expected_bars: 期待されるバー数（int）
+                - actual_gap: 実際のギャップ時間（timedelta）
+        """
+        # LazyFrameをDataFrameに変換（タイムスタンプのみ）
+        df_collected = df.select("timestamp").collect()
+
+        # データが空の場合は空リストを返す
+        if df_collected.height == 0:
+            logger.info("No data to check for missing periods")
+            return []
+
+        # タイムスタンプをソート
+        df_sorted = df_collected.sort("timestamp")
+        timestamps = df_sorted["timestamp"].to_list()
+
+        # 時間足に応じた期待間隔を取得
+        expected_interval = self._get_expected_interval(timeframe)
+
+        # 欠損期間を検出
+        missing_periods = []
+        for i in range(1, len(timestamps)):
+            prev_time = timestamps[i - 1]
+            curr_time = timestamps[i]
+            actual_gap = curr_time - prev_time
+
+            # ギャップが期待間隔の1.5倍を超える場合を欠損と判定
+            if self._is_gap(actual_gap, expected_interval):
+                # 市場休場時間でない場合のみ欠損として記録
+                if not self._is_market_closed(prev_time, curr_time):
+                    expected_bars = int(
+                        actual_gap.total_seconds() / expected_interval.total_seconds()
+                    )
+                    missing_periods.append(
+                        {
+                            "start": prev_time,
+                            "end": curr_time,
+                            "expected_bars": expected_bars,
+                            "actual_gap": actual_gap,
+                        }
+                    )
+
+                    logger.warning(
+                        f"Missing data detected: {prev_time} to {curr_time} "
+                        f"({expected_bars} bars, gap: {actual_gap})"
+                    )
+
+        # 欠損率を計算して情報として出力
+        if missing_periods:
+            total_bars = len(timestamps)
+            total_missing = sum(p["expected_bars"] for p in missing_periods)
+            missing_rate = total_missing / (total_bars + total_missing) * 100
+            logger.info(
+                f"Data completeness: {missing_rate:.2f}% missing "
+                f"({total_missing} bars out of {total_bars + total_missing})"
+            )
+        else:
+            logger.info("No missing periods detected")
+
+        return missing_periods
+
+    def _get_expected_interval(self, timeframe: str) -> timedelta:
+        """時間足に応じた期待される間隔を返す
+
+        Args:
+            timeframe: 時間足（"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"）
+
+        Returns:
+            timedelta: 期待される間隔
+        """
+        interval_minutes = {
+            "M1": 1,
+            "M5": 5,
+            "M15": 15,
+            "M30": 30,
+            "H1": 60,
+            "H4": 240,
+            "D1": 1440,
+            "W1": 10080,
+            "MN": 43200,  # 約30日
+        }
+
+        if timeframe not in interval_minutes:
+            raise ValueError(f"Invalid timeframe: {timeframe}")
+
+        return timedelta(minutes=interval_minutes[timeframe])
+
+    def _is_market_closed(self, start_time: datetime, end_time: datetime) -> bool:
+        """市場休場時間かどうかを判定
+
+        Args:
+            start_time: 開始時刻（UTC）
+            end_time: 終了時刻（UTC）
+
+        Returns:
+            bool: 市場休場時間の場合True
+        """
+        # 週末の判定（土曜日00:00 UTC から月曜日00:00 UTC）
+        # 実際の市場は金曜日22:00 UTCから月曜日00:00 UTCまで休場だが、
+        # ブローカーによって異なるため、土曜日全日と日曜日全日を休場とする
+
+        # 開始時刻と終了時刻の間に週末が含まれているかチェック
+        current = start_time
+        while current <= end_time:
+            # 土曜日（5）または日曜日（6）の場合
+            if current.weekday() in [5, 6]:
+                return True
+            # 1日ずつチェック（長期間の場合は効率化の余地あり）
+            current += timedelta(days=1)
+            # 終了時刻を超えたら終了
+            if current > end_time:
+                break
+
+        # 主要な祝日のチェック（オプション）
+        # クリスマス（12/25）と元日（1/1）
+        for date in [start_time, end_time]:
+            if (date.month == 12 and date.day == 25) or (
+                date.month == 1 and date.day == 1
+            ):
+                return True
+
+        return False
+
+    def _is_gap(self, actual_gap: timedelta, expected_interval: timedelta) -> bool:
+        """欠損判定ロジック
+
+        Args:
+            actual_gap: 実際の時間差
+            expected_interval: 期待される間隔
+
+        Returns:
+            bool: 欠損と判定される場合True
+        """
+        # 期待間隔の1.5倍を超える場合を欠損と判定
+        # （市場の一時的な停止や軽微な遅延を許容）
+        threshold = expected_interval * 1.5
+        return actual_gap > threshold
