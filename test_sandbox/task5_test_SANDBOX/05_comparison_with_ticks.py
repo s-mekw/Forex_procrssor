@@ -231,7 +231,7 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
         streamer = TickDataStreamer(
             symbol=symbol,
             mt5_client=mt5_client,
-            buffer_size=1000
+            buffer_size=10000  # バッファサイズを増やして、オーバーフローを防ぐ
             # spike_threshold=3.0 (デフォルト値を使用)
         )
         
@@ -254,7 +254,7 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
             with Live(layout, refresh_per_second=2, console=console) as live:
                 last_tick_count = 0
                 while time.time() - start_time < duration_seconds:
-                    # 最新のティックを取得
+                    # 最新のティックを取得（より頻繁に取得してバッファを消費）
                     recent_ticks = await streamer.get_recent_ticks()
                     
                     # 新しいティックのみ処理
@@ -265,24 +265,27 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
                             collected_ticks.append(tick)
                             converter.add_tick(tick)
                         last_tick_count = len(recent_ticks)
-                        
-                        # ステータス更新
-                        elapsed = time.time() - start_time
-                        remaining = duration_seconds - elapsed
-                        
-                        status_text = f"""[bold cyan]Tick Collection Status[/bold cyan]
-                        
+                    
+                    # バッファを定期的に消費するため、短い待機時間を設定
+                    await asyncio.sleep(0.01)  # 10msごとにチェック
+                    
+                    # ステータス更新
+                    elapsed = time.time() - start_time
+                    remaining = duration_seconds - elapsed
+                    
+                    status_text = f"""[bold cyan]Tick Collection Status[/bold cyan]
+                    
 Elapsed: {elapsed:.1f}s / {duration_seconds}s
 Remaining: {remaining:.1f}s
 Ticks Collected: {tick_count}
 Bars Generated: {len(converter.ohlc_bars)}"""
-                        
-                        layout["status"].update(Panel(status_text, border_style="cyan"))
-                        
-                        # 現在のバー
-                        current_bar = converter.get_current_bar()
-                        if current_bar:
-                            current_text = f"""[bold]Current Bar (Incomplete)[/bold]
+                    
+                    layout["status"].update(Panel(status_text, border_style="cyan"))
+                    
+                    # 現在のバー
+                    current_bar = converter.get_current_bar()
+                    if current_bar:
+                        current_text = f"""[bold]Current Bar (Incomplete)[/bold]
 
 Time: {format_timestamp(current_bar['time'])}
 Open: {format_price(current_bar['open'])}
@@ -290,32 +293,30 @@ High: {format_price(current_bar['high'])}
 Low: {format_price(current_bar['low'])}
 Close: {format_price(current_bar['close'])}
 Ticks: {current_bar['tick_volume']}"""
-                            layout["current"].update(Panel(current_text, border_style="yellow"))
-                        
-                        # 完成したバー
-                        completed_bars = converter.get_completed_bars()
-                        if completed_bars:
-                            bars_table = Table(show_header=True, header_style="bold magenta")
-                            bars_table.add_column("Time")
-                            bars_table.add_column("Open", justify="right")
-                            bars_table.add_column("High", justify="right")
-                            bars_table.add_column("Low", justify="right")
-                            bars_table.add_column("Close", justify="right")
-                            bars_table.add_column("Ticks", justify="right")
-                            
-                            for bar in completed_bars[-5:]:  # 最新5本
-                                bars_table.add_row(
-                                    format_timestamp(bar["time"]),
-                                    format_price(bar["open"]),
-                                    format_price(bar["high"]),
-                                    format_price(bar["low"]),
-                                    format_price(bar["close"]),
-                                    str(bar["tick_volume"])
-                                )
-                            
-                            layout["bars"].update(Panel(bars_table, title="Generated OHLC Bars", border_style="green"))
+                        layout["current"].update(Panel(current_text, border_style="yellow"))
                     
-                    await asyncio.sleep(0.01)  # 短い待機
+                    # 完成したバー
+                    completed_bars = converter.get_completed_bars()
+                    if completed_bars:
+                        bars_table = Table(show_header=True, header_style="bold magenta")
+                        bars_table.add_column("Time")
+                        bars_table.add_column("Open", justify="right")
+                        bars_table.add_column("High", justify="right")
+                        bars_table.add_column("Low", justify="right")
+                        bars_table.add_column("Close", justify="right")
+                        bars_table.add_column("Ticks", justify="right")
+                        
+                        for bar in completed_bars[-5:]:  # 最新5本
+                            bars_table.add_row(
+                                format_timestamp(bar["time"]),
+                                format_price(bar["open"]),
+                                format_price(bar["high"]),
+                                format_price(bar["low"]),
+                                format_price(bar["close"]),
+                                str(bar["tick_volume"])
+                            )
+                        
+                        layout["bars"].update(Panel(bars_table, title="Generated OHLC Bars", border_style="green"))
             
             # 最後のバーも追加
             if converter.current_bar:
@@ -388,7 +389,7 @@ def main():
         )
         
         mt5_ohlc = None
-        if result:
+        if result is not None:  # LazyFrameの存在確認のみ
             mt5_ohlc = result.collect()
             print_success(f"Fetched {len(mt5_ohlc)} MT5 OHLC bars")
         else:
