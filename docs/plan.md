@@ -40,6 +40,7 @@
 **タスク6: ティック→バー変換エンジンの実装**
 - 要件1.4の実装（リアルタイムティック→1分足OHLC変換）
 - テスト駆動開発（TDD）アプローチを採用
+- 現在: Step 2/7 実装中
 
 #### 実装対象ファイル
 1. `tests/unit/test_tick_to_bar.py` - ユニットテスト
@@ -58,3 +59,66 @@
 2. リアルタイム更新機能（Step 4）  
 3. 品質・信頼性機能（Step 5-6）
 4. パフォーマンス最適化（Step 7）
+
+#### Step 2 実装詳細（現在作業中）
+
+##### データモデル設計
+```python
+# Tickクラス（Pydantic BaseModel）
+- symbol: str  # 通貨ペア（例: "EURUSD"）
+- time: datetime  # ティックのタイムスタンプ
+- bid: Decimal  # Bid価格
+- ask: Decimal  # Ask価格  
+- volume: Decimal  # 取引量
+
+# Barクラス（Pydantic BaseModel）
+- symbol: str  # 通貨ペア
+- time: datetime  # バー開始時刻（分の00秒）
+- end_time: datetime  # バー終了時刻（分の59.999999秒）
+- open: Decimal  # 始値（最初のティックのbid）
+- high: Decimal  # 高値（期間中の最高bid）
+- low: Decimal  # 安値（期間中の最低bid）
+- close: Decimal  # 終値（最後のティックのbid）
+- volume: Decimal  # 期間中の総取引量
+- is_complete: bool  # バー完成フラグ
+- tick_count: int  # ティック数（オプション）
+- avg_spread: Decimal | None  # 平均スプレッド（オプション）
+```
+
+##### TickToBarConverterクラス設計
+```python
+class TickToBarConverter:
+    def __init__(self, symbol: str, timeframe: int = 60):
+        """初期化
+        Args:
+            symbol: 通貨ペア
+            timeframe: バーの時間枠（秒単位、デフォルト60秒=1分）
+        """
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.current_bar: Bar | None = None  # 現在作成中のバー
+        self.completed_bars: list[Bar] = []  # 完成したバーのリスト
+        self.on_bar_complete: Callable[[Bar], None] | None = None  # コールバック
+        self._current_ticks: list[Tick] = []  # 現在のバー用のティック
+```
+
+##### 実装順序
+1. **フェーズ1**: データモデル（Tick, Bar）をPydanticで定義
+2. **フェーズ2**: TickToBarConverterクラスの基本構造
+   - __init__メソッド
+   - プロパティとフィールドの定義
+3. **フェーズ3**: メソッドスケルトン（NotImplementedError）
+   - add_tick() - メインのティック処理
+   - get_current_bar() - 現在のバー取得
+   - 内部ヘルパーメソッド群
+
+##### テスト活性化計画
+- Step 2完了時点: `test_converter_initialization`のみ有効化
+- Step 3で: `test_single_minute_bar_generation`等を有効化
+- 段階的にテストを有効化していく
+
+##### 技術的注意点
+- Decimalを使用して浮動小数点の精度問題を回避
+- datetimeのタイムゾーン処理は後のステップで考慮
+- Polarsは集計処理が必要になるStep 7で導入予定
+- 現段階では純粋なPythonで実装

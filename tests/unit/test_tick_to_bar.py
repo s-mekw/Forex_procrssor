@@ -10,8 +10,8 @@ from decimal import Decimal
 
 import pytest
 
-# まだ実装されていないモジュールをインポート（TDDアプローチ）
-# from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+# 実装されたモジュールをインポート
+from src.mt5_data_acquisition.tick_to_bar import Bar, Tick, TickToBarConverter
 
 
 class TestTickToBarConverter:
@@ -20,9 +20,7 @@ class TestTickToBarConverter:
     @pytest.fixture
     def converter(self):
         """TickToBarConverterのインスタンスを作成するフィクスチャ"""
-        # 実装後にコメントを外す
-        # return TickToBarConverter(symbol="EURUSD", timeframe=60)
-        pass
+        return TickToBarConverter(symbol="EURUSD", timeframe=60)
 
     @pytest.fixture
     def sample_ticks(self) -> list[dict]:
@@ -68,13 +66,11 @@ class TestTickToBarConverter:
 
     def test_converter_initialization(self):
         """TickToBarConverterの初期化テスト"""
-        # 実装後にコメントを外す
-        # converter = TickToBarConverter(symbol="EURUSD", timeframe=60)
-        # assert converter.symbol == "EURUSD"
-        # assert converter.timeframe == 60
-        # assert converter.current_bar is None
-        # assert len(converter.completed_bars) == 0
-        pytest.skip("TickToBarConverter not implemented yet")
+        converter = TickToBarConverter(symbol="EURUSD", timeframe=60)
+        assert converter.symbol == "EURUSD"
+        assert converter.timeframe == 60
+        assert converter.current_bar is None
+        assert len(converter.completed_bars) == 0
 
     def test_single_minute_bar_generation(self, converter, sample_ticks):
         """1分足バー生成の基本テスト（複数ティックから1分足を生成）"""
