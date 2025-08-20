@@ -7,6 +7,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# .envファイルを明示的に読み込む
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 import polars as pl
 import asyncio
 from rich.console import Console
@@ -42,14 +46,14 @@ class TickToOHLCConverter:
     def add_tick(self, tick: Tick):
         """ティックを追加してOHLCバーを更新"""
         self.ticks.append({
-            "time": tick.time,
+            "time": tick.timestamp,
             "bid": tick.bid,
             "ask": tick.ask,
             "volume": tick.volume
         })
         
         # 現在のバーの時間枠を計算
-        bar_time = self._get_bar_time(tick.time)
+        bar_time = self._get_bar_time(tick.timestamp)
         
         # 新しいバーを開始するか判定
         if self.bar_start_time is None or bar_time != self.bar_start_time:
@@ -218,17 +222,24 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
         }
         mt5_client = MT5ConnectionManager(mt5_config)
         
-        # TickDataStreamerを作成
+        # MT5に接続
+        if not mt5_client.connect(mt5_config):
+            print_error("Failed to connect to MT5")
+            return [], []
+        
+        # TickDataStreamerを作成（スパイクフィルターを無効化）
         streamer = TickDataStreamer(
             symbol=symbol,
             mt5_client=mt5_client,
-            buffer_size=1000
+            buffer_size=1000,
+            spike_threshold=1000.0  # 高い閾値でスパイクフィルターを事実上無効化
         )
         
         print_info(f"Collecting ticks for {symbol} for {duration_seconds} seconds...")
         
-        # ストリーミング開始
-        async with streamer:
+        # ストリーミング開始（非同期コンテキストマネージャーを使わない）
+        await streamer.start_streaming()
+        try:
             start_time = time.time()
             tick_count = 0
             
@@ -241,13 +252,19 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
             )
             
             with Live(layout, refresh_per_second=2, console=console) as live:
+                last_tick_count = 0
                 while time.time() - start_time < duration_seconds:
-                    tick = await streamer.get_tick()
+                    # 最新のティックを取得
+                    recent_ticks = await streamer.get_recent_ticks()
                     
-                    if tick:
-                        tick_count += 1
-                        collected_ticks.append(tick)
-                        converter.add_tick(tick)
+                    # 新しいティックのみ処理
+                    if recent_ticks and len(recent_ticks) > last_tick_count:
+                        new_ticks = recent_ticks[last_tick_count:]
+                        for tick in new_ticks:
+                            tick_count += 1
+                            collected_ticks.append(tick)
+                            converter.add_tick(tick)
+                        last_tick_count = len(recent_ticks)
                         
                         # ステータス更新
                         elapsed = time.time() - start_time
@@ -299,14 +316,17 @@ Ticks: {current_bar['tick_volume']}"""
                             layout["bars"].update(Panel(bars_table, title="Generated OHLC Bars", border_style="green"))
                     
                     await asyncio.sleep(0.01)  # 短い待機
-        
-        # 最後のバーも追加
-        if converter.current_bar:
-            converter.ohlc_bars.append(converter.current_bar)
-        
-        print_success(f"Collected {tick_count} ticks and generated {len(converter.ohlc_bars)} OHLC bars")
-        
-        return converter.ohlc_bars, collected_ticks
+            
+            # 最後のバーも追加
+            if converter.current_bar:
+                converter.ohlc_bars.append(converter.current_bar)
+            
+            print_success(f"Collected {tick_count} ticks and generated {len(converter.ohlc_bars)} OHLC bars")
+            
+            return converter.ohlc_bars, collected_ticks
+        finally:
+            await streamer.stop_streaming()
+            mt5_client.disconnect()
         
     except Exception as e:
         print_error(f"Error collecting ticks: {str(e)}")
@@ -318,7 +338,7 @@ def main():
     
     # 設定
     symbol = "EURJPY"
-    collection_duration = 180  # 3分間ティックを収集
+    collection_duration = 30  # 30秒間（テスト用に短縮）ティックを収集
     
     print_info(f"Symbol: {symbol}")
     print_info(f"Collection Duration: {collection_duration} seconds")

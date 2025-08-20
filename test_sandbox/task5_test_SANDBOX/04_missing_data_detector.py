@@ -40,6 +40,9 @@ class MissingDataDetector:
         if df.is_empty() or len(df) < 2:
             return {"error": "Insufficient data for analysis"}
         
+        # カラム名を確認
+        time_col = "timestamp" if "timestamp" in df.columns else "time"
+        
         # タイムフレームに応じた期待される間隔（秒）
         expected_intervals = {
             "M1": 60,
@@ -56,13 +59,13 @@ class MissingDataDetector:
         expected_interval = expected_intervals.get(self.timeframe, 60)
         
         # 時間差を計算
-        time_diffs = df["time"].diff()
+        time_diffs = df[time_col].diff()
         time_diffs_seconds = time_diffs.dt.total_seconds()
         
         # 統計を計算
         stats = {
             "total_records": len(df),
-            "time_range": f"{df['time'].min()} to {df['time'].max()}",
+            "time_range": f"{df[time_col].min()} to {df[time_col].max()}",
             "expected_interval": expected_interval,
             "actual_intervals": {
                 "min": time_diffs_seconds.min(),
@@ -77,17 +80,17 @@ class MissingDataDetector:
         gaps = []
         
         for i in range(1, len(df)):
-            diff_seconds = (df["time"][i] - df["time"][i-1]).total_seconds()
+            diff_seconds = (df[time_col][i] - df[time_col][i-1]).total_seconds()
             
             if diff_seconds > gap_threshold:
                 gap_info = {
-                    "start": df["time"][i-1],
-                    "end": df["time"][i],
+                    "start": df[time_col][i-1],
+                    "end": df[time_col][i],
                     "duration_seconds": diff_seconds,
                     "duration_str": self._format_duration(diff_seconds),
                     "expected_bars": int(diff_seconds / expected_interval),
-                    "is_weekend": self._is_weekend_gap(df["time"][i-1], df["time"][i]),
-                    "is_market_closed": self._is_market_closed_time(df["time"][i-1], df["time"][i])
+                    "is_weekend": self._is_weekend_gap(df[time_col][i-1], df[time_col][i]),
+                    "is_market_closed": self._is_market_closed_time(df[time_col][i-1], df[time_col][i])
                 }
                 gaps.append(gap_info)
         
@@ -325,7 +328,9 @@ def main():
             # 欠損データ検出機能を使用
             print_section("Using Built-in Missing Period Detection")
             
-            missing_periods = fetcher.detect_missing_periods(df, timeframe)
+            # DataFrameをLazyFrameに変換
+            df_lazy = df.lazy()
+            missing_periods = fetcher.detect_missing_periods(df_lazy, timeframe)
             
             if missing_periods:
                 print_warning(f"Found {len(missing_periods)} missing periods using built-in detection")
@@ -352,13 +357,27 @@ def main():
             quality_score -= stats["data_gaps"] * 10  # データギャップごとに-10点
             quality_score = max(0, quality_score)
             
+            # 品質評価を取得
+            def get_quality_rating(score: int) -> str:
+                """品質評価を取得"""
+                if score >= 90:
+                    return "[green]★★★★★ Excellent[/green]"
+                elif score >= 70:
+                    return "[green]★★★★☆ Good[/green]"
+                elif score >= 50:
+                    return "[yellow]★★★☆☆ Fair[/yellow]"
+                elif score >= 30:
+                    return "[yellow]★★☆☆☆ Poor[/yellow]"
+                else:
+                    return "[red]★☆☆☆☆ Very Poor[/red]"
+            
             quality_panel = f"""
 [bold]Data Quality Assessment[/bold]
 
 Coverage Ratio: {coverage_ratio:.1f}%
 Quality Score: {quality_score}/100
 
-Rating: {self._get_quality_rating(quality_score)}
+Rating: {get_quality_rating(quality_score)}
 
 Recommendations:
 """
