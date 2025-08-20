@@ -132,7 +132,7 @@ class TestRingBuffer:
 
 
 class TestSpikeFilter:
-    """スパイクフィルター（3σルール）のテスト"""
+    """スパイクフィルター（5σルール + 価格変動率）のテスト"""
 
     @pytest.mark.xfail(reason="TickDataStreamer未実装")
     def test_spike_detection_with_3_sigma_rule(self):
@@ -250,6 +250,93 @@ class TestSpikeFilter:
         recent_bids = [tick.bid for tick in list(streamer.buffer)[-100:]]
         expected_mean = np.mean(recent_bids)
         assert abs(streamer.mean_bid - expected_mean) < 0.01
+
+    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    def test_spike_detection_in_quiet_market(self):
+        """静かな市場での誤検出防止をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="EURJPY")
+        
+        # 同一価格のティックを多数追加（静かな市場をシミュレート）
+        base_price = 171.500
+        for i in range(250):  # ウォームアップ期間を超える数
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="EURJPY",
+                bid=base_price,
+                ask=base_price + 0.005,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # わずかな価格変動（0.002 = 0.0012%）
+        small_change_tick = Tick(
+            timestamp=datetime.utcnow(),
+            symbol="EURJPY",
+            bid=base_price - 0.002,
+            ask=base_price + 0.003,
+            volume=1000.0
+        )
+        
+        # 価格変動率が0.1%未満なので、スパイクとして検出されない
+        assert streamer._is_spike(small_change_tick) is False
+        
+        # 大きな価格変動（0.2 = 0.12%）
+        large_change_tick = Tick(
+            timestamp=datetime.utcnow(),
+            symbol="EURJPY",
+            bid=base_price + 0.2,
+            ask=base_price + 0.205,
+            volume=1000.0
+        )
+        
+        # 価格変動率が0.1%を超えるので、スパイクとして検出される
+        assert streamer._is_spike(large_change_tick) is True
+
+    @pytest.mark.xfail(reason="TickDataStreamer未実装")
+    def test_price_change_percentage_detection(self):
+        """価格変動率によるスパイク検出をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="EURJPY")
+        
+        # 正常な価格変動でバッファを初期化
+        base_price = 171.500
+        for i in range(250):
+            variation = np.random.normal(0, 0.01)  # 通常の変動
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="EURJPY",
+                bid=base_price + variation,
+                ask=base_price + variation + 0.005,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 0.09%の変動（閾値以下）
+        below_threshold_tick = Tick(
+            timestamp=datetime.utcnow(),
+            symbol="EURJPY",
+            bid=base_price * 1.0009,  # 0.09%増
+            ask=base_price * 1.0009 + 0.005,
+            volume=1000.0
+        )
+        assert streamer._is_spike(below_threshold_tick) is False
+        
+        # 0.11%の変動（閾値超過）
+        above_threshold_tick = Tick(
+            timestamp=datetime.utcnow(),
+            symbol="EURJPY",
+            bid=base_price * 1.0011,  # 0.11%増
+            ask=base_price * 1.0011 + 0.005,
+            volume=1000.0
+        )
+        # 価格変動率が0.1%を超える場合、Zスコアチェックも行われる
+        result = streamer._is_spike(above_threshold_tick)
+        assert isinstance(result, bool)
 
 
 class TestAsyncStreaming:

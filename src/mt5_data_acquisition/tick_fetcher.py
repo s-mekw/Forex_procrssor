@@ -369,7 +369,7 @@ class StreamerConfig:
 
     symbol: str
     buffer_size: int = 10000
-    spike_threshold: float = 3.0
+    spike_threshold: float = 5.0  # デフォルト値を緩和（静かな市場での誤検出防止）
     backpressure_threshold: float = 0.8
     stats_window_size: int = 1000
 
@@ -392,7 +392,7 @@ class TickDataStreamer:
         self,
         symbol: str,
         buffer_size: int = 10000,
-        spike_threshold: float = 3.0,
+        spike_threshold: float = 5.0,  # デフォルト値を緩和（静かな市場での誤検出防止）
         backpressure_threshold: float = 0.8,
         stats_window_size: int = 1000,
         mt5_client: MT5ConnectionManager | None = None,
@@ -1053,10 +1053,21 @@ class TickDataStreamer:
             return False
 
         # 統計量が計算されていない、または標準偏差が小さすぎる場合はスパイク判定しない
-        MIN_STD = 0.00001  # 最小標準偏差（価格単位）
+        MIN_STD = 0.001  # 最小標準偏差（価格単位）- EUR/JPYの通常スプレッドを考慮
         if (self.stats["std_bid"] < MIN_STD or self.stats["std_ask"] < MIN_STD or
             self.stats["std_bid"] == 0 or self.stats["std_ask"] == 0):
             return False
+
+        # 価格変動率チェック（0.1%を超える変動をまずチェック）
+        MAX_PRICE_CHANGE_PERCENT = 0.1  # 0.1%以上の変動を異常値候補とする
+        
+        if self.stats["mean_bid"] > 0:
+            bid_change_percent = abs((tick.bid - self.stats["mean_bid"]) / self.stats["mean_bid"]) * 100
+            ask_change_percent = abs((tick.ask - self.stats["mean_ask"]) / self.stats["mean_ask"]) * 100
+            
+            # 価格変動率が閾値以下の場合は正常値として扱う
+            if bid_change_percent < MAX_PRICE_CHANGE_PERCENT and ask_change_percent < MAX_PRICE_CHANGE_PERCENT:
+                return False
 
         # Bid/Ask個別にZスコアを計算
         z_score_bid = self._calculate_z_score(
