@@ -6,8 +6,11 @@ MT5から履歴OHLCデータを効率的に取得するためのHistoricalDataFe
 """
 
 import logging
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import MetaTrader5 as mt5
 import polars as pl
@@ -95,7 +98,7 @@ class HistoricalDataFetcher:
         )
 
     def connect(self) -> bool:
-        """MT5に接続
+        """MT5に接続（リトライ機能付き）
 
         Returns:
             bool: 接続成功の場合True、失敗の場合False
@@ -105,20 +108,31 @@ class HistoricalDataFetcher:
                 logger.debug("Already connected to MT5")
                 return True
 
-            # MT5クライアント経由で接続
-            if not self.mt5_client.connect(self.mt5_client._config):
-                logger.error("Failed to connect to MT5")
-                return False
+            # リトライロジックを適用してMT5接続を試行
+            def _connect_internal():
+                if not self.mt5_client.connect(self.mt5_client._config):
+                    raise ConnectionError("Failed to connect to MT5")
+                return True
 
-            self._connected = True
-            self._terminal_info = self.mt5_client.terminal_info
-            self._account_info = self.mt5_client.account_info
+            # リトライ付きで接続を試行
+            result = self._retry_with_backoff(
+                _connect_internal,
+                max_retries=self.max_retries,
+                initial_delay=1.0,
+                backoff_factor=2.0,
+            )
 
-            logger.info("Successfully connected to MT5")
-            return True
+            if result:
+                self._connected = True
+                self._terminal_info = self.mt5_client.terminal_info
+                self._account_info = self.mt5_client.account_info
+                logger.info("Successfully connected to MT5")
+                return True
+
+            return False
 
         except Exception as e:
-            logger.error(f"Error connecting to MT5: {e}")
+            logger.error(f"Error connecting to MT5 after retries: {e}")
             return False
 
     def disconnect(self) -> None:
@@ -435,7 +449,7 @@ class HistoricalDataFetcher:
         end_date: datetime,
         timeframe: str,
     ) -> list[pl.LazyFrame]:
-        """10,000バー単位でデータを分割取得
+        """10,000バー単位でデータを分割取得（リトライ機能付き）
 
         Args:
             symbol: 通貨ペア
@@ -465,12 +479,24 @@ class HistoricalDataFetcher:
             )
 
             try:
-                # MT5からバッチデータを取得
-                rates = mt5.copy_rates_range(
-                    symbol, mt5_timeframe, batch_start, batch_end
+                # MT5からバッチデータを取得（リトライ付き）
+                def _fetch_batch_data(batch_idx=i, bs=batch_start, be=batch_end):
+                    rates = mt5.copy_rates_range(symbol, mt5_timeframe, bs, be)
+                    if rates is None:
+                        raise ConnectionError(
+                            f"Failed to fetch rates for batch {batch_idx}: {bs} to {be}"
+                        )
+                    return rates
+
+                # リトライ付きでデータ取得
+                rates = self._retry_with_backoff(
+                    _fetch_batch_data,
+                    max_retries=2,  # バッチごとのリトライは少なめに
+                    initial_delay=0.5,
+                    backoff_factor=2.0,
                 )
 
-                if rates is not None and len(rates) > 0:
+                if len(rates) > 0:
                     # NumPy structured arrayをPolars LazyFrameに変換
                     df = pl.DataFrame(
                         {
@@ -491,8 +517,31 @@ class HistoricalDataFetcher:
                     logger.warning(f"Batch {i}: No data returned")
 
             except Exception as e:
-                logger.error(f"Error fetching batch {i}: {e}")
-                # バッチ失敗時は空のLazyFrameを追加（後で除外される）
+                # リトライ後も失敗した場合
+                logger.error(f"Error fetching batch {i} after retries: {e}")
+                # バッチ失敗時は空のLazyFrameを追加して続行
+                empty_df = pl.LazyFrame(
+                    {
+                        "timestamp": [],
+                        "open": [],
+                        "high": [],
+                        "low": [],
+                        "close": [],
+                        "volume": [],
+                        "spread": [],
+                    }
+                ).cast(
+                    {
+                        "timestamp": pl.Datetime("us"),
+                        "open": pl.Float32,
+                        "high": pl.Float32,
+                        "low": pl.Float32,
+                        "close": pl.Float32,
+                        "volume": pl.Float32,
+                        "spread": pl.Int32,
+                    }
+                )
+                batch_results.append(empty_df)
 
         return batch_results
 
@@ -542,7 +591,7 @@ class HistoricalDataFetcher:
         end_date: datetime,
         timeframe: str,
     ) -> pl.LazyFrame | None:
-        """各ワーカーでのデータ取得処理
+        """各ワーカーでのデータ取得処理（リトライ機能付き）
 
         Args:
             worker_id: ワーカーID（ログ用）
@@ -561,10 +610,21 @@ class HistoricalDataFetcher:
         )
 
         try:
-            # 新しいMT5接続を確立（各ワーカーで独立した接続）
-            if not mt5.initialize():
-                logger.error(f"Worker {worker_id}: Failed to initialize MT5")
-                return None
+            # MT5接続の確立（リトライ付き）
+            def _initialize_mt5():
+                if not mt5.initialize():
+                    raise ConnectionError(
+                        f"Worker {worker_id}: Failed to initialize MT5"
+                    )
+                return True
+
+            # リトライ付きでMT5を初期化
+            self._retry_with_backoff(
+                _initialize_mt5,
+                max_retries=self.max_retries,
+                initial_delay=1.0,
+                backoff_factor=2.0,
+            )
 
             # バッチ処理でデータ取得
             batch_results = []
@@ -574,11 +634,23 @@ class HistoricalDataFetcher:
 
             for batch_start, batch_end in batch_dates:
                 try:
-                    rates = mt5.copy_rates_range(
-                        symbol, mt5_timeframe, batch_start, batch_end
+                    # copy_rates_rangeをリトライ付きで実行
+                    def _fetch_rates(bs=batch_start, be=batch_end):
+                        rates = mt5.copy_rates_range(symbol, mt5_timeframe, bs, be)
+                        if rates is None:
+                            raise ConnectionError(
+                                f"Failed to fetch rates for {bs} to {be}"
+                            )
+                        return rates
+
+                    rates = self._retry_with_backoff(
+                        _fetch_rates,
+                        max_retries=2,  # バッチごとのリトライは少なめに
+                        initial_delay=0.5,
+                        backoff_factor=2.0,
                     )
 
-                    if rates is not None and len(rates) > 0:
+                    if len(rates) > 0:
                         df = pl.DataFrame(
                             {
                                 "timestamp": [
@@ -593,9 +665,17 @@ class HistoricalDataFetcher:
                             }
                         )
                         batch_results.append(df.lazy())
+                        logger.debug(
+                            f"Worker {worker_id}: Batch {batch_start} to {batch_end} - "
+                            f"{len(rates)} bars retrieved"
+                        )
 
                 except Exception as e:
-                    logger.error(f"Worker {worker_id}: Error fetching batch: {e}")
+                    # リトライ後も失敗した場合はログを記録して続行
+                    logger.error(
+                        f"Worker {worker_id}: Failed to fetch batch "
+                        f"{batch_start} to {batch_end} after retries: {e}"
+                    )
                     continue
 
             # MT5接続を閉じる
@@ -880,3 +960,150 @@ class HistoricalDataFetcher:
         # （市場の一時的な停止や軽微な遅延を許容）
         threshold = expected_interval * 1.5
         return actual_gap > threshold
+
+    def _retry_with_backoff(
+        self,
+        func: Callable[..., Any],
+        *args,
+        max_retries: int = None,
+        initial_delay: float = 1.0,
+        backoff_factor: float = 2.0,
+        max_delay: float = 60.0,
+        **kwargs,
+    ) -> Any:
+        """エクスポネンシャルバックオフでリトライを実行
+
+        Args:
+            func: 実行する関数
+            *args: 関数の位置引数
+            max_retries: 最大リトライ回数（デフォルト: self.max_retries）
+            initial_delay: 初回リトライまでの待機時間（秒）
+            backoff_factor: バックオフ係数（待機時間の倍率）
+            max_delay: 最大待機時間（秒）
+            **kwargs: 関数のキーワード引数
+
+        Returns:
+            Any: 関数の実行結果
+
+        Raises:
+            最後のリトライでも失敗した場合は元の例外を再発生
+        """
+        if max_retries is None:
+            max_retries = self.max_retries
+
+        last_exception = None
+        delay = initial_delay
+
+        for attempt in range(max_retries + 1):
+            try:
+                # 関数を実行
+                result = func(*args, **kwargs)
+
+                # 成功した場合
+                if attempt > 0:
+                    logger.info(
+                        f"Retry successful after {attempt} attempt(s) for {func.__name__}"
+                    )
+                return result
+
+            except Exception as e:
+                last_exception = e
+
+                # リトライ可能なエラーかチェック
+                if not self._is_retryable_error(e):
+                    logger.error(
+                        f"Non-retryable error in {func.__name__}: {type(e).__name__}: {e}"
+                    )
+                    raise
+
+                # 最後の試行の場合
+                if attempt == max_retries:
+                    logger.error(
+                        f"Max retries ({max_retries}) exceeded for {func.__name__}. "
+                        f"Last error: {type(e).__name__}: {e}"
+                    )
+                    raise
+
+                # リトライログ
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries + 1} failed for {func.__name__}: "
+                    f"{type(e).__name__}: {e}. Retrying in {delay:.1f} seconds..."
+                )
+
+                # バックオフ待機
+                time.sleep(delay)
+
+                # 次回の待機時間を計算（最大値を超えないように）
+                delay = min(delay * backoff_factor, max_delay)
+
+        # ここには到達しないはずだが、念のため
+        if last_exception:
+            raise last_exception
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """エラーがリトライ可能かどうかを判定
+
+        Args:
+            error: 発生した例外
+
+        Returns:
+            bool: リトライ可能な場合True
+
+        リトライ可能なエラー:
+            - ConnectionError: ネットワーク接続エラー
+            - TimeoutError: タイムアウトエラー
+            - OSError: システムレベルのエラー（一時的な場合）
+            - MT5エラー: 一時的なMT5サーバーエラー
+
+        リトライ不可能なエラー:
+            - ValueError: 無効なパラメータ
+            - PermissionError: 権限エラー
+            - KeyError: キーエラー
+            - その他のプログラムエラー
+        """
+        # リトライ不可能なエラーを先にチェック（優先度高）
+        non_retryable_types = (
+            ValueError,
+            PermissionError,
+            KeyError,
+            AttributeError,
+            TypeError,
+        )
+
+        if isinstance(error, non_retryable_types):
+            return False
+
+        # リトライ可能なエラータイプ
+        retryable_types = (
+            ConnectionError,
+            TimeoutError,
+            OSError,
+        )
+
+        # エラータイプをチェック
+        if isinstance(error, retryable_types):
+            # PermissionErrorはOSErrorのサブクラスなので除外
+            if isinstance(error, PermissionError):
+                return False
+            return True
+
+        # MT5固有のエラーをチェック（エラーメッセージで判定）
+        error_message = str(error).lower()
+        retryable_messages = [
+            "connection",
+            "timeout",
+            "network",
+            "server",
+            "temporary",
+            "unavailable",
+            "busy",
+            "failed to connect",
+            "no connection",
+        ]
+
+        for msg in retryable_messages:
+            if msg in error_message:
+                return True
+
+        # デフォルトはリトライ可能とする（安全側に倒す）
+        return True
