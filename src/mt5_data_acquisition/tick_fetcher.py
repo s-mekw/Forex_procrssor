@@ -369,9 +369,8 @@ class StreamerConfig:
 
     symbol: str
     buffer_size: int = 10000
-    spike_threshold: float = 5.0  # デフォルト値を緩和（静かな市場での誤検出防止）
+    spike_threshold_percent: float = 0.1  # 価格変動率（%）でスパイク判定
     backpressure_threshold: float = 0.8
-    stats_window_size: int = 1000
 
 
 class TickDataStreamer:
@@ -392,9 +391,8 @@ class TickDataStreamer:
         self,
         symbol: str,
         buffer_size: int = 10000,
-        spike_threshold: float = 5.0,  # デフォルト値を緩和（静かな市場での誤検出防止）
+        spike_threshold_percent: float = 0.1,  # 価格変動率（%）でスパイク判定
         backpressure_threshold: float = 0.8,
-        stats_window_size: int = 1000,
         mt5_client: MT5ConnectionManager | None = None,
         backpressure_delay: float = 0.01,
         statistics_window: int | None = None,  # 別名サポート
@@ -407,7 +405,7 @@ class TickDataStreamer:
         Args:
             symbol: 通貨ペアシンボル（例: USDJPY, EURUSD）
             buffer_size: リングバッファのサイズ（デフォルト: 10000）
-            spike_threshold: スパイク検出の閾値（標準偏差の倍数、デフォルト: 3.0）
+            spike_threshold_percent: スパイク検出の閾値（価格変動率%、デフォルト: 0.1）
             backpressure_threshold: バックプレッシャー発動閾値（バッファ使用率、デフォルト: 0.8）
             stats_window_size: 統計計算用のウィンドウサイズ（デフォルト: 1000）
             mt5_client: MT5接続マネージャー（オプション）
@@ -427,26 +425,19 @@ class TickDataStreamer:
         if buffer_size <= 0:
             raise ValueError("Buffer size must be positive")
 
-        if spike_threshold <= 0:
-            raise ValueError("Spike threshold must be positive")
+        if spike_threshold_percent <= 0:
+            raise ValueError("Spike threshold percent must be positive")
 
         if backpressure_threshold <= 0 or backpressure_threshold > 1:
             raise ValueError("Backpressure threshold must be between 0 and 1")
 
-        # statistics_window が指定されていれば stats_window_size を上書き
-        if statistics_window is not None:
-            stats_window_size = statistics_window
-
-        if stats_window_size <= 0:
-            raise ValueError("Stats window size must be positive")
 
         # 設定の作成と保存
         self.config = StreamerConfig(
             symbol=symbol,
             buffer_size=buffer_size,
-            spike_threshold=spike_threshold,
+            spike_threshold_percent=spike_threshold_percent,
             backpressure_threshold=backpressure_threshold,
-            stats_window_size=stats_window_size,
         )
         self.backpressure_delay = backpressure_delay
 
@@ -456,16 +447,9 @@ class TickDataStreamer:
         # リングバッファの初期化
         self.buffer: deque = deque(maxlen=buffer_size)
 
-        # 統計情報の初期化
-        self.stats: dict[str, Any] = {
-            "mean_bid": 0.0,
-            "std_bid": 0.0,
-            "mean_ask": 0.0,
-            "std_ask": 0.0,
-            "sample_count": 0,
-            "spike_count": 0,
-            "last_update": None,
-        }
+        # スパイク検出用の最終ティック
+        self._last_tick: Tick | None = None
+        self.spike_count: int = 0
 
         # 状態管理フラグ
         self.is_streaming: bool = False
@@ -493,13 +477,10 @@ class TickDataStreamer:
         }
 
         # 内部管理用
-        self._stats_buffer_bid: deque = deque(maxlen=stats_window_size)
-        self._stats_buffer_ask: deque = deque(maxlen=stats_window_size)
         self._current_task: asyncio.Task | None = None
         self._buffer_lock = asyncio.Lock()
         self._backpressure_count = 0
         self._dropped_ticks = 0
-        self._warmup_samples = 200  # ウォームアップ期間のサンプル数（初期統計の安定化のため増加）
 
         # メモリプール（オブジェクト再利用）
         self._tick_pool = TickObjectPool(size=100)
@@ -517,7 +498,7 @@ class TickDataStreamer:
             "TickDataStreamer初期化",
             symbol=symbol,
             buffer_size=buffer_size,
-            spike_threshold=spike_threshold,
+            spike_threshold_percent=spike_threshold_percent,
         )
 
     @property
@@ -608,13 +589,13 @@ class TickDataStreamer:
         return self.config.buffer_size
 
     @property
-    def spike_threshold(self) -> float:
+    def spike_threshold_percent(self) -> float:
         """スパイク検出閾値を取得
 
         Returns:
-            float: スパイク検出の標準偏差倍数
+            float: スパイク検出の価格変動率（%）
         """
-        return self.config.spike_threshold
+        return self.config.spike_threshold_percent
 
     @property
     def backpressure_threshold(self) -> float:
@@ -627,47 +608,39 @@ class TickDataStreamer:
 
     @property
     def mean_bid(self) -> float | None:
-        """Bidの平均値を取得
+        """Bidの平均値を取得（互換性のためのスタブ）
 
         Returns:
-            float | None: Bidの平均値、計算されていない場合None
+            float | None: 最後のTickのBidまたはNone
         """
-        if self.stats["sample_count"] < 2:
-            return None
-        return self.stats["mean_bid"]
+        return self._last_tick.bid if self._last_tick else None
 
     @property
     def std_bid(self) -> float | None:
-        """Bidの標準偏差を取得
+        """Bidの標準偏差を取得（互換性のためのスタブ）
 
         Returns:
-            float | None: Bidの標準偏差、計算されていない場合None
+            float | None: 常にNone（統計計算を廃止）
         """
-        if self.stats["sample_count"] < 2:
-            return None
-        return self.stats["std_bid"]
+        return None
 
     @property
     def mean_ask(self) -> float | None:
-        """Askの平均値を取得
+        """Askの平均値を取得（互換性のためのスタブ）
 
         Returns:
-            float | None: Askの平均値、計算されていない場合None
+            float | None: 最後のTickのAskまたはNone
         """
-        if self.stats["sample_count"] < 2:
-            return None
-        return self.stats["mean_ask"]
+        return self._last_tick.ask if self._last_tick else None
 
     @property
     def std_ask(self) -> float | None:
-        """Askの標準偏差を取得
+        """Askの標準偏差を取得（互換性のためのスタブ）
 
         Returns:
-            float | None: Askの標準偏差、計算されていない場合None
+            float | None: 常にNone（統計計算を廃止）
         """
-        if self.stats["sample_count"] < 2:
-            return None
-        return self.stats["std_ask"]
+        return None
 
     @property
     def statistics_window(self) -> int:
@@ -711,13 +684,6 @@ class TickDataStreamer:
         """
         # バッファがフルの場合、古いデータは自動的に削除される（deque maxlenの機能）
         self.buffer.append(tick)
-
-        # 統計用バッファにも追加（Bid/Ask個別）
-        self._stats_buffer_bid.append(tick.bid)
-        self._stats_buffer_ask.append(tick.ask)
-
-        # 統計量の更新
-        self._update_statistics()
 
     async def add_tick(self, tick: Tick) -> None:
         """ティックをバッファに追加（非同期スレッドセーフ版）
@@ -979,46 +945,12 @@ class TickDataStreamer:
         return mean, std
 
     def _update_statistics(self) -> None:
-        """統計量を更新（ローリングウィンドウベース）
-
-        最新のstats_window_size個のデータから統計量を計算します。
-        ウォームアップ期間（最初の100件）は特別扱いします。
+        """統計量を更新（互換性のためのスタブ）
+        
+        価格変動率ベースのスパイク検出に移行したため、
+        統計計算は不要になりました。
         """
-        # サンプル数を更新
-        self.stats["sample_count"] = len(self._stats_buffer_bid)
-
-        # ウォームアップ期間中は統計を計算しない
-        if self.stats["sample_count"] < self._warmup_samples:
-            # ウォームアップ中でも基本的な統計は計算（ただし最小30サンプル必要）
-            if self.stats["sample_count"] >= 30:  # 最小サンプル数を増やして初期統計を安定化
-                # Bid統計
-                bid_values = list(self._stats_buffer_bid)
-                self.stats["mean_bid"], self.stats["std_bid"] = (
-                    self._calculate_mean_std(bid_values)
-                )
-
-                # Ask統計
-                ask_values = list(self._stats_buffer_ask)
-                self.stats["mean_ask"], self.stats["std_ask"] = (
-                    self._calculate_mean_std(ask_values)
-                )
-            return
-
-        # 統計量の計算（ローリングウィンドウ）
-        # Bid統計
-        bid_values = list(self._stats_buffer_bid)
-        self.stats["mean_bid"], self.stats["std_bid"] = self._calculate_mean_std(
-            bid_values
-        )
-
-        # Ask統計
-        ask_values = list(self._stats_buffer_ask)
-        self.stats["mean_ask"], self.stats["std_ask"] = self._calculate_mean_std(
-            ask_values
-        )
-
-        # 最終更新時刻
-        self.stats["last_update"] = datetime.now(tz=UTC)
+        pass  # 何もしない
 
     # 5.2: スパイク判定ロジック
     def _calculate_z_score(self, value: float, mean: float, std: float) -> float:
@@ -1037,63 +969,57 @@ class TickDataStreamer:
         return abs((value - mean) / std)
 
     def _is_spike(self, tick: Tick) -> bool:
-        """スパイク（異常値）かどうかを判定
-
-        3σルールに基づいて異常値を検出します。
-        ウォームアップ期間中はスパイク判定を行いません。
-
+        """価格変動率ベースのスパイク検出
+        
+        前回価格からの変動率が閾値を超えた場合にスパイクと判定します。
+        市場再開時（5分以上の間隔）はスパイク判定をスキップします。
+        
         Args:
             tick: 判定対象のティック
-
+        
         Returns:
             bool: スパイクの場合True
         """
-        # ウォームアップ期間中はスパイク判定しない
-        if self.stats["sample_count"] < self._warmup_samples:
+        # 初回ティックは判定しない
+        if self._last_tick is None:
+            self._last_tick = tick
             return False
-
-        # 統計量が計算されていない、または標準偏差が小さすぎる場合はスパイク判定しない
-        MIN_STD = 0.001  # 最小標準偏差（価格単位）- EUR/JPYの通常スプレッドを考慮
-        if (self.stats["std_bid"] < MIN_STD or self.stats["std_ask"] < MIN_STD or
-            self.stats["std_bid"] == 0 or self.stats["std_ask"] == 0):
-            return False
-
-        # 価格変動率チェック（0.1%を超える変動をまずチェック）
-        MAX_PRICE_CHANGE_PERCENT = 0.1  # 0.1%以上の変動を異常値候補とする
         
-        if self.stats["mean_bid"] > 0:
-            bid_change_percent = abs((tick.bid - self.stats["mean_bid"]) / self.stats["mean_bid"]) * 100
-            ask_change_percent = abs((tick.ask - self.stats["mean_ask"]) / self.stats["mean_ask"]) * 100
-            
-            # 価格変動率が閾値以下の場合は正常値として扱う
-            if bid_change_percent < MAX_PRICE_CHANGE_PERCENT and ask_change_percent < MAX_PRICE_CHANGE_PERCENT:
-                return False
-
-        # Bid/Ask個別にZスコアを計算
-        z_score_bid = self._calculate_z_score(
-            tick.bid, self.stats["mean_bid"], self.stats["std_bid"]
-        )
-        z_score_ask = self._calculate_z_score(
-            tick.ask, self.stats["mean_ask"], self.stats["std_ask"]
-        )
-
-        # いずれかが閾値を超えたらスパイク
-        is_spike_bid = z_score_bid > self.config.spike_threshold
-        is_spike_ask = z_score_ask > self.config.spike_threshold
-
-        if is_spike_bid or is_spike_ask:
+        # 市場再開チェック（5分以上の間隔があれば判定スキップ）
+        time_gap = (tick.timestamp - self._last_tick.timestamp).total_seconds()
+        if time_gap > 300:  # 5分 = 300秒
+            self.logger.info(
+                "Market gap detected, skipping spike check",
+                symbol=self.config.symbol,
+                gap_seconds=time_gap
+            )
+            self._last_tick = tick
+            return False
+        
+        # 価格変動率を計算
+        bid_change_percent = abs((tick.bid - self._last_tick.bid) / self._last_tick.bid) * 100
+        ask_change_percent = abs((tick.ask - self._last_tick.ask) / self._last_tick.ask) * 100
+        
+        # より大きい変動率を使用
+        max_change_percent = max(bid_change_percent, ask_change_percent)
+        
+        # スパイク判定
+        if max_change_percent > self.config.spike_threshold_percent:
+            self.spike_count += 1
             self.logger.warning(
                 "Spike detected",
                 symbol=self.config.symbol,
                 timestamp=tick.timestamp.isoformat(),
                 bid=tick.bid,
                 ask=tick.ask,
-                z_score_bid=f"{z_score_bid:.2f}",
-                z_score_ask=f"{z_score_ask:.2f}",
-                threshold=self.config.spike_threshold,
+                bid_change=f"{bid_change_percent:.3f}%",
+                ask_change=f"{ask_change_percent:.3f}%",
+                threshold=f"{self.config.spike_threshold_percent}%"
             )
             return True
-
+        
+        # 正常値の場合は最新ティックを保存
+        self._last_tick = tick
         return False
 
     async def subscribe_to_ticks(self) -> bool:
