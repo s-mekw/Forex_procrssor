@@ -227,12 +227,12 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
             print_error("Failed to connect to MT5")
             return [], []
         
-        # TickDataStreamerを作成（スパイクフィルターを無効化）
+        # TickDataStreamerを作成
         streamer = TickDataStreamer(
             symbol=symbol,
             mt5_client=mt5_client,
-            buffer_size=1000,
-            spike_threshold=1000.0  # 高い閾値でスパイクフィルターを事実上無効化
+            buffer_size=1000
+            # spike_threshold=3.0 (デフォルト値を使用)
         )
         
         print_info(f"Collecting ticks for {symbol} for {duration_seconds} seconds...")

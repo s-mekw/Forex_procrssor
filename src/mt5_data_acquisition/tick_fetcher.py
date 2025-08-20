@@ -499,7 +499,7 @@ class TickDataStreamer:
         self._buffer_lock = asyncio.Lock()
         self._backpressure_count = 0
         self._dropped_ticks = 0
-        self._warmup_samples = 100  # ウォームアップ期間のサンプル数
+        self._warmup_samples = 200  # ウォームアップ期間のサンプル数（初期統計の安定化のため増加）
 
         # メモリプール（オブジェクト再利用）
         self._tick_pool = TickObjectPool(size=100)
@@ -989,8 +989,8 @@ class TickDataStreamer:
 
         # ウォームアップ期間中は統計を計算しない
         if self.stats["sample_count"] < self._warmup_samples:
-            # ウォームアップ中でも基本的な統計は計算
-            if self.stats["sample_count"] >= 2:
+            # ウォームアップ中でも基本的な統計は計算（ただし最小30サンプル必要）
+            if self.stats["sample_count"] >= 30:  # 最小サンプル数を増やして初期統計を安定化
                 # Bid統計
                 bid_values = list(self._stats_buffer_bid)
                 self.stats["mean_bid"], self.stats["std_bid"] = (
@@ -1052,8 +1052,10 @@ class TickDataStreamer:
         if self.stats["sample_count"] < self._warmup_samples:
             return False
 
-        # 統計量が計算されていない場合はスパイク判定しない
-        if self.stats["std_bid"] == 0 or self.stats["std_ask"] == 0:
+        # 統計量が計算されていない、または標準偏差が小さすぎる場合はスパイク判定しない
+        MIN_STD = 0.00001  # 最小標準偏差（価格単位）
+        if (self.stats["std_bid"] < MIN_STD or self.stats["std_ask"] < MIN_STD or
+            self.stats["std_bid"] == 0 or self.stats["std_ask"] == 0):
             return False
 
         # Bid/Ask個別にZスコアを計算
