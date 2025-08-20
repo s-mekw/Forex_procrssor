@@ -23,9 +23,9 @@ def __():
     
     from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
     from src.mt5_data_acquisition.ohlc_fetcher import HistoricalDataFetcher
-    from src.common.config import MT5Config
+    from src.common.config import BaseConfig
     
-    return mo, sys, Path, datetime, timedelta, pl, alt, np, Dict, List, MT5ConnectionManager, HistoricalDataFetcher, MT5Config
+    return mo, sys, Path, datetime, timedelta, pl, alt, np, Dict, List, MT5ConnectionManager, HistoricalDataFetcher, BaseConfig
 
 
 @app.cell
@@ -90,18 +90,26 @@ def __(mo):
 
 
 @app.cell
-def __(mo, fetch_button, symbol_select, timeframe_select, days_slider, datetime, timedelta, MT5Config, MT5ConnectionManager, HistoricalDataFetcher):
+def __(mo, fetch_button, symbol_select, timeframe_select, days_slider, datetime, timedelta, BaseConfig, MT5ConnectionManager, HistoricalDataFetcher):
     # データ取得関数
     def fetch_ohlc_data():
         """MT5からOHLCデータを取得"""
         try:
-            config = MT5Config()
-            mt5_client = MT5ConnectionManager(config)
+            config = BaseConfig()
+            mt5_config = {
+                "account": config.mt5_login,
+                "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+                "server": config.mt5_server,
+                "timeout": config.mt5_timeout
+            }
+            mt5_client = MT5ConnectionManager(mt5_config)
+            fetcher_config = {
+                "batch_size": 5000,
+                "max_workers": 2
+            }
             fetcher = HistoricalDataFetcher(
                 mt5_client=mt5_client,
-                config=config,
-                batch_size=5000,
-                max_workers=2
+                config=fetcher_config
             )
             
             if not fetcher.connect():

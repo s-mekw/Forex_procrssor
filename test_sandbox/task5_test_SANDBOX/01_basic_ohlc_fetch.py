@@ -16,7 +16,7 @@ import time
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.ohlc_fetcher import HistoricalDataFetcher
-from src.common.config import MT5Config
+from src.common.config import BaseConfig
 from utils.ohlc_display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, create_ohlc_table, create_statistics_panel,
@@ -44,19 +44,29 @@ def main():
     
     try:
         # MT5設定を作成
-        config = MT5Config()
+        config = BaseConfig()
+        
+        # MT5クライアント用の設定を辞書形式で作成
+        mt5_config = {
+            "account": config.mt5_login,
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout
+        }
         
         # MT5クライアントを作成
         print_info("Creating MT5 client...")
-        mt5_client = MT5ConnectionManager(config)
+        mt5_client = MT5ConnectionManager(mt5_config)
         
         # HistoricalDataFetcherを作成
         print_info("Initializing Historical Data Fetcher...")
+        fetcher_config = {
+            "batch_size": 1000,
+            "max_workers": 1  # シンプルなテストなので並列処理は使わない
+        }
         fetcher = HistoricalDataFetcher(
             mt5_client=mt5_client,
-            config=config,
-            batch_size=1000,
-            max_workers=1  # シンプルなテストなので並列処理は使わない
+            config=fetcher_config
         )
         
         # 接続
@@ -135,8 +145,11 @@ def main():
             # データ品質チェック
             print_section("Data Quality Check")
             
+            # カラム名を確認
+            time_col = "timestamp" if "timestamp" in df.columns else "time"
+            
             # 時間の連続性をチェック
-            time_diffs = df["time"].diff()
+            time_diffs = df[time_col].diff()
             expected_interval = 5 * 60  # 5分（秒単位）
             
             # polarsで時間差を秒に変換

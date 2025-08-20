@@ -21,7 +21,7 @@ from typing import Dict, Any
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.ohlc_fetcher import HistoricalDataFetcher
-from src.common.config import MT5Config
+from src.common.config import BaseConfig
 from utils.ohlc_display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, format_price, format_volume
@@ -183,19 +183,29 @@ def fetch_large_dataset(monitor: BatchProcessMonitor):
     
     try:
         # MT5設定を作成
-        config = MT5Config()
+        config = BaseConfig()
+        
+        # MT5クライアント用の設定を辞書形式で作成
+        mt5_config = {
+            "account": config.mt5_login,
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout
+        }
         
         # MT5クライアントを作成
         print_info("Creating MT5 client...")
-        mt5_client = MT5ConnectionManager(config)
+        mt5_client = MT5ConnectionManager(mt5_config)
         
         # HistoricalDataFetcherを作成
         print_info("Initializing Historical Data Fetcher with parallel processing...")
+        fetcher_config = {
+            "batch_size": 5000,  # 大きめのバッチサイズ
+            "max_workers": 4  # 並列処理
+        }
         fetcher = HistoricalDataFetcher(
             mt5_client=mt5_client,
-            config=config,
-            batch_size=5000,  # 大きめのバッチサイズ
-            max_workers=4  # 並列処理
+            config=fetcher_config
         )
         
         # 接続

@@ -80,22 +80,26 @@ def create_ohlc_table(data: pl.DataFrame, title: str = "OHLC Data", max_rows: in
     # データを追加（最新のmax_rows行のみ）
     rows = data.tail(max_rows)
     
+    # カラム名を確認（timeまたはtimestamp）
+    time_col = "timestamp" if "timestamp" in data.columns else "time"
+    volume_col = "volume" if "volume" in data.columns else "tick_volume"
+    
     for row in rows.iter_rows(named=True):
         # 前の行のCloseと比較して色を決定
         close_color = "white"
         if len(rows) > 1:
-            prev_close = rows.filter(pl.col("time") < row["time"]).tail(1)
+            prev_close = rows.filter(pl.col(time_col) < row[time_col]).tail(1)
             if not prev_close.is_empty():
                 prev_close_val = prev_close["close"][0]
                 close_color = get_price_color(row["close"], prev_close_val)
         
         table.add_row(
-            format_timestamp(row["time"]),
+            format_timestamp(row[time_col]),
             format_price(row["open"]),
             format_price(row["high"]),
             format_price(row["low"]),
             f"[{close_color}]{format_price(row['close'])}[/{close_color}]",
-            format_volume(row.get("tick_volume", 0)),
+            format_volume(row.get(volume_col, 0)),
             format_price(row.get("spread", 0) / 100000, 1) if "spread" in row else "N/A"
         )
     
@@ -106,17 +110,21 @@ def create_statistics_panel(data: pl.DataFrame, symbol: str, timeframe: str) -> 
     if data.is_empty():
         return Panel("No data available", title=f"{symbol} - {timeframe} Statistics")
     
+    # カラム名を確認
+    time_col = "timestamp" if "timestamp" in data.columns else "time"
+    volume_col = "volume" if "volume" in data.columns else "tick_volume"
+    
     # 統計を計算
     stats = {
         "Records": len(data),
-        "Period": f"{data['time'].min()} to {data['time'].max()}",
+        "Period": f"{data[time_col].min()} to {data[time_col].max()}",
         "Avg Open": format_price(data["open"].mean()),
         "Avg High": format_price(data["high"].mean()),
         "Avg Low": format_price(data["low"].mean()),
         "Avg Close": format_price(data["close"].mean()),
         "Max High": format_price(data["high"].max()),
         "Min Low": format_price(data["low"].min()),
-        "Total Volume": format_volume(data["tick_volume"].sum() if "tick_volume" in data.columns else 0),
+        "Total Volume": format_volume(data[volume_col].sum() if volume_col in data.columns else 0),
         "Avg Spread": format_price(data["spread"].mean() / 100000, 1) if "spread" in data.columns else "N/A"
     }
     

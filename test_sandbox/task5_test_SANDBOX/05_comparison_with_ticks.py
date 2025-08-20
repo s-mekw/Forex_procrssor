@@ -20,7 +20,7 @@ from typing import List, Dict
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.ohlc_fetcher import HistoricalDataFetcher
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
-from src.common.config import MT5Config
+from src.common.config import BaseConfig
 from src.common.models import Tick
 from utils.ohlc_display_helpers import (
     print_success, print_error, print_warning, print_info,
@@ -209,8 +209,14 @@ async def collect_ticks_and_generate_ohlc(symbol: str, duration_seconds: int = 6
     
     try:
         # MT5設定
-        config = MT5Config()
-        mt5_client = MT5ConnectionManager(config)
+        config = BaseConfig()
+        mt5_config = {
+            "account": config.mt5_login,
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout
+        }
+        mt5_client = MT5ConnectionManager(mt5_config)
         
         # TickDataStreamerを作成
         streamer = TickDataStreamer(
@@ -336,9 +342,15 @@ def main():
         # MT5からOHLCデータを取得
         print_section("Phase 2: Fetching MT5 OHLC Data")
         
-        config = MT5Config()
-        mt5_client = MT5ConnectionManager(config)
-        fetcher = HistoricalDataFetcher(mt5_client=mt5_client, config=config)
+        config = BaseConfig()
+        mt5_config = {
+            "account": config.mt5_login,
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout
+        }
+        mt5_client = MT5ConnectionManager(mt5_config)
+        fetcher = HistoricalDataFetcher(mt5_client=mt5_client, config={})
         
         if not fetcher.connect():
             print_error("Failed to connect to MT5")
