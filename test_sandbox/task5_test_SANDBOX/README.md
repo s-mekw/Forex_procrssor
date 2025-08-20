@@ -36,7 +36,7 @@ uv pip install rich polars altair marimo psutil
 #### 1. 基本的なOHLCデータ取得テスト
 
 ```bash
-python test_sandbox/task5_test_SANDBOX/01_basic_ohlc_fetch.py
+uv run python test_sandbox/task5_test_SANDBOX/01_basic_ohlc_fetch.py
 ```
 
 **機能:**
@@ -53,7 +53,7 @@ python test_sandbox/task5_test_SANDBOX/01_basic_ohlc_fetch.py
 #### 2. 複数時間枠表示テスト
 
 ```bash
-python test_sandbox/task5_test_SANDBOX/02_multi_timeframe_display.py
+uv run python test_sandbox/task5_test_SANDBOX/02_multi_timeframe_display.py
 ```
 
 **機能:**
@@ -69,7 +69,7 @@ python test_sandbox/task5_test_SANDBOX/02_multi_timeframe_display.py
 #### 3. バッチ処理監視テスト
 
 ```bash
-python test_sandbox/task5_test_SANDBOX/03_batch_fetch_monitor.py
+uv run python test_sandbox/task5_test_SANDBOX/03_batch_fetch_monitor.py
 ```
 
 **機能:**
@@ -85,7 +85,7 @@ python test_sandbox/task5_test_SANDBOX/03_batch_fetch_monitor.py
 #### 4. 欠損データ検出テスト
 
 ```bash
-python test_sandbox/task5_test_SANDBOX/04_missing_data_detector.py
+uv run python test_sandbox/task5_test_SANDBOX/04_missing_data_detector.py
 ```
 
 **機能:**
@@ -102,7 +102,7 @@ python test_sandbox/task5_test_SANDBOX/04_missing_data_detector.py
 #### 5. ティックデータ比較テスト
 
 ```bash
-python test_sandbox/task5_test_SANDBOX/05_comparison_with_ticks.py
+uv run python test_sandbox/task5_test_SANDBOX/05_comparison_with_ticks.py
 ```
 
 **機能:**
@@ -119,7 +119,7 @@ python test_sandbox/task5_test_SANDBOX/05_comparison_with_ticks.py
 #### 6. Marimoダッシュボード
 
 ```bash
-marimo run test_sandbox/task5_test_SANDBOX/06_marimo_ohlc_dashboard.py
+uv run marimo run test_sandbox/task5_test_SANDBOX/06_marimo_ohlc_dashboard.py
 ```
 
 **機能:**

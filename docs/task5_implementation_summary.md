@@ -204,7 +204,7 @@ def _retry_with_backoff(self, func, max_retries=3):
    - 各ステップでの動作確認
    - 問題の早期特定
 
-3. **Polarsの優位性**
+3. **Polarsの優位性**@gi
    - pandasより高速
    - メモリ効率的な処理
 
