@@ -32,7 +32,7 @@
   - スパイクフィルター（3σルール）による異常値除外を追加
   - _要件: 1.2_
 
-- [ ] 5. 履歴OHLCデータ取得とバッチ処理
+- [X] 5. 履歴OHLCデータ取得とバッチ処理
   - tests/unit/test_ohlc_fetcher.pyに履歴データ取得と欠損検出のテストを作成
   - src/mt5_data_acquisition/ohlc_fetcher.pyにHistoricalDataFetcherクラスを実装
   - 10,000バー単位のバッチ処理と並列フェッチ機能を実装
