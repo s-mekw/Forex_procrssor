@@ -6,6 +6,7 @@ MT5から履歴OHLCデータを効率的に取得するためのHistoricalDataFe
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 
 import MetaTrader5 as mt5
@@ -158,6 +159,7 @@ class HistoricalDataFetcher:
         start_date: datetime,
         end_date: datetime,
         use_batch: bool = True,
+        use_parallel: bool = False,
     ) -> pl.LazyFrame:
         """MT5から指定期間のOHLCデータを取得
 
@@ -167,6 +169,7 @@ class HistoricalDataFetcher:
             start_date: 開始日時（UTC）
             end_date: 終了日時（UTC）
             use_batch: バッチ処理を使用するか（デフォルト: True）
+            use_parallel: 並列処理を使用するか（デフォルト: False）
 
         Returns:
             pl.LazyFrame: OHLCデータを含むPolars LazyFrame
@@ -233,8 +236,19 @@ class HistoricalDataFetcher:
 
         estimated_bars = total_minutes / timeframe_minutes.get(timeframe, 1)
 
+        # 並列処理の判定（大量データかつ並列処理が有効な場合）
+        if use_parallel and estimated_bars > self.batch_size * 2:
+            logger.info(
+                f"Using parallel processing (estimated {estimated_bars:.0f} bars)"
+            )
+
+            # 並列処理でデータ取得
+            return self._fetch_parallel(
+                symbol, mt5_timeframe, start_date, end_date, timeframe
+            )
+
         # バッチ処理の判定（10,000バー以上の場合、または明示的に指定された場合）
-        if use_batch and (estimated_bars > self.batch_size or self.batch_size > 0):
+        elif use_batch and (estimated_bars > self.batch_size or self.batch_size > 0):
             logger.info(f"Using batch processing (estimated {estimated_bars:.0f} bars)")
 
             # バッチ処理でデータ取得
@@ -449,3 +463,236 @@ class HistoricalDataFetcher:
                 # バッチ失敗時は空のLazyFrameを追加（後で除外される）
 
         return batch_results
+
+    def _split_time_range(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        num_workers: int,
+    ) -> list[tuple[datetime, datetime]]:
+        """時間範囲を均等分割
+
+        Args:
+            start_date: 開始日時（UTC）
+            end_date: 終了日時（UTC）
+            num_workers: ワーカー数
+
+        Returns:
+            List[tuple[datetime, datetime]]: 分割された日付範囲のリスト
+        """
+        # 全期間を秒単位で計算
+        total_seconds = (end_date - start_date).total_seconds()
+
+        # ワーカーあたりの秒数
+        seconds_per_worker = total_seconds / num_workers
+
+        # 分割された範囲を生成
+        time_chunks = []
+        for i in range(num_workers):
+            chunk_start = start_date + timedelta(seconds=i * seconds_per_worker)
+
+            # 最後のワーカーの場合は終了日時まで
+            if i == num_workers - 1:
+                chunk_end = end_date
+            else:
+                chunk_end = start_date + timedelta(seconds=(i + 1) * seconds_per_worker)
+
+            time_chunks.append((chunk_start, chunk_end))
+
+        return time_chunks
+
+    def _fetch_worker(
+        self,
+        worker_id: int,
+        symbol: str,
+        mt5_timeframe: int,
+        start_date: datetime,
+        end_date: datetime,
+        timeframe: str,
+    ) -> pl.LazyFrame | None:
+        """各ワーカーでのデータ取得処理
+
+        Args:
+            worker_id: ワーカーID（ログ用）
+            symbol: 通貨ペア
+            mt5_timeframe: MT5時間足定数
+            start_date: 開始日時（UTC）
+            end_date: 終了日時（UTC）
+            timeframe: 時間足文字列
+
+        Returns:
+            pl.LazyFrame | None: 取得したデータまたはNone（エラー時）
+        """
+        logger.info(
+            f"Worker {worker_id}: Fetching {symbol} {timeframe} "
+            f"from {start_date} to {end_date}"
+        )
+
+        try:
+            # 新しいMT5接続を確立（各ワーカーで独立した接続）
+            if not mt5.initialize():
+                logger.error(f"Worker {worker_id}: Failed to initialize MT5")
+                return None
+
+            # バッチ処理でデータ取得
+            batch_results = []
+            batch_dates = self._calculate_batch_dates(
+                start_date, end_date, timeframe, self.batch_size
+            )
+
+            for batch_start, batch_end in batch_dates:
+                try:
+                    rates = mt5.copy_rates_range(
+                        symbol, mt5_timeframe, batch_start, batch_end
+                    )
+
+                    if rates is not None and len(rates) > 0:
+                        df = pl.DataFrame(
+                            {
+                                "timestamp": [
+                                    datetime.fromtimestamp(r[0], tz=UTC) for r in rates
+                                ],
+                                "open": rates["open"].astype("float32"),
+                                "high": rates["high"].astype("float32"),
+                                "low": rates["low"].astype("float32"),
+                                "close": rates["close"].astype("float32"),
+                                "volume": rates["tick_volume"].astype("float32"),
+                                "spread": rates["spread"].astype("int32"),
+                            }
+                        )
+                        batch_results.append(df.lazy())
+
+                except Exception as e:
+                    logger.error(f"Worker {worker_id}: Error fetching batch: {e}")
+                    continue
+
+            # MT5接続を閉じる
+            mt5.shutdown()
+
+            if batch_results:
+                # バッチ結果を結合
+                combined = pl.concat(batch_results, how="vertical")
+                logger.info(f"Worker {worker_id}: Completed successfully")
+                return combined
+            else:
+                logger.warning(f"Worker {worker_id}: No data retrieved")
+                return None
+
+        except Exception as e:
+            logger.error(f"Worker {worker_id}: Fatal error: {e}")
+            # エラー時もMT5接続を確実に閉じる
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            return None
+
+    def _fetch_parallel(
+        self,
+        symbol: str,
+        mt5_timeframe: int,
+        start_date: datetime,
+        end_date: datetime,
+        timeframe: str,
+    ) -> pl.LazyFrame:
+        """並列処理でデータ取得
+
+        Args:
+            symbol: 通貨ペア
+            mt5_timeframe: MT5時間足定数
+            start_date: 開始日時（UTC）
+            end_date: 終了日時（UTC）
+            timeframe: 時間足文字列
+
+        Returns:
+            pl.LazyFrame: 結合済みのデータ
+        """
+        # ワーカー数を決定（データ量に応じて調整）
+        total_minutes = (end_date - start_date).total_seconds() / 60
+        timeframe_minutes = {
+            "M1": 1,
+            "M5": 5,
+            "M15": 15,
+            "M30": 30,
+            "H1": 60,
+            "H4": 240,
+            "D1": 1440,
+            "W1": 10080,
+            "MN": 43200,
+        }
+        estimated_bars = total_minutes / timeframe_minutes.get(timeframe, 1)
+
+        # ワーカー数を動的に調整（最大でmax_workers、最小で1）
+        num_workers = min(
+            self.max_workers, max(1, int(estimated_bars / (self.batch_size * 2)))
+        )
+
+        logger.info(
+            f"Starting parallel fetch with {num_workers} workers "
+            f"for {estimated_bars:.0f} estimated bars"
+        )
+
+        # 時間範囲を分割
+        time_chunks = self._split_time_range(start_date, end_date, num_workers)
+
+        # ThreadPoolExecutorで並列実行
+        results = []
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # 各ワーカーにタスクを送信
+            futures = {}
+            for i, (chunk_start, chunk_end) in enumerate(time_chunks):
+                future = executor.submit(
+                    self._fetch_worker,
+                    i + 1,  # worker_id
+                    symbol,
+                    mt5_timeframe,
+                    chunk_start,
+                    chunk_end,
+                    timeframe,
+                )
+                futures[future] = i + 1
+
+            # 結果を収集
+            for future in as_completed(futures):
+                worker_id = futures[future]
+                try:
+                    result = future.result(timeout=300)  # 5分のタイムアウト
+                    if result is not None:
+                        results.append(result)
+                        logger.info(f"Worker {worker_id} result collected")
+                    else:
+                        logger.warning(f"Worker {worker_id} returned no data")
+                except Exception as e:
+                    logger.error(f"Worker {worker_id} failed: {e}")
+
+        # 結果の検証と結合
+        if not results:
+            logger.error("All workers failed to retrieve data")
+            # 空のLazyFrameを返す
+            return pl.LazyFrame(
+                {
+                    "timestamp": [],
+                    "open": [],
+                    "high": [],
+                    "low": [],
+                    "close": [],
+                    "volume": [],
+                    "spread": [],
+                }
+            ).cast(
+                {
+                    "timestamp": pl.Datetime("us"),
+                    "open": pl.Float32,
+                    "high": pl.Float32,
+                    "low": pl.Float32,
+                    "close": pl.Float32,
+                    "volume": pl.Float32,
+                    "spread": pl.Int32,
+                }
+            )
+
+        logger.info(f"Combining results from {len(results)} successful workers")
+
+        # 全結果を結合し、タイムスタンプ順にソート、重複を除去
+        combined = pl.concat(results, how="vertical_relaxed")
+        return combined.unique("timestamp").sort("timestamp")
