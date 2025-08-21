@@ -21,7 +21,8 @@ from rich import box
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
-from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar
+from src.common.models import Tick
 from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
     print_success, print_error, print_warning, print_info,
@@ -103,14 +104,14 @@ class MultiSymbolConverter:
             # ティック作成
             tick = Tick(
                 symbol=tick_data["symbol"],
-                time=tick_data["time"],
-                bid=Decimal(str(tick_data["bid"])),
-                ask=Decimal(str(tick_data["ask"])),
-                volume=Decimal(str(tick_data.get("volume", 1.0)))
+                timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                bid=float(tick_data["bid"]),
+                ask=float(tick_data["ask"]),
+                volume=float(tick_data.get("volume", 1.0))
             )
             
             # ギャップ検出
-            gap = self.converters[symbol].check_tick_gap(tick.time)
+            gap = self.converters[symbol].check_tick_gap(tick.timestamp)
             if gap:
                 self.stats[symbol]["gaps"] += 1
             
@@ -119,7 +120,7 @@ class MultiSymbolConverter:
             
             # 統計更新
             self.stats[symbol]["ticks"] += 1
-            self.stats[symbol]["last_tick_time"] = tick.time
+            self.stats[symbol]["last_tick_time"] = tick.timestamp
             self.stats[symbol]["current_bar"] = self.converters[symbol].get_current_bar()
             self.global_stats["total_ticks"] += 1
             

@@ -20,7 +20,8 @@ from rich import box
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
-from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar
+from src.common.models import Tick
 from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
     print_success, print_error, print_warning, print_info,
@@ -90,14 +91,14 @@ class RealtimeBarBuilder:
                 # 辞書の場合、Tickオブジェクトを作成
                 tick = Tick(
                     symbol=tick_data["symbol"],
-                    time=tick_data.get("time", tick_data.get("timestamp")),
-                    bid=Decimal(str(tick_data["bid"])),
-                    ask=Decimal(str(tick_data["ask"])),
-                    volume=Decimal(str(tick_data.get("volume", 1.0)))
+                    timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                    bid=float(tick_data["bid"]),
+                    ask=float(tick_data["ask"]),
+                    volume=float(tick_data.get("volume", 1.0))
                 )
             
             # ギャップ検出
-            tick_time = getattr(tick, 'time', None) or getattr(tick, 'timestamp', None)
+            tick_time = tick.timestamp
             gap = self.converter.check_tick_gap(tick_time)
             if gap:
                 self.gap_count += 1

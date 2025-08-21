@@ -21,7 +21,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
-from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar
+from src.common.models import Tick
 from src.common.config import BaseConfig
 
 # Marimo App
@@ -231,14 +232,14 @@ async def data_processor():
                 # ティック作成
                 tick = Tick(
                     symbol=tick_data["symbol"],
-                    time=tick_data["time"],
-                    bid=Decimal(str(tick_data["bid"])),
-                    ask=Decimal(str(tick_data["ask"])),
-                    volume=Decimal(str(tick_data.get("volume", 1.0)))
+                    timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                    bid=float(tick_data["bid"]),
+                    ask=float(tick_data["ask"]),
+                    volume=float(tick_data.get("volume", 1.0))
                 )
                 
                 # ギャップ検出
-                gap = converter.check_tick_gap(tick.time)
+                gap = converter.check_tick_gap(tick.timestamp)
                 if gap:
                     stats["gaps_detected"] += 1
                 
@@ -247,7 +248,7 @@ async def data_processor():
                 
                 # 履歴に追加
                 tick_history.append({
-                    "time": tick.time,
+                    "time": tick.timestamp,
                     "bid": float(tick.bid),
                     "ask": float(tick.ask),
                     "spread": float(tick.ask - tick.bid),

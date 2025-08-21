@@ -50,8 +50,10 @@ async def main():
         
         if hasattr(tick, 'symbol'):
             print(f"  Symbol: {tick.symbol}")
+        if hasattr(tick, 'timestamp'):
+            print(f"  Timestamp: {tick.timestamp}")
         if hasattr(tick, 'time'):
-            print(f"  Time: {tick.time}")
+            print(f"  Time (backward compat): {tick.time}")
         if hasattr(tick, 'bid'):
             print(f"  Bid: {tick.bid}")
         if hasattr(tick, 'ask'):

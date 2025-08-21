@@ -21,7 +21,8 @@ from rich.text import Text
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
-from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter
+from src.common.models import Tick
 from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
     print_success, print_error, print_warning, print_info,
@@ -93,14 +94,14 @@ class GapDetectionTest:
             # ティック作成
             tick = Tick(
                 symbol=tick_data["symbol"],
-                time=tick_data["time"],
-                bid=Decimal(str(tick_data["bid"])),
-                ask=Decimal(str(tick_data["ask"])),
-                volume=Decimal(str(tick_data.get("volume", 1.0)))
+                timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                bid=float(tick_data["bid"]),
+                ask=float(tick_data["ask"]),
+                volume=float(tick_data.get("volume", 1.0))
             )
             
             # ギャップ検出
-            gap = self.converter.check_tick_gap(tick.time)
+            gap = self.converter.check_tick_gap(tick.timestamp)
             if gap:
                 self.total_gaps += 1
                 self.max_gap = max(self.max_gap, gap)
@@ -113,12 +114,12 @@ class GapDetectionTest:
                         "timestamp": datetime.now(),
                         "gap_seconds": gap,
                         "before_time": self.last_tick_time,
-                        "after_time": tick.time,
+                        "after_time": tick.timestamp,
                         "type": "detected"
                     })
                 
                 # 警告ログに追加
-                warning_msg = f"Gap detected: {gap:.1f}s at {format_timestamp(tick.time)}"
+                warning_msg = f"Gap detected: {gap:.1f}s at {format_timestamp(tick.timestamp)}"
                 self.warning_logs.append(warning_msg)
                 
                 if len(self.warning_logs) > 20:
@@ -129,7 +130,7 @@ class GapDetectionTest:
             
             # 統計更新
             self.total_ticks += 1
-            self.last_tick_time = tick.time
+            self.last_tick_time = tick.timestamp
             
         except Exception as e:
             print_error(f"Error processing tick: {e}")

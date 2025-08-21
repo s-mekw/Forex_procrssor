@@ -18,7 +18,8 @@ from asyncio import Queue
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
-from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar
+from src.common.models import Tick
 from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
     print_success, print_error, print_warning, print_info,
@@ -70,16 +71,10 @@ class BasicTickToBarTest:
     def process_tick(self, tick_data) -> Optional[Bar]:
         """ティックを処理"""
         try:
-            # common.models.Tickの場合、tick_to_bar.Tickに変換
+            # common.models.Tickの場合、そのまま使用
             if hasattr(tick_data, 'timestamp'):
-                # common.models.Tickからtick_to_bar.Tickへ変換
-                tick = Tick(
-                    symbol=tick_data.symbol,
-                    time=tick_data.timestamp,  # timestampをtimeにマップ
-                    bid=Decimal(str(tick_data.bid)),
-                    ask=Decimal(str(tick_data.ask)),
-                    volume=Decimal(str(tick_data.volume)) if tick_data.volume else Decimal("1.0")
-                )
+                # common.models.Tickをそのまま使用
+                tick = tick_data
             elif isinstance(tick_data, Tick):
                 # すでにtick_to_bar.Tickの場合
                 tick = tick_data
@@ -87,10 +82,10 @@ class BasicTickToBarTest:
                 # 辞書の場合は変換
                 tick = Tick(
                     symbol=tick_data["symbol"],
-                    time=tick_data["time"],
-                    bid=Decimal(str(tick_data["bid"])),
-                    ask=Decimal(str(tick_data["ask"])),
-                    volume=Decimal(str(tick_data.get("volume", 1.0)))
+                    timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                    bid=float(tick_data["bid"]),
+                    ask=float(tick_data["ask"]),
+                    volume=float(tick_data.get("volume", 1.0))
                 )
             
             self.last_tick = tick
