@@ -316,10 +316,10 @@ async def main():
         }
         
         # 接続
-        connection_manager = MT5ConnectionManager(mt5_config)
+        connection_manager = MT5ConnectionManager()
         
         print_info("Connecting to MT5...")
-        if not await connection_manager.connect():
+        if not connection_manager.connect(mt5_config):
             print_error("Failed to connect to MT5")
             return
         

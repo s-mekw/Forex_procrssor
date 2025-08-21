@@ -164,9 +164,9 @@ async def streaming_handler(start_button, stop_button, clear_button, symbol_sele
                 "retry_delay": 1
             }
             
-            connection_manager = MT5ConnectionManager(mt5_config)
+            connection_manager = MT5ConnectionManager()
             
-            if await connection_manager.connect():
+            if connection_manager.connect(mt5_config):
                 # ストリーマー設定
                 streamer_config = StreamerConfig(
                     symbols=[selected_symbol],
