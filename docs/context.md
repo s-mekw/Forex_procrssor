@@ -2,8 +2,8 @@
 
 ## 📍 現在の状態
 - タスク: タスク6「ティック→バー変換エンジンの実装」
-- ステップ: 5/7
-- 最終更新: 2025-08-21 14:00
+- ステップ: 6/7
+- 最終更新: 2025-08-21 15:30
 
 ## 📋 計画
 
@@ -188,7 +188,40 @@
   - 無効なティックデータの処理
   - タイムスタンプの逆転への対処
   - エラーケースのテスト追加
-- 完了: [ ]
+- 完了: [x]
+
+#### Step 6 詳細実装計画
+1. **Tickモデルのバリデーション強化**
+   - Pydantic field_validatorで負の価格を検出
+   - bid/ask価格がNone/0/負値の場合にValidationError
+   - ask < bidの異常スプレッドを検出
+   - volumeが負の場合もエラー
+
+2. **タイムスタンプ逆転検知**
+   - add_tick()でタイムスタンプの順序検証
+   - 過去のティックを受信した場合にERRORログ出力
+   - 処理はスキップして継続（非破壊的）
+   
+3. **エラーハンドリングの実装方針**
+   - ValidationError → ERRORログ出力、ティック破棄
+   - タイムスタンプ逆転 → ERRORログ出力、ティック破棄
+   - 処理は常に継続（例外を上げない）
+   - 構造化ログで詳細情報を記録
+
+4. **Bid/Askスプレッド追跡機能**
+   - avg_spreadプロパティの累積平均計算を確認
+   - test_bid_ask_spread_trackingのskipマーク削除
+   - スプレッド異常（ask < bid）の検出とログ
+
+5. **test_bar_completion_callbackの実装**
+   - バー完成時のコールバック動作確認
+   - skipマーク削除と動作検証
+
+6. **追加テストケース（新規作成）**
+   - test_invalid_price_handling: 負の価格の処理
+   - test_timestamp_reversal_handling: タイムスタンプ逆転の処理
+   - test_zero_price_handling: ゼロ価格の処理
+   - test_invalid_spread_handling: 異常スプレッドの処理
 
 ### Step 7: 統合テストとリファクタリング
 - ファイル: tests/integration/test_tick_to_bar_integration.py
@@ -199,14 +232,10 @@
 - 完了: [ ]
 
 ## 🎯 次のアクション
-- Step 6: エッジケースとエラーハンドリングの実装
-  1. 無効なティックデータの処理
-  2. タイムスタンプの逆転への対処
-  3. test_bid_ask_spread_trackingとtest_bar_completion_callbackのテスト実装
-- 残りのテスト状況:
-  - test_bid_ask_spread_tracking（Step 6で実装）
-  - test_bar_completion_callback（Step 6で実装）
-- Step 6完了後、Step 7（統合テストとリファクタリング）へ進む
+- Step 7: 統合テストとリファクタリング
+  - 実際のデータフローを模したテストケース作成
+  - パフォーマンステストの実装
+  - コードの最適化とドキュメント追加
 
 ## 📝 決定事項
 - Polarsを使用した高速データ処理を実装
@@ -258,6 +287,35 @@
   - gap_thresholdを設定可能にして柔軟性を確保
   - Ruffによる自動修正で7つのフォーマット問題を解決
   - 本番環境でのデバッグに有用な警告機能を実装
+
+### Step 6 完了
+- ✅ Tickモデルへのfield_validatorの追加
+  - bid/ask価格のバリデーション（None/0/負値を拒否）
+  - ask < bidの異常スプレッド検出
+  - volume負値チェック
+- ✅ add_tick()メソッドのエラーハンドリング強化
+  - タイムスタンプ逆転検知（過去のティックを破棄）
+  - ValidationErrorのキャッチ（try-except）
+  - ERRORレベルの構造化ログ出力
+- ✅ テストの有効化と追加
+  - test_bid_ask_spread_tracking: スプレッド追跡の確認
+  - test_bar_completion_callback: コールバック実行の確認
+  - test_invalid_price_handling: 負の価格処理（新規）
+  - test_timestamp_reversal_handling: タイムスタンプ逆転処理（新規）
+  - test_zero_price_handling: ゼロ価格処理（新規）
+  - test_invalid_spread_handling: ask < bid処理（新規）
+- ✅ テスト実行結果の確認
+  - 15 tests passed（既存11 + 新規4）
+  - すべてのテストが正常に動作
+- 📁 変更ファイル:
+  - C:\Users\shota\repos\Forex_procrssor\src\mt5_data_acquisition\tick_to_bar.py（バリデーション追加）
+  - C:\Users\shota\repos\Forex_procrssor\tests\unit\test_tick_to_bar.py（テスト追加・有効化）
+  - C:\Users\shota\repos\Forex_procrssor\docs\context.md（状態更新）
+- 📝 備考:
+  - Pydanticのfield_validatorで入力データを厳密に検証
+  - 非破壊的エラーハンドリング（例外を上げずに処理継続）
+  - ERRORレベルでの詳細なエラー情報記録
+  - 異常データは破棄され、正常データのみ処理される
 
 ## 🔨 実装結果
 
@@ -358,6 +416,36 @@
 
 ## 👁️ レビュー結果
 
+### Step 6 レビュー
+#### 良い点
+- ✅ Pydanticのfield_validatorが適切に実装されている
+  - bid/ask価格のNone/0/負値を検証
+  - ask < bidの異常スプレッドを検出
+  - volume負値チェック実装
+- ✅ add_tick()メソッドのエラーハンドリングが適切
+  - タイムスタンプ逆転を検知してティック破棄
+  - ValidationErrorをキャッチして処理継続
+  - ERRORレベルの構造化ログ出力
+- ✅ 非破壊的エラーハンドリング（処理継続）が実装されている
+  - 異常データは破棄されるが、処理は中断しない
+  - エラー情報はJSONログに記録される
+- ✅ テスト結果が期待通り（15 passed）
+  - 既存11テストに加え、新規4テストすべてPASSED
+  - test_invalid_price_handling: 負の価格処理
+  - test_timestamp_reversal_handling: タイムスタンプ逆転処理
+  - test_zero_price_handling: ゼロ価格処理
+  - test_invalid_spread_handling: ask < bid処理
+- ✅ コード品質（Ruffチェック合格）
+  - All checks passedで問題なし
+
+#### 改善点
+- ⚠️ なし（全ての要件を満たしている）
+
+#### 判定
+- [x] 合格（次へ進む）
+
+## 👁️ レビュー結果
+
 ### Step 5 レビュー
 #### 良い点
 - ✅ ティック欠損検知ロジックが正しく実装されている
@@ -386,6 +474,16 @@
 
 #### 判定
 - [x] 合格（次へ進む）
+
+### コミット結果（Step 5）
+- ✅ Hash: `99ccc36`
+- ✅ Message: `feat: Step 5完了 - ティック欠損検知と警告機能の実装`
+- ✅ 変更内容:
+  - 更新: src/mt5_data_acquisition/tick_to_bar.py（欠損検知機能追加）
+  - 更新: tests/unit/test_tick_to_bar.py（テスト有効化）
+  - 更新: docs/context.md（レビュー結果追加）
+  - 更新: docs/plan.md
+- ✅ 次のアクション: Step 6「エッジケースとエラーハンドリングの実装」へ進む
 
 ### Step 4 レビュー
 #### 良い点

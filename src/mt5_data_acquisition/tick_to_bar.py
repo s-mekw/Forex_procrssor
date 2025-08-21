@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class Tick(BaseModel):
@@ -22,6 +22,30 @@ class Tick(BaseModel):
     bid: Decimal = Field(..., description="Bid価格")
     ask: Decimal = Field(..., description="Ask価格")
     volume: Decimal = Field(..., description="取引量")
+
+    @field_validator('bid', 'ask')
+    @classmethod
+    def validate_price(cls, v, info):
+        """価格の妥当性を検証"""
+        if v is None or v <= 0:
+            raise ValueError(f"Invalid price: {v}")
+        return v
+
+    @field_validator('ask')
+    @classmethod
+    def validate_spread(cls, v, info):
+        """スプレッドの妥当性を検証（ask >= bid）"""
+        if 'bid' in info.data and v < info.data['bid']:
+            raise ValueError(f"Invalid spread: ask ({v}) < bid ({info.data['bid']})")
+        return v
+
+    @field_validator('volume')
+    @classmethod
+    def validate_volume(cls, v):
+        """取引量の妥当性を検証"""
+        if v < 0:
+            raise ValueError(f"Invalid volume: {v}")
+        return v
 
 
 class Bar(BaseModel):
@@ -79,39 +103,66 @@ class TickToBarConverter:
         Returns:
             完成したバー（完成していない場合はNone）
         """
-        # ティック欠損を検知
-        self.check_tick_gap(tick.time)
+        try:
+            # タイムスタンプ逆転チェック
+            if self.last_tick_time and tick.time < self.last_tick_time:
+                error_data = {
+                    "event": "timestamp_reversal",
+                    "symbol": self.symbol,
+                    "current_time": tick.time.isoformat(),
+                    "last_tick_time": self.last_tick_time.isoformat()
+                }
+                self.logger.error(json.dumps(error_data))
+                return None
 
-        # 現在のバーがない場合は新規作成
-        if self.current_bar is None:
-            self._create_new_bar(tick)
-            self.last_tick_time = tick.time
-            return None
+            # ティック欠損を検知
+            self.check_tick_gap(tick.time)
 
-        # バー完成判定
-        if self._check_bar_completion(tick.time):
-            # 現在のバーを完成させる
-            self.current_bar.is_complete = True
-            self.completed_bars.append(self.current_bar)
+            # 現在のバーがない場合は新規作成
+            if self.current_bar is None:
+                self._create_new_bar(tick)
+                self.last_tick_time = tick.time
+                return None
 
-            # コールバック実行
-            if self.on_bar_complete:
-                self.on_bar_complete(self.current_bar)
+            # バー完成判定
+            if self._check_bar_completion(tick.time):
+                # 現在のバーを完成させる
+                self.current_bar.is_complete = True
+                self.completed_bars.append(self.current_bar)
 
-            completed_bar = self.current_bar
+                # コールバック実行
+                if self.on_bar_complete:
+                    self.on_bar_complete(self.current_bar)
 
-            # 新しいバーを作成
-            self._create_new_bar(tick)
+                completed_bar = self.current_bar
 
-            # 最後のティック時刻を更新
-            self.last_tick_time = tick.time
+                # 新しいバーを作成
+                self._create_new_bar(tick)
 
-            return completed_bar
-        else:
-            # 現在のバーを更新
-            self._update_bar(tick)
-            # 最後のティック時刻を更新
-            self.last_tick_time = tick.time
+                # 最後のティック時刻を更新
+                self.last_tick_time = tick.time
+
+                return completed_bar
+            else:
+                # 現在のバーを更新
+                self._update_bar(tick)
+                # 最後のティック時刻を更新
+                self.last_tick_time = tick.time
+                return None
+
+        except ValidationError as e:
+            error_data = {
+                "event": "invalid_tick_data",
+                "symbol": self.symbol,
+                "error": str(e),
+                "tick_data": {
+                    "time": tick.time.isoformat() if tick.time else None,
+                    "bid": str(tick.bid) if tick.bid else None,
+                    "ask": str(tick.ask) if tick.ask else None,
+                    "volume": str(tick.volume) if tick.volume else None
+                }
+            }
+            self.logger.error(json.dumps(error_data))
             return None
 
     def get_current_bar(self) -> Bar | None:
@@ -140,7 +191,7 @@ class TickToBarConverter:
             設定済みのロガー
         """
         logger = logging.getLogger(f"TickToBarConverter.{self.symbol}")
-        logger.setLevel(logging.WARNING)
+        logger.setLevel(logging.WARNING)  # WARNING以上のレベル（WARNING, ERROR, CRITICAL）を出力
 
         # JSONフォーマットのハンドラー設定（既存のハンドラーがない場合のみ）
         if not logger.handlers:

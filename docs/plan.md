@@ -277,7 +277,7 @@ Step 4では、既に実装済みの`get_current_bar()`メソッドの動作確�
 - ✅ 既存実装で全てのテストが正常動作
 - ✅ エッジケースも適切に処理
 
-#### Step 5 実装詳細（現在作業中）
+#### Step 5 実装詳細（完了）
 
 ##### 実装対象
 ティック欠損検知と警告機能を追加し、30秒以上のギャップがある場合に構造化ログで警告を出力します。
@@ -381,3 +381,213 @@ def add_tick(self, tick: Tick) -> Bar | None:
 - JSON形式で構造化ログを出力
 - テストではunittest.mockを使用してログ出力を検証
 - 欠損検知は非破壊的（警告のみ、処理は継続）
+
+#### Step 6 実装詳細（現在作業中）
+
+##### 実装対象
+エッジケースとエラーハンドリングを強化し、無効なデータやタイムスタンプ逆転に対処します。
+
+##### 1. Tickモデルのバリデーション強化
+```python
+from pydantic import field_validator
+
+class Tick(BaseModel):
+    """ティックデータモデル（バリデーション強化版）"""
+    symbol: str
+    time: datetime
+    bid: Decimal
+    ask: Decimal
+    volume: Decimal
+    
+    @field_validator('bid', 'ask')
+    @classmethod
+    def validate_prices(cls, v: Decimal, info) -> Decimal:
+        """価格のバリデーション"""
+        if v is None:
+            raise ValueError(f"{info.field_name} cannot be None")
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be positive, got {v}")
+        return v
+    
+    @field_validator('ask')
+    @classmethod
+    def validate_spread(cls, v: Decimal, info) -> Decimal:
+        """スプレッドのバリデーション"""
+        bid = info.data.get('bid')
+        if bid is not None and v < bid:
+            raise ValueError(f"Ask ({v}) cannot be less than bid ({bid})")
+        return v
+    
+    @field_validator('volume')
+    @classmethod
+    def validate_volume(cls, v: Decimal) -> Decimal:
+        """ボリュームのバリデーション"""
+        if v < 0:
+            raise ValueError(f"Volume must be non-negative, got {v}")
+        return v
+```
+
+##### 2. タイムスタンプ逆転検知の実装
+```python
+def add_tick(self, tick: Tick) -> Bar | None:
+    """ティックを追加（エラーハンドリング強化版）"""
+    try:
+        # バリデーション（Pydanticが自動実行）
+        # タイムスタンプ逆転チェック
+        if self.last_tick_time and tick.time < self.last_tick_time:
+            log_data = {
+                "event": "timestamp_reversal_detected",
+                "level": "ERROR",
+                "symbol": self.symbol,
+                "current_tick_time": tick.time.isoformat(),
+                "last_tick_time": self.last_tick_time.isoformat(),
+                "reversal_seconds": (self.last_tick_time - tick.time).total_seconds()
+            }
+            self.logger.error(json.dumps(log_data))
+            return None  # ティックを破棄
+        
+        # 欠損検知（既存）
+        self.check_tick_gap(tick)
+        
+        # 通常のバー処理（既存）
+        bar_start = self._get_bar_start_time(tick.time)
+        completed_bar = None
+        
+        # ... バー処理ロジック ...
+        
+        self.last_tick_time = tick.time
+        return completed_bar
+        
+    except ValidationError as e:
+        # バリデーションエラーのログ出力
+        log_data = {
+            "event": "invalid_tick_data",
+            "level": "ERROR",
+            "symbol": self.symbol,
+            "error": str(e),
+            "tick_time": tick.time.isoformat() if hasattr(tick, 'time') else None
+        }
+        self.logger.error(json.dumps(log_data))
+        return None  # ティックを破棄
+```
+
+##### 3. ロガー設定の更新
+```python
+def _setup_logger(self) -> logging.Logger:
+    """構造化ログのためのロガー設定（ERROR追加）"""
+    logger = logging.getLogger(f"TickToBarConverter.{self.symbol}")
+    logger.setLevel(logging.DEBUG)  # ERRORもキャッチ
+    
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    
+    return logger
+```
+
+##### 4. 既存テストの有効化
+- **test_bid_ask_spread_tracking**:
+  - avg_spreadプロパティの累積平均計算を検証
+  - 複数ティックでのスプレッド追跡を確認
+  - skipマーク削除
+
+- **test_bar_completion_callback**:
+  - バー完成時のコールバック実行を検証
+  - on_bar_completeが正しく呼ばれることを確認
+  - skipマーク削除
+
+##### 5. 新規テストケースの追加
+```python
+def test_invalid_price_handling():
+    """負の価格やゼロ価格の処理テスト"""
+    converter = TickToBarConverter("EURUSD")
+    
+    # 負の価格
+    with pytest.raises(ValidationError):
+        tick = Tick(
+            symbol="EURUSD",
+            time=datetime(2025, 8, 21, 12, 0, 0),
+            bid=Decimal("-1.1234"),
+            ask=Decimal("1.1236"),
+            volume=Decimal("1.0")
+        )
+    
+    # ゼロ価格
+    with pytest.raises(ValidationError):
+        tick = Tick(
+            symbol="EURUSD",
+            time=datetime(2025, 8, 21, 12, 0, 0),
+            bid=Decimal("0"),
+            ask=Decimal("1.1236"),
+            volume=Decimal("1.0")
+        )
+
+def test_timestamp_reversal_handling(caplog):
+    """タイムスタンプ逆転の処理テスト"""
+    converter = TickToBarConverter("EURUSD")
+    
+    # 正常なティック
+    tick1 = create_test_tick(datetime(2025, 8, 21, 12, 0, 30))
+    converter.add_tick(tick1)
+    
+    # 過去のタイムスタンプのティック
+    tick2 = create_test_tick(datetime(2025, 8, 21, 12, 0, 10))
+    result = converter.add_tick(tick2)
+    
+    assert result is None  # ティックが破棄される
+    assert "timestamp_reversal_detected" in caplog.text
+    assert converter.current_bar.tick_count == 1  # カウントが増えない
+
+def test_invalid_spread_handling():
+    """異常スプレッド（ask < bid）の処理テスト"""
+    with pytest.raises(ValidationError) as exc_info:
+        tick = Tick(
+            symbol="EURUSD",
+            time=datetime(2025, 8, 21, 12, 0, 0),
+            bid=Decimal("1.1236"),
+            ask=Decimal("1.1234"),  # bid > ask
+            volume=Decimal("1.0")
+        )
+    assert "Ask" in str(exc_info.value)
+    assert "cannot be less than bid" in str(exc_info.value)
+
+def test_zero_volume_handling():
+    """ゼロボリュームの処理テスト"""
+    # ゼロボリュームは許可される
+    tick = Tick(
+        symbol="EURUSD",
+        time=datetime(2025, 8, 21, 12, 0, 0),
+        bid=Decimal("1.1234"),
+        ask=Decimal("1.1236"),
+        volume=Decimal("0")  # ゼロは許可
+    )
+    assert tick.volume == Decimal("0")
+    
+    # 負のボリュームは拒否
+    with pytest.raises(ValidationError):
+        tick = Tick(
+            symbol="EURUSD",
+            time=datetime(2025, 8, 21, 12, 0, 0),
+            bid=Decimal("1.1234"),
+            ask=Decimal("1.1236"),
+            volume=Decimal("-1.0")
+        )
+```
+
+##### 6. 実装手順
+1. Tickモデルにfield_validatorを追加
+2. ロガー設定をDEBUGレベルに変更（ERRORもキャッチ）
+3. add_tick()にtry-except追加とタイムスタンプ逆転検知
+4. pydantic.ValidationErrorのインポート追加
+5. test_bid_ask_spread_trackingのskipマーク削除
+6. test_bar_completion_callbackのskipマーク削除
+7. 新規テストケース4つを追加
+8. テスト実行（15 tests passed目標）
+
+##### 技術的考慮事項
+- ValidationErrorは自動的に発生（Pydanticの機能）
+- エラー時もアプリケーションは継続（非破壊的）
+- 構造化ログでデバッグしやすい
+- タイムスタンプ逆転は実際のMT5データで発生する可能性あり

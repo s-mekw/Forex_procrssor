@@ -11,7 +11,7 @@ from decimal import Decimal
 import pytest
 
 # 実装されたモジュールをインポート
-from src.mt5_data_acquisition.tick_to_bar import Bar, Tick, TickToBarConverter
+from src.mt5_data_acquisition.tick_to_bar import Tick, TickToBarConverter
 
 
 class TestTickToBarConverter:
@@ -215,13 +215,13 @@ class TestTickToBarConverter:
     def test_volume_aggregation(self, converter, sample_ticks):
         """ボリューム集計の正確性テスト"""
         total_volume = Decimal("0")
-        
+
         # ティックを追加してボリュームを集計
         for tick_data in sample_ticks[:4]:
             tick = Tick(**tick_data)
             converter.add_tick(tick)
             total_volume += tick.volume
-        
+
         # 現在のバーのボリュームを確認
         current_bar = converter.get_current_bar()
         assert current_bar.volume == total_volume
@@ -229,12 +229,12 @@ class TestTickToBarConverter:
     def test_tick_gap_warning(self, converter, caplog):
         """ティック欠損検知のテスト"""
         import logging
-        
+
         # ログレベルをWARNINGに設定
         caplog.set_level(logging.WARNING)
-        
+
         base_time = datetime(2025, 1, 20, 10, 0, 0)
-        
+
         # 最初のティック
         tick1 = Tick(
             symbol="EURUSD",
@@ -244,7 +244,7 @@ class TestTickToBarConverter:
             volume=Decimal("1.0")
         )
         converter.add_tick(tick1)
-        
+
         # 30秒以上後のティック（ギャップあり）
         tick2 = Tick(
             symbol="EURUSD",
@@ -254,7 +254,7 @@ class TestTickToBarConverter:
             volume=Decimal("1.0")
         )
         converter.add_tick(tick2)
-        
+
         # 警告ログが出力されたことを確認
         assert len(caplog.records) == 1
         assert caplog.records[0].levelname == "WARNING"
@@ -263,56 +263,149 @@ class TestTickToBarConverter:
 
     def test_bid_ask_spread_tracking(self, converter):
         """Bid/Askスプレッドの追跡テスト"""
-        # 実装後にコメントを外す
-        # base_time = datetime(2025, 1, 20, 10, 0, 0)
-        #
-        # tick = Tick(
-        #     symbol="EURUSD",
-        #     time=base_time,
-        #     bid=Decimal("1.04200"),
-        #     ask=Decimal("1.04210"),
-        #     volume=Decimal("1.0")
-        # )
-        # converter.add_tick(tick)
-        #
-        # current_bar = converter.get_current_bar()
-        # # スプレッド情報が保持されているか確認
-        # assert hasattr(current_bar, 'avg_spread') or hasattr(current_bar, 'spreads')
-        pytest.skip("TickToBarConverter not implemented yet")
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        tick = Tick(
+            symbol="EURUSD",
+            time=base_time,
+            bid=Decimal("1.04200"),
+            ask=Decimal("1.04210"),
+            volume=Decimal("1.0")
+        )
+        converter.add_tick(tick)
+
+        current_bar = converter.get_current_bar()
+        # スプレッド情報が保持されているか確認
+        assert hasattr(current_bar, 'avg_spread')
+        assert current_bar.avg_spread == Decimal("0.00010")
 
     def test_bar_completion_callback(self, converter):
         """バー完成時のコールバック機能テスト"""
-        # 実装後にコメントを外す
-        # # コールバック関数のモック
-        # callback = Mock()
-        # converter.on_bar_complete = callback
-        #
-        # base_time = datetime(2025, 1, 20, 10, 0, 0)
-        #
-        # # 1分内のティック
-        # for second in [0, 15, 30, 45]:
-        #     tick = Tick(
-        #         symbol="EURUSD",
-        #         time=base_time + timedelta(seconds=second),
-        #         bid=Decimal("1.04200"),
-        #         ask=Decimal("1.04210"),
-        #         volume=Decimal("1.0")
-        #     )
-        #     converter.add_tick(tick)
-        #
-        # # コールバックはまだ呼ばれていない
-        # callback.assert_not_called()
-        #
-        # # 次の分のティックで完成
-        # next_tick = Tick(
-        #     symbol="EURUSD",
-        #     time=base_time + timedelta(seconds=60),
-        #     bid=Decimal("1.04200"),
-        #     ask=Decimal("1.04210"),
-        #     volume=Decimal("1.0")
-        # )
-        # converter.add_tick(next_tick)
-        #
-        # # コールバックが呼ばれたことを確認
-        # callback.assert_called_once()
-        pytest.skip("TickToBarConverter not implemented yet")
+        from unittest.mock import Mock
+
+        # コールバック関数のモック
+        callback = Mock()
+        converter.on_bar_complete = callback
+
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # 1分内のティック
+        for second in [0, 15, 30, 45]:
+            tick = Tick(
+                symbol="EURUSD",
+                time=base_time + timedelta(seconds=second),
+                bid=Decimal("1.04200"),
+                ask=Decimal("1.04210"),
+                volume=Decimal("1.0")
+            )
+            converter.add_tick(tick)
+
+        # コールバックはまだ呼ばれていない
+        callback.assert_not_called()
+
+        # 次の分のティックで完成
+        next_tick = Tick(
+            symbol="EURUSD",
+            time=base_time + timedelta(seconds=60),
+            bid=Decimal("1.04200"),
+            ask=Decimal("1.04210"),
+            volume=Decimal("1.0")
+        )
+        converter.add_tick(next_tick)
+
+        # コールバックが呼ばれたことを確認
+        callback.assert_called_once()
+
+    def test_invalid_price_handling(self, converter, caplog):
+        """負の価格の処理テスト"""
+        import logging
+
+        from pydantic import ValidationError
+
+        # ログレベルをERRORに設定
+        caplog.set_level(logging.ERROR)
+
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # 負の価格を持つ無効なティック
+        with pytest.raises(ValidationError):
+            Tick(
+                symbol="EURUSD",
+                time=base_time,
+                bid=Decimal("-1.04200"),  # 負の価格
+                ask=Decimal("1.04210"),
+                volume=Decimal("1.0")
+            )
+
+    def test_timestamp_reversal_handling(self, converter, caplog):
+        """タイムスタンプ逆転の処理テスト"""
+        import logging
+
+        # ログレベルをERRORに設定
+        caplog.set_level(logging.ERROR)
+
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # 最初のティック
+        tick1 = Tick(
+            symbol="EURUSD",
+            time=base_time,
+            bid=Decimal("1.04200"),
+            ask=Decimal("1.04210"),
+            volume=Decimal("1.0")
+        )
+        converter.add_tick(tick1)
+
+        # 過去のタイムスタンプを持つティック
+        tick2 = Tick(
+            symbol="EURUSD",
+            time=base_time - timedelta(seconds=10),  # 10秒前
+            bid=Decimal("1.04220"),
+            ask=Decimal("1.04230"),
+            volume=Decimal("1.0")
+        )
+        result = converter.add_tick(tick2)
+
+        # ティックは破棄されてNoneが返る
+        assert result is None
+
+        # エラーログが出力されたことを確認
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelname == "ERROR"
+        assert "timestamp_reversal" in caplog.records[0].message
+
+        # 現在のバーは最初のティックのまま
+        current_bar = converter.get_current_bar()
+        assert current_bar.tick_count == 1
+
+    def test_zero_price_handling(self, converter):
+        """ゼロ価格の処理テスト"""
+        from pydantic import ValidationError
+
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # ゼロ価格を持つ無効なティック
+        with pytest.raises(ValidationError):
+            Tick(
+                symbol="EURUSD",
+                time=base_time,
+                bid=Decimal("0"),  # ゼロ価格
+                ask=Decimal("1.04210"),
+                volume=Decimal("1.0")
+            )
+
+    def test_invalid_spread_handling(self, converter):
+        """ask < bidの処理テスト"""
+        from pydantic import ValidationError
+
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # ask < bidの無効なスプレッド
+        with pytest.raises(ValidationError):
+            Tick(
+                symbol="EURUSD",
+                time=base_time,
+                bid=Decimal("1.04220"),
+                ask=Decimal("1.04210"),  # ask < bid
+                volume=Decimal("1.0")
+            )
