@@ -8,6 +8,9 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+UTC = ZoneInfo('UTC')
 from decimal import Decimal
 from typing import Dict, List, Any
 from collections import defaultdict
@@ -73,7 +76,7 @@ class MultiSymbolConverter:
         self.global_stats = {
             "total_ticks": 0,
             "total_bars": 0,
-            "start_time": datetime.now(),
+            "start_time": datetime.now(UTC),
             "cpu_percent": 0.0,
             "memory_mb": 0.0
         }
@@ -98,17 +101,22 @@ class MultiSymbolConverter:
         
         return callback
     
-    def process_tick(self, symbol: str, tick_data: dict):
+    def process_tick(self, symbol: str, tick_data):
         """特定シンボルのティックを処理"""
         try:
-            # ティック作成
-            tick = Tick(
-                symbol=tick_data["symbol"],
-                timestamp=tick_data.get("timestamp", tick_data.get("time")),
-                bid=float(tick_data["bid"]),
-                ask=float(tick_data["ask"]),
-                volume=float(tick_data.get("volume", 1.0))
-            )
+            # Tickオブジェクトかdictかを判定
+            if hasattr(tick_data, 'symbol'):
+                # Tickオブジェクトの場合、そのまま使用
+                tick = tick_data
+            else:
+                # 辞書の場合、Tickオブジェクトを作成
+                tick = Tick(
+                    symbol=tick_data["symbol"],
+                    timestamp=tick_data.get("timestamp", tick_data.get("time")),
+                    bid=float(tick_data["bid"]),
+                    ask=float(tick_data["ask"]),
+                    volume=float(tick_data.get("volume", 1.0))
+                )
             
             # ギャップ検出
             gap = self.converters[symbol].check_tick_gap(tick.timestamp)
@@ -136,7 +144,7 @@ class MultiSymbolConverter:
             self.global_stats["memory_mb"] = memory_info.rss / 1024 / 1024
             
             # レート計算
-            elapsed = (datetime.now() - self.global_stats["start_time"]).total_seconds()
+            elapsed = (datetime.now(UTC) - self.global_stats["start_time"]).total_seconds()
             if elapsed > 0:
                 for symbol in self.symbols:
                     self.stats[symbol]["tick_rate"] = self.stats[symbol]["ticks"] / elapsed
@@ -171,7 +179,7 @@ class MultiSymbolConverter:
             
             # ステータス
             if stat["last_tick_time"]:
-                age = (datetime.now() - stat["last_tick_time"]).total_seconds()
+                age = (datetime.now(UTC) - stat["last_tick_time"]).total_seconds()
                 if age < 2:
                     status = "[green]Active[/green]"
                 elif age < 10:
@@ -231,7 +239,7 @@ class MultiSymbolConverter:
     
     def create_performance_panel(self) -> Panel:
         """パフォーマンスパネル"""
-        elapsed = (datetime.now() - self.global_stats["start_time"]).total_seconds()
+        elapsed = (datetime.now(UTC) - self.global_stats["start_time"]).total_seconds()
         
         lines = []
         lines.append(f"[bold]System Performance:[/bold]")
