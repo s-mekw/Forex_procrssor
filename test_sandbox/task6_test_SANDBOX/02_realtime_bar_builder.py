@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from decimal import Decimal
 from typing import Optional, Dict, List
 from collections import deque
@@ -75,7 +75,7 @@ class RealtimeBarBuilder:
         
         # アラート追加
         self.alerts.append({
-            'timestamp': format_timestamp(datetime.now()),
+            'timestamp': format_timestamp(datetime.now(UTC)),
             'level': 'INFO',
             'message': f'Bar completed: {format_timestamp(bar.time)} - {format_timestamp(bar.end_time)}'
         })
@@ -106,7 +106,7 @@ class RealtimeBarBuilder:
                 self.max_gap_seconds = max(self.max_gap_seconds, gap)
                 
                 self.alerts.append({
-                    'timestamp': format_timestamp(datetime.now()),
+                    'timestamp': format_timestamp(datetime.now(UTC)),
                     'level': 'WARNING',
                     'message': f'Gap detected: {gap:.1f} seconds'
                 })
@@ -129,7 +129,7 @@ class RealtimeBarBuilder:
             
         except Exception as e:
             self.alerts.append({
-                'timestamp': format_timestamp(datetime.now()),
+                'timestamp': format_timestamp(datetime.now(UTC)),
                 'level': 'ERROR',
                 'message': f'Error: {str(e)}'
             })
@@ -149,7 +149,7 @@ class RealtimeBarBuilder:
         lines.append(f"  End:   {format_timestamp(current_bar.end_time)}")
         
         # カウントダウン
-        now = datetime.now()
+        now = datetime.now(UTC)
         if now < current_bar.end_time:
             remaining = (current_bar.end_time - now).total_seconds()
             lines.append(f"  [yellow]Remaining: {int(remaining)}s[/yellow]")
