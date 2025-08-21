@@ -382,7 +382,7 @@ def add_tick(self, tick: Tick) -> Bar | None:
 - テストではunittest.mockを使用してログ出力を検証
 - 欠損検知は非破壊的（警告のみ、処理は継続）
 
-#### Step 6 実装詳細（現在作業中）
+#### Step 6 実装詳細（完了）
 
 ##### 実装対象
 エッジケースとエラーハンドリングを強化し、無効なデータやタイムスタンプ逆転に対処します。
@@ -591,3 +591,209 @@ def test_zero_volume_handling():
 - エラー時もアプリケーションは継続（非破壊的）
 - 構造化ログでデバッグしやすい
 - タイムスタンプ逆転は実際のMT5データで発生する可能性あり
+
+#### Step 7 実装詳細（現在作業中）
+
+##### 実装対象
+統合テストとパフォーマンステストを作成し、コードの最適化とドキュメント改善を行います。
+
+##### 1. 統合テストファイルの構成
+```python
+# tests/integration/test_tick_to_bar_integration.py
+
+import time
+import pytest
+from datetime import datetime, timedelta
+from decimal import Decimal
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
+
+class TestTickToBarIntegration:
+    """統合テストクラス"""
+    
+    def test_continuous_tick_stream(self):
+        """連続的なティックストリーム処理"""
+        # 5分間の連続ティックを生成（1秒ごと）
+        # 5つのバーが生成されることを確認
+        
+    def test_market_gap_handling(self):
+        """市場時間外のギャップ処理（週末シミュレーション）"""
+        # 金曜日の最終ティック→月曜日の最初のティック
+        # 適切に警告が出力され、処理が継続することを確認
+        
+    def test_high_frequency_ticks(self):
+        """高頻度ティック処理（1秒間に10ティック）"""
+        # 同一秒内での複数ティック処理
+        # OHLCVが正しく更新されることを確認
+        
+    def test_callback_chain(self):
+        """バー完成通知の連鎖処理"""
+        # バー完成時のコールバックが連続して呼ばれることを確認
+        # 複数のリスナーへの通知をシミュレート
+```
+
+##### 2. パフォーマンステストの実装
+```python
+class TestPerformance:
+    """パフォーマンステストクラス"""
+    
+    def test_large_tick_volume(self):
+        """大量ティック処理のパフォーマンス"""
+        converter = TickToBarConverter("EURUSD")
+        start_time = datetime(2025, 8, 21, 9, 0, 0)
+        
+        # 10,000ティックを生成（約2.7時間分）
+        ticks = []
+        current_time = start_time
+        for i in range(10000):
+            tick = Tick(
+                symbol="EURUSD",
+                time=current_time,
+                bid=Decimal("1.1234") + Decimal(str(i % 100)) / Decimal("10000"),
+                ask=Decimal("1.1236") + Decimal(str(i % 100)) / Decimal("10000"),
+                volume=Decimal("1.0")
+            )
+            ticks.append(tick)
+            current_time += timedelta(seconds=1)
+        
+        # 処理時間測定
+        start = time.perf_counter()
+        for tick in ticks:
+            converter.add_tick(tick)
+        elapsed = time.perf_counter() - start
+        
+        # アサーション
+        assert elapsed < 1.0  # 1秒以内に処理完了
+        assert len(converter.completed_bars) == 166  # 166バー生成（10000秒 / 60）
+        print(f"Processed 10,000 ticks in {elapsed:.3f} seconds")
+        print(f"Throughput: {10000 / elapsed:.0f} ticks/second")
+    
+    def test_memory_usage(self):
+        """メモリ使用量の測定"""
+        import tracemalloc
+        
+        tracemalloc.start()
+        converter = TickToBarConverter("EURUSD")
+        
+        # 1時間分のティックデータ（3600ティック）
+        start_time = datetime(2025, 8, 21, 9, 0, 0)
+        for i in range(3600):
+            tick = Tick(
+                symbol="EURUSD",
+                time=start_time + timedelta(seconds=i),
+                bid=Decimal("1.1234"),
+                ask=Decimal("1.1236"),
+                volume=Decimal("1.0")
+            )
+            converter.add_tick(tick)
+        
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        
+        # メモリ使用量をMBで表示
+        print(f"Current memory usage: {current / 1024 / 1024:.2f} MB")
+        print(f"Peak memory usage: {peak / 1024 / 1024:.2f} MB")
+        
+        # 10MB以下であることを確認
+        assert peak / 1024 / 1024 < 10
+```
+
+##### 3. コード最適化の検討
+```python
+# src/mt5_data_acquisition/tick_to_bar.py への改善案
+
+class TickToBarConverter:
+    def __init__(self, symbol: str, timeframe: int = 60, 
+                 on_bar_complete: Callable[[Bar], None] | None = None,
+                 max_completed_bars: int = 1000):  # メモリ管理用
+        """
+        Args:
+            max_completed_bars: 保持する完成バーの最大数（メモリ管理）
+        """
+        self.max_completed_bars = max_completed_bars
+        # ... 既存の初期化 ...
+    
+    def add_tick(self, tick: Tick) -> Bar | None:
+        """改善版: メモリ管理を追加"""
+        # ... 既存の処理 ...
+        
+        # メモリ管理: 古いバーを削除
+        if len(self.completed_bars) > self.max_completed_bars:
+            # FIFOで古いバーを削除
+            self.completed_bars = self.completed_bars[-self.max_completed_bars:]
+        
+        return completed_bar
+    
+    def clear_completed_bars(self) -> list[Bar]:
+        """完成したバーをクリアして返す（メモリ解放用）"""
+        bars = self.completed_bars.copy()
+        self.completed_bars.clear()
+        return bars
+```
+
+##### 4. ドキュメント改善案
+```python
+class TickToBarConverter:
+    """ティックデータを時系列バー（OHLCV）に変換するコンバーター
+    
+    このクラスはリアルタイムのティックデータを受け取り、
+    指定された時間枠（デフォルト1分）のOHLCVバーに変換します。
+    
+    Features:
+        - リアルタイムティック処理
+        - 未完成バーの継続更新
+        - ティック欠損検知（30秒以上）
+        - エラーハンドリング（無効データ、タイムスタンプ逆転）
+        - バー完成時のコールバック通知
+    
+    Example:
+        >>> converter = TickToBarConverter("EURUSD")
+        >>> converter.on_bar_complete = lambda bar: print(f"Bar completed: {bar}")
+        >>> 
+        >>> tick = Tick(
+        ...     symbol="EURUSD",
+        ...     time=datetime.now(),
+        ...     bid=Decimal("1.1234"),
+        ...     ask=Decimal("1.1236"),
+        ...     volume=Decimal("1.0")
+        ... )
+        >>> completed_bar = converter.add_tick(tick)
+        >>> 
+        >>> # 未完成バーの取得
+        >>> current_bar = converter.get_current_bar()
+        >>> if current_bar:
+        ...     print(f"Current bar: {current_bar}")
+    
+    Attributes:
+        symbol: 処理対象の通貨ペア
+        timeframe: バーの時間枠（秒単位）
+        current_bar: 現在作成中のバー
+        completed_bars: 完成したバーのリスト
+        on_bar_complete: バー完成時のコールバック関数
+        last_tick_time: 最後に受信したティックの時刻
+        gap_threshold: ティック欠損警告の閾値（秒）
+    
+    Note:
+        - ティックは時間順に処理される必要があります
+        - タイムスタンプが逆転したティックは破棄されます
+        - 無効な価格データ（負値、ゼロ）は拒否されます
+    """
+```
+
+##### 5. 最終確認項目
+- [ ] 全テスト（unit + integration）がPASSED
+- [ ] Ruffチェックでエラーなし
+- [ ] 型ヒントの完全性（mypy互換）
+- [ ] パフォーマンス目標達成（10,000ティック/秒以上）
+- [ ] メモリ使用量が適切（10MB以下）
+- [ ] ドキュメントが十分
+
+##### 6. 実装手順
+1. tests/integration/ディレクトリの確認・作成
+2. test_tick_to_bar_integration.pyファイルの作成
+3. 基本的な統合テストの実装
+4. パフォーマンステストの実装
+5. メモリプロファイリングテストの実装
+6. 必要に応じてコード最適化
+7. ドキュメントストリングの改善
+8. 最終的なRuffチェック
+9. 全テスト実行と確認

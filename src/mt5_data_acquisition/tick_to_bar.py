@@ -65,7 +65,52 @@ class Bar(BaseModel):
 
 
 class TickToBarConverter:
-    """ティックデータをバーデータに変換するコンバーター"""
+    """ティックデータを時系列バー（OHLCV）に変換するコンバーター
+    
+    このクラスはリアルタイムのティックデータを受け取り、
+    指定された時間枠（デフォルト1分）のOHLCVバーに変換します。
+    
+    Features:
+        - リアルタイムティック処理
+        - 未完成バーの継続更新
+        - ティック欠損検知（デフォルト30秒以上）
+        - エラーハンドリング（無効データ、タイムスタンプ逆転）
+        - バー完成時のコールバック通知
+        - メモリ管理（オプション）
+    
+    Example:
+        >>> converter = TickToBarConverter("EURUSD")
+        >>> converter.on_bar_complete = lambda bar: print(f"Bar completed: {bar}")
+        >>> 
+        >>> tick = Tick(
+        ...     symbol="EURUSD",
+        ...     time=datetime.now(),
+        ...     bid=Decimal("1.1234"),
+        ...     ask=Decimal("1.1236"),
+        ...     volume=Decimal("1.0")
+        ... )
+        >>> completed_bar = converter.add_tick(tick)
+        >>> 
+        >>> # 未完成バーの取得
+        >>> current_bar = converter.get_current_bar()
+        >>> if current_bar:
+        ...     print(f"Current bar: {current_bar}")
+    
+    Attributes:
+        symbol: 処理対象の通貨ペア
+        timeframe: バーの時間枠（秒単位）
+        current_bar: 現在作成中のバー
+        completed_bars: 完成したバーのリスト
+        on_bar_complete: バー完成時のコールバック関数
+        last_tick_time: 最後に受信したティックの時刻
+        gap_threshold: ティック欠損警告の閾値（秒）
+        max_completed_bars: 保持する完成バーの最大数
+    
+    Note:
+        - ティックは時間順に処理される必要があります
+        - タイムスタンプが逆転したティックは破棄されます
+        - 無効な価格データ（負値、ゼロ）は拒否されます
+    """
 
     def __init__(
         self,
@@ -73,6 +118,7 @@ class TickToBarConverter:
         timeframe: int = 60,
         on_bar_complete: Callable[[Bar], None] | None = None,
         gap_threshold: int = 30,
+        max_completed_bars: int | None = None,
     ):
         """
         初期化
@@ -82,11 +128,13 @@ class TickToBarConverter:
             timeframe: バーの時間枠（秒単位、デフォルト60秒=1分）
             on_bar_complete: バー完成時のコールバック関数
             gap_threshold: ティック欠損と判定する秒数（デフォルト30秒）
+            max_completed_bars: 保持する完成バーの最大数（Noneで無制限）
         """
         self.symbol = symbol
         self.timeframe = timeframe
         self.on_bar_complete = on_bar_complete
         self.gap_threshold = gap_threshold
+        self.max_completed_bars = max_completed_bars
         self.current_bar: Bar | None = None
         self.completed_bars: list[Bar] = []
         self._current_ticks: list[Tick] = []
@@ -136,6 +184,11 @@ class TickToBarConverter:
 
                 completed_bar = self.current_bar
 
+                # メモリ管理: 古いバーを削除
+                if self.max_completed_bars and len(self.completed_bars) > self.max_completed_bars:
+                    # FIFOで古いバーを削除（最新のmax_completed_bars個を保持）
+                    self.completed_bars = self.completed_bars[-self.max_completed_bars:]
+
                 # 新しいバーを作成
                 self._create_new_bar(tick)
 
@@ -182,6 +235,36 @@ class TickToBarConverter:
             完成したバーのリスト
         """
         return self.completed_bars
+
+    def clear_completed_bars(self) -> list[Bar]:
+        """
+        完成したバーをクリアして返す（メモリ解放用）
+        
+        バーのリストを外部に保存した後、メモリを解放したい場合に使用します。
+        
+        Returns:
+            クリア前の完成バーのリスト
+        
+        Example:
+            >>> # バーを外部に保存してメモリをクリア
+            >>> bars_to_save = converter.clear_completed_bars()
+            >>> database.save_bars(bars_to_save)
+        """
+        bars = self.completed_bars.copy()
+        self.completed_bars.clear()
+        return bars
+
+    def reset(self) -> None:
+        """
+        コンバーターをリセット
+        
+        現在のバー、完成したバー、ティック履歴をすべてクリアします。
+        設定（symbol、timeframe等）は保持されます。
+        """
+        self.current_bar = None
+        self.completed_bars.clear()
+        self._current_ticks.clear()
+        self.last_tick_time = None
 
     def _setup_logger(self) -> logging.Logger:
         """
