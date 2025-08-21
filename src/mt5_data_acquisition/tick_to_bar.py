@@ -11,41 +11,11 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError
 
-
-class Tick(BaseModel):
-    """ティックデータのモデル"""
-
-    symbol: str = Field(..., description="通貨ペア（例: EURUSD）")
-    time: datetime = Field(..., description="ティックのタイムスタンプ")
-    bid: Decimal = Field(..., description="Bid価格")
-    ask: Decimal = Field(..., description="Ask価格")
-    volume: Decimal = Field(..., description="取引量")
-
-    @field_validator('bid', 'ask')
-    @classmethod
-    def validate_price(cls, v, info):
-        """価格の妥当性を検証"""
-        if v is None or v <= 0:
-            raise ValueError(f"Invalid price: {v}")
-        return v
-
-    @field_validator('ask')
-    @classmethod
-    def validate_spread(cls, v, info):
-        """スプレッドの妥当性を検証（ask >= bid）"""
-        if 'bid' in info.data and v < info.data['bid']:
-            raise ValueError(f"Invalid spread: ask ({v}) < bid ({info.data['bid']})")
-        return v
-
-    @field_validator('volume')
-    @classmethod
-    def validate_volume(cls, v):
-        """取引量の妥当性を検証"""
-        if v < 0:
-            raise ValueError(f"Invalid volume: {v}")
-        return v
+# 共通のTickモデルとアダプターをインポート
+from src.common.models import Tick
+from src.mt5_data_acquisition.tick_adapter import TickAdapter
 
 
 class Bar(BaseModel):
@@ -66,10 +36,10 @@ class Bar(BaseModel):
 
 class TickToBarConverter:
     """ティックデータを時系列バー（OHLCV）に変換するコンバーター
-    
+
     このクラスはリアルタイムのティックデータを受け取り、
     指定された時間枠（デフォルト1分）のOHLCVバーに変換します。
-    
+
     Features:
         - リアルタイムティック処理
         - 未完成バーの継続更新
@@ -77,11 +47,11 @@ class TickToBarConverter:
         - エラーハンドリング（無効データ、タイムスタンプ逆転）
         - バー完成時のコールバック通知
         - メモリ管理（オプション）
-    
+
     Example:
         >>> converter = TickToBarConverter("EURUSD")
         >>> converter.on_bar_complete = lambda bar: print(f"Bar completed: {bar}")
-        >>> 
+        >>>
         >>> tick = Tick(
         ...     symbol="EURUSD",
         ...     time=datetime.now(),
@@ -90,12 +60,12 @@ class TickToBarConverter:
         ...     volume=Decimal("1.0")
         ... )
         >>> completed_bar = converter.add_tick(tick)
-        >>> 
+        >>>
         >>> # 未完成バーの取得
         >>> current_bar = converter.get_current_bar()
         >>> if current_bar:
         ...     print(f"Current bar: {current_bar}")
-    
+
     Attributes:
         symbol: 処理対象の通貨ペア
         timeframe: バーの時間枠（秒単位）
@@ -105,7 +75,7 @@ class TickToBarConverter:
         last_tick_time: 最後に受信したティックの時刻
         gap_threshold: ティック欠損警告の閾値（秒）
         max_completed_bars: 保持する完成バーの最大数
-    
+
     Note:
         - ティックは時間順に処理される必要があります
         - タイムスタンプが逆転したティックは破棄されます
@@ -153,27 +123,27 @@ class TickToBarConverter:
         """
         try:
             # タイムスタンプ逆転チェック
-            if self.last_tick_time and tick.time < self.last_tick_time:
+            if self.last_tick_time and tick.timestamp < self.last_tick_time:
                 error_data = {
                     "event": "timestamp_reversal",
                     "symbol": self.symbol,
-                    "current_time": tick.time.isoformat(),
-                    "last_tick_time": self.last_tick_time.isoformat()
+                    "current_time": tick.timestamp.isoformat(),
+                    "last_tick_time": self.last_tick_time.isoformat(),
                 }
                 self.logger.error(json.dumps(error_data))
                 return None
 
             # ティック欠損を検知
-            self.check_tick_gap(tick.time)
+            self.check_tick_gap(tick.timestamp)
 
             # 現在のバーがない場合は新規作成
             if self.current_bar is None:
                 self._create_new_bar(tick)
-                self.last_tick_time = tick.time
+                self.last_tick_time = tick.timestamp
                 return None
 
             # バー完成判定
-            if self._check_bar_completion(tick.time):
+            if self._check_bar_completion(tick.timestamp):
                 # 現在のバーを完成させる
                 self.current_bar.is_complete = True
                 self.completed_bars.append(self.current_bar)
@@ -185,22 +155,27 @@ class TickToBarConverter:
                 completed_bar = self.current_bar
 
                 # メモリ管理: 古いバーを削除
-                if self.max_completed_bars and len(self.completed_bars) > self.max_completed_bars:
+                if (
+                    self.max_completed_bars
+                    and len(self.completed_bars) > self.max_completed_bars
+                ):
                     # FIFOで古いバーを削除（最新のmax_completed_bars個を保持）
-                    self.completed_bars = self.completed_bars[-self.max_completed_bars:]
+                    self.completed_bars = self.completed_bars[
+                        -self.max_completed_bars :
+                    ]
 
                 # 新しいバーを作成
                 self._create_new_bar(tick)
 
                 # 最後のティック時刻を更新
-                self.last_tick_time = tick.time
+                self.last_tick_time = tick.timestamp
 
                 return completed_bar
             else:
                 # 現在のバーを更新
                 self._update_bar(tick)
                 # 最後のティック時刻を更新
-                self.last_tick_time = tick.time
+                self.last_tick_time = tick.timestamp
                 return None
 
         except ValidationError as e:
@@ -209,11 +184,11 @@ class TickToBarConverter:
                 "symbol": self.symbol,
                 "error": str(e),
                 "tick_data": {
-                    "time": tick.time.isoformat() if tick.time else None,
+                    "time": tick.timestamp.isoformat() if tick.timestamp else None,
                     "bid": str(tick.bid) if tick.bid else None,
                     "ask": str(tick.ask) if tick.ask else None,
-                    "volume": str(tick.volume) if tick.volume else None
-                }
+                    "volume": str(tick.volume) if tick.volume else None,
+                },
             }
             self.logger.error(json.dumps(error_data))
             return None
@@ -239,12 +214,12 @@ class TickToBarConverter:
     def clear_completed_bars(self) -> list[Bar]:
         """
         完成したバーをクリアして返す（メモリ解放用）
-        
+
         バーのリストを外部に保存した後、メモリを解放したい場合に使用します。
-        
+
         Returns:
             クリア前の完成バーのリスト
-        
+
         Example:
             >>> # バーを外部に保存してメモリをクリア
             >>> bars_to_save = converter.clear_completed_bars()
@@ -257,7 +232,7 @@ class TickToBarConverter:
     def reset(self) -> None:
         """
         コンバーターをリセット
-        
+
         現在のバー、完成したバー、ティック履歴をすべてクリアします。
         設定（symbol、timeframe等）は保持されます。
         """
@@ -274,7 +249,9 @@ class TickToBarConverter:
             設定済みのロガー
         """
         logger = logging.getLogger(f"TickToBarConverter.{self.symbol}")
-        logger.setLevel(logging.WARNING)  # WARNING以上のレベル（WARNING, ERROR, CRITICAL）を出力
+        logger.setLevel(
+            logging.WARNING
+        )  # WARNING以上のレベル（WARNING, ERROR, CRITICAL）を出力
 
         # JSONフォーマットのハンドラー設定（既存のハンドラーがない場合のみ）
         if not logger.handlers:
@@ -321,8 +298,11 @@ class TickToBarConverter:
         Args:
             tick: バーの最初のティック
         """
+        # 内部計算用にDecimal変換（精度保持）
+        tick_decimal = TickAdapter.to_decimal_dict(tick)
+
         # ティックの時刻を分単位に正規化（秒とマイクロ秒を0に）
-        bar_start = self._get_bar_start_time(tick.time)
+        bar_start = self._get_bar_start_time(tick.timestamp)
 
         # 終了時刻を計算（開始時刻 + 59.999999秒）
         bar_end = self._get_bar_end_time(bar_start)
@@ -332,13 +312,13 @@ class TickToBarConverter:
             symbol=self.symbol,
             time=bar_start,
             end_time=bar_end,
-            open=tick.bid,
-            high=tick.bid,
-            low=tick.bid,
-            close=tick.bid,
-            volume=tick.volume,
+            open=tick_decimal["bid"],
+            high=tick_decimal["bid"],
+            low=tick_decimal["bid"],
+            close=tick_decimal["bid"],
+            volume=tick_decimal["volume"],
             tick_count=1,
-            avg_spread=tick.ask - tick.bid,
+            avg_spread=tick_decimal["ask"] - tick_decimal["bid"],
             is_complete=False,
         )
 
@@ -355,15 +335,18 @@ class TickToBarConverter:
         if not self.current_bar:
             return
 
+        # 内部計算用にDecimal変換（精度保持）
+        tick_decimal = TickAdapter.to_decimal_dict(tick)
+
         # High/Lowの更新（max/min）
-        self.current_bar.high = max(self.current_bar.high, tick.bid)
-        self.current_bar.low = min(self.current_bar.low, tick.bid)
+        self.current_bar.high = max(self.current_bar.high, tick_decimal["bid"])
+        self.current_bar.low = min(self.current_bar.low, tick_decimal["bid"])
 
         # Closeを最新のティック価格に
-        self.current_bar.close = tick.bid
+        self.current_bar.close = tick_decimal["bid"]
 
         # ボリューム累積
-        self.current_bar.volume += tick.volume
+        self.current_bar.volume += tick_decimal["volume"]
 
         # ティックカウント増加
         self.current_bar.tick_count += 1
@@ -373,7 +356,7 @@ class TickToBarConverter:
             total_spread = self.current_bar.avg_spread * (
                 self.current_bar.tick_count - 1
             )
-            new_spread = tick.ask - tick.bid
+            new_spread = tick_decimal["ask"] - tick_decimal["bid"]
             self.current_bar.avg_spread = (
                 total_spread + new_spread
             ) / self.current_bar.tick_count

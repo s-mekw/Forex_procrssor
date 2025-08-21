@@ -1,9 +1,9 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: 2/6 ✅
-- 最終更新: 2025-08-21 14:30
-- フェーズ: 実装中（Step 2完了）
+- ステップ: 3/6 ✅
+- 最終更新: 2025-08-21 15:30
+- フェーズ: 実装中（Step 3完了）
 
 ## 🎯 目標
 Tickモデルを統一し、プロジェクト全体で一貫性のあるデータモデルを実現する
@@ -42,11 +42,11 @@ Tickモデルを統一し、プロジェクト全体で一貫性のあるデー�
   - テストケース作成（12個）: 15分
   - 動作確認・調整: 5分
 
-### Step 3: TickToBarConverterの更新 ✅計画済み
+### Step 3: TickToBarConverterの更新 ✅完了
 - ファイル: src/mt5_data_acquisition/tick_to_bar.py
 - 作業: common.models.Tickを使用するよう変更
-- 完了: [ ]
-- 見積時間: 2時間
+- 完了: [x] 2025-08-21 15:30
+- 見積時間: 2時間（実績: 30分）
 
 ### Step 4: テストコードの移行 ✅計画済み
 - ファイル: tests/unit/test_tick_to_bar.py, tests/integration/test_tick_to_bar_integration.py
@@ -67,7 +67,179 @@ Tickモデルを統一し、プロジェクト全体で一貫性のあるデー�
 - 見積時間: 30分
 
 ## 🔄 現在の作業
-**次のアクション**: Step 2の実装（TickAdapterの作成）
+**次のアクション**: Step 4の実装（テストコードの移行）
+
+### Step 3 実装タスク（詳細計画）
+
+#### 3.0 事前確認
+- Step 1とStep 2が完了済み
+- TickAdapterが利用可能
+- 既存テストの現状を把握
+
+#### 3.1 変更概要
+**目的**: ローカルTickクラスを削除し、common.models.Tickを使用
+
+**主な変更点**:
+1. ローカルTickクラスの削除（17-49行目）
+2. インポートの変更
+3. 内部実装のDecimal/Float32ハイブリッド化
+4. timestamp属性の使用（timeプロパティは互換性のみ）
+
+#### 3.2 実装詳細
+
+##### 3.2.1 インポートの変更
+```python
+# 削除
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+# 追加
+from src.common.models import Tick
+from src.mt5_data_acquisition.tick_adapter import TickAdapter
+```
+
+##### 3.2.2 TickToBarConverterクラスの変更箇所
+
+**A. add_tick()メソッド（144-220行目）**
+```python
+def add_tick(self, tick: Tick) -> Bar | None:
+    # 変更点1: tick.time → tick.timestamp
+    # 変更点2: Decimal変換の追加（内部計算用）
+    
+    # タイムスタンプ逆転チェック
+    if self.last_tick_time and tick.timestamp < self.last_tick_time:
+        # ...
+    
+    # 内部計算用にDecimal変換（精度保持）
+    tick_decimal = TickAdapter.to_decimal_dict(tick)
+```
+
+**B. _create_new_bar()メソッド（317-346行目）**
+```python
+def _create_new_bar(self, tick: Tick) -> None:
+    # Decimal変換して内部計算
+    tick_decimal = TickAdapter.to_decimal_dict(tick)
+    
+    bar_start = self._get_bar_start_time(tick.timestamp)
+    bar_end = self._get_bar_end_time(bar_start)
+    
+    self.current_bar = Bar(
+        symbol=self.symbol,
+        time=bar_start,
+        end_time=bar_end,
+        open=tick_decimal['bid'],
+        high=tick_decimal['bid'],
+        low=tick_decimal['bid'],
+        close=tick_decimal['bid'],
+        volume=tick_decimal['volume'],
+        tick_count=1,
+        avg_spread=tick_decimal['ask'] - tick_decimal['bid'],
+        is_complete=False,
+    )
+```
+
+**C. _update_bar()メソッド（348-383行目）**
+```python
+def _update_bar(self, tick: Tick) -> None:
+    # Decimal変換して内部計算
+    tick_decimal = TickAdapter.to_decimal_dict(tick)
+    
+    # High/Lowの更新
+    self.current_bar.high = max(self.current_bar.high, tick_decimal['bid'])
+    self.current_bar.low = min(self.current_bar.low, tick_decimal['bid'])
+    
+    # Closeを最新のティック価格に
+    self.current_bar.close = tick_decimal['bid']
+    
+    # ボリューム累積
+    self.current_bar.volume += tick_decimal['volume']
+    
+    # スプレッド計算
+    new_spread = tick_decimal['ask'] - tick_decimal['bid']
+```
+
+##### 3.2.3 エラーハンドリングの調整
+- ValidationErrorの処理（206-219行目）
+- tick.time → tick.timestamp への変更
+- tick.bid/ask/volumeのアクセス方法は変更なし
+
+#### 3.3 テスト戦略
+
+##### 3.3.1 段階的テスト
+1. **Phase 1**: 変更後のユニットテストを実行
+   - `uv run pytest tests/unit/test_tick_to_bar.py -v`
+   - エラー箇所を特定
+
+2. **Phase 2**: テストの修正
+   - Tickインポートを変更
+   - time → timestamp への変更
+   - Decimal → float への変更
+
+3. **Phase 3**: 統合テストの実行
+   - `uv run pytest tests/integration/test_tick_to_bar_integration.py -v`
+
+##### 3.3.2 回帰テストリスト
+- [ ] test_converter_initialization
+- [ ] test_single_minute_bar_generation
+- [ ] test_timestamp_alignment
+- [ ] test_ohlc_calculation
+- [ ] test_volume_aggregation
+- [ ] test_spread_calculation
+- [ ] test_tick_gap_detection
+- [ ] test_timestamp_reversal_handling
+
+#### 3.4 リスク評価と対策
+
+##### リスク1: Decimal精度の維持
+- **対策**: TickAdapterを使用して内部計算はDecimalで実施
+- **検証**: 精度テストケースで確認
+
+##### リスク2: 既存テストの大量失敗
+- **対策**: テストも同時に修正（Step 4と並行作業）
+- **検証**: 各テストケースを個別に修正
+
+##### リスク3: パフォーマンス劣化
+- **対策**: 型変換のオーバーヘッドを測定
+- **検証**: ベンチマークテストを追加
+
+#### 3.5 実装順序（推奨）
+1. ローカルTickクラスをコメントアウト
+2. インポートを変更
+3. add_tick()メソッドを修正
+4. _create_new_bar()メソッドを修正
+5. _update_bar()メソッドを修正
+6. エラーハンドリングを調整
+7. ローカルTickクラスを削除
+8. テストを実行して動作確認
+
+#### 3.6 予想される問題と対処法
+
+##### 問題1: timeプロパティの使用箇所
+- **症状**: 一部のコードがtick.timeを使用している可能性
+- **対処**: common.models.Tickのtimeプロパティで後方互換性確保済み
+- **確認**: grep -r "tick\.time" src/
+
+##### 問題2: Decimal型の期待
+- **症状**: テストがDecimal型を期待している
+- **対処**: TickAdapterを使用して内部的にDecimal変換
+- **確認**: Barモデルの各フィールドがDecimal型であることを確認
+
+##### 問題3: バリデーションエラー
+- **症状**: Tick作成時のバリデーションエラー
+- **対処**: common.models.TickのFloat32制約を考慮
+- **確認**: 極端な値（very large/small）のテストケース
+
+##### 問題4: インポートエラー
+- **症状**: 循環インポートの可能性
+- **対処**: 相対インポートから絶対インポートへ
+- **確認**: import順序の調整
+
+#### 3.7 成功基準
+- ✅ tick_to_bar.pyのローカルTickクラスが削除されている
+- ✅ common.models.Tickが使用されている
+- ✅ 内部計算でDecimal精度が維持されている
+- ✅ 既存のテストが修正後も通る（Step 4と並行）
+- ✅ パフォーマンスの劣化が5%以内
+- ✅ メモリ使用量の増加が10%以内
 
 ### Step 2 実装タスク（詳細計画）
 
@@ -168,6 +340,17 @@ class TickAdapter:
   - Float32精度を考慮した変換ロジック実装
   - 既存のテスト（test_models.py）にも影響なし
 
+### Step 3 完了（2025-08-21 15:30）
+- ✅ ローカルTickクラスを削除し、common.models.Tickを使用
+- ✅ 全メソッドでtick.time → tick.timestampへの変更完了
+- ✅ TickAdapterによるDecimal精度の維持を実装
+- 📁 変更ファイル:
+  - `src/mt5_data_acquisition/tick_to_bar.py` - 更新（インポート変更、メソッド修正）
+- 📝 備考:
+  - add_tick(), _create_new_bar(), _update_bar()メソッドを修正
+  - 基本動作確認テストで正常動作を確認
+  - テストファイルの修正はStep 4で実施予定
+
 ## 📝 レビュー履歴
 
 ### 2025-08-21
@@ -223,10 +406,53 @@ class TickAdapter:
 #### 判定
 - ✅ **合格（条件付き）**: Step 2の実装は機能的に完璧。リントエラーを修正後、次のStep 3に進む
 
-### 修正後のコミット準備
-1. リントエラーの自動修正を実行
-2. 修正内容を確認
-3. 自動コミットを実行
+### コミット結果（Step 2）
+- **Hash**: 196223d
+- **Message**: feat: Step 2完了 - TickAdapterクラスの実装
+- **変更内容**:
+  - src/mt5_data_acquisition/tick_adapter.py: 新規作成（77行）
+  - tests/unit/test_tick_adapter.py: 新規テストファイル作成（267行）
+  - リントエラー修正（フォーマット適用済み）
+  - docs/context.md, docs/plan.md: ドキュメント更新
+
+### Step 3 実装レビュー（2025-08-21 16:00）
+
+#### 良い点
+- ✅ **ローカルTickクラスの完全削除**: 17-49行目のローカルTickクラスが適切に削除された
+- ✅ **正確なインポート変更**: common.models.TickとTickAdapterが正しくインポートされている
+- ✅ **全メソッドでの属性名変更**: tick.time → tick.timestampへの変更が漏れなく実施
+  - add_tick()メソッド: 126, 137, 143, 167, 171, 173行目
+  - check_tick_gap(): 明示的な変更完了
+  - _create_new_bar(): 298行目でtick.timestampを使用
+- ✅ **TickAdapterの適切な使用**: 内部計算でDecimal精度を維持
+  - _create_new_bar(): 295行目でto_decimal_dict()使用
+  - _update_bar(): 332行目でto_decimal_dict()使用
+- ✅ **基本動作の確認**: テストコードで正常動作を確認
+  - OHLC計算が正確（High: 1.1240, Low: 1.1230）
+  - ボリューム集計が正確（5.5）
+  - タイムスタンプ逆転処理が正常
+- ✅ **リントエラーの修正**: 全12個のフォーマット問題を自動修正済み
+
+#### 改善点
+- ⚠️ **テストの未修正**: tests/unit/test_tick_to_bar.pyがまだローカルTickをインポート
+  - 優先度: 高（Step 4で対応予定）
+  - 現状: 15テスト中10個が失敗（time vs timestamp問題）
+- ⚠️ **docstringの未更新**: Example部分でtick.timeを使用（57行目）
+  - 優先度: 低（動作に影響なし）
+
+#### 判定
+- ✅ **合格**: Step 3の実装は計画通り完了。主要な変更が正確に実施され、基本動作を確認。次のStep 4（テスト修正）に進む準備が整った
+
+### コミット結果（Step 3）
+- **Hash**: （コミット待ち）
+- **Message**: feat: Step 3完了 - TickToBarConverterをcommon.models.Tickに移行
+- **変更内容**:
+  - src/mt5_data_acquisition/tick_to_bar.py: 
+    - ローカルTickクラス削除（17-49行目）
+    - インポート変更（common.models.Tick, TickAdapter追加）
+    - 全メソッドでtick.timestampを使用
+    - TickAdapterによるDecimal変換追加
+    - リントエラー修正（12個）
 
 ## ⚠️ 注意事項
 - Float32制約の維持が必須（プロジェクト要件）

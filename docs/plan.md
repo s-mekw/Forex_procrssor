@@ -254,29 +254,202 @@ class TickAdapter:
 - [ ] timestamp/time両方の属性名に対応
 - [ ] 数値精度が保持される
 
-### Step 3: TickToBarConverterの更新（作業時間: 2時間）
+### Step 3: TickToBarConverterの更新（作業時間: 2時間）⚠️重要度: 高
 **ファイル:** src/mt5_data_acquisition/tick_to_bar.py
 **作業内容:**
 1. ローカルTickクラスを削除
 2. common.models.Tickをインポート
 3. 内部実装をFloat32/Decimalハイブリッドに更新
 
-```python
-from src.common.models import Tick
-from decimal import Decimal
-import numpy as np
+#### 3.0 前提条件
+- ✅ Step 1完了: common.models.Tickにtimeプロパティ実装済み
+- ✅ Step 2完了: TickAdapterクラスが利用可能
+- 📊 影響範囲: 16ファイルで使用されているコアコンポーネント
 
-class TickToBarConverter:
-    def add_tick(self, tick: Tick) -> Bar | None:
-        # 内部計算用にDecimalに変換（精度保持）
-        bid_decimal = Decimal(str(tick.bid))
-        ask_decimal = Decimal(str(tick.ask))
-        volume_decimal = Decimal(str(tick.volume))
+#### 3.1 実装詳細
+
+##### A. インポート変更
+```python
+# 削除するインポート
+# from pydantic import BaseModel, Field, ValidationError, field_validator
+
+# 追加するインポート
+from src.common.models import Tick
+from src.mt5_data_acquisition.tick_adapter import TickAdapter
+from pydantic import ValidationError  # ValidationErrorは残す
+```
+
+##### B. ローカルTickクラスの削除（17-49行目）
+```python
+# 以下のクラス定義を完全に削除
+# class Tick(BaseModel):
+#     """ティックデータのモデル"""
+#     ...（省略）...
+```
+
+##### C. add_tick()メソッドの修正（144-220行目）
+```python
+def add_tick(self, tick: Tick) -> Bar | None:
+    """
+    ティックを追加し、バーが完成した場合はそれを返す
+    
+    Args:
+        tick: 追加するティックデータ（common.models.Tick）
+    
+    Returns:
+        完成したバー（完成していない場合はNone）
+    """
+    try:
+        # タイムスタンプ逆転チェック（tick.time → tick.timestamp）
+        if self.last_tick_time and tick.timestamp < self.last_tick_time:
+            error_data = {
+                "event": "timestamp_reversal",
+                "symbol": self.symbol,
+                "current_time": tick.timestamp.isoformat(),
+                "last_tick_time": self.last_tick_time.isoformat()
+            }
+            self.logger.error(json.dumps(error_data))
+            return None
         
-        # timestamp属性を使用（timeプロパティは後方互換性用）
-        tick_time = tick.timestamp
+        # ティック欠損を検知
+        self.check_tick_gap(tick.timestamp)
         
-        # 既存のロジックを維持...
+        # 現在のバーがない場合は新規作成
+        if self.current_bar is None:
+            self._create_new_bar(tick)
+            self.last_tick_time = tick.timestamp
+            return None
+        
+        # バー完成判定
+        if self._check_bar_completion(tick.timestamp):
+            # ... 既存のロジック ...
+            self.last_tick_time = tick.timestamp
+            return completed_bar
+        else:
+            # 現在のバーを更新
+            self._update_bar(tick)
+            self.last_tick_time = tick.timestamp
+            return None
+            
+    except ValidationError as e:
+        # エラーハンドリング（tick.timestamp使用）
+        error_data = {
+            "event": "invalid_tick_data",
+            "symbol": self.symbol,
+            "error": str(e),
+            "tick_data": {
+                "time": tick.timestamp.isoformat() if tick.timestamp else None,
+                "bid": str(tick.bid) if tick.bid else None,
+                "ask": str(tick.ask) if tick.ask else None,
+                "volume": str(tick.volume) if tick.volume else None
+            }
+        }
+        self.logger.error(json.dumps(error_data))
+        return None
+```
+
+##### D. _create_new_bar()メソッドの修正（317-346行目）
+```python
+def _create_new_bar(self, tick: Tick) -> None:
+    """
+    新しいバーを作成（プライベートメソッド）
+    
+    Args:
+        tick: バーの最初のティック（common.models.Tick）
+    """
+    # TickAdapterを使用してDecimal形式に変換
+    tick_decimal = TickAdapter.to_decimal_dict(tick)
+    
+    # ティックの時刻を分単位に正規化
+    bar_start = self._get_bar_start_time(tick.timestamp)
+    bar_end = self._get_bar_end_time(bar_start)
+    
+    # OHLC値を最初のティックで初期化（Decimal精度維持）
+    self.current_bar = Bar(
+        symbol=self.symbol,
+        time=bar_start,
+        end_time=bar_end,
+        open=tick_decimal['bid'],
+        high=tick_decimal['bid'],
+        low=tick_decimal['bid'],
+        close=tick_decimal['bid'],
+        volume=tick_decimal['volume'],
+        tick_count=1,
+        avg_spread=tick_decimal['ask'] - tick_decimal['bid'],
+        is_complete=False,
+    )
+    
+    # ティックリストをクリアして新しいティックを追加
+    self._current_ticks = [tick]
+```
+
+##### E. _update_bar()メソッドの修正（348-383行目）
+```python
+def _update_bar(self, tick: Tick) -> None:
+    """
+    現在のバーを更新（プライベートメソッド）
+    
+    Args:
+        tick: バーに追加するティック（common.models.Tick）
+    """
+    if not self.current_bar:
+        return
+    
+    # TickAdapterを使用してDecimal形式に変換
+    tick_decimal = TickAdapter.to_decimal_dict(tick)
+    
+    # High/Lowの更新（Decimal精度で比較）
+    self.current_bar.high = max(self.current_bar.high, tick_decimal['bid'])
+    self.current_bar.low = min(self.current_bar.low, tick_decimal['bid'])
+    
+    # Closeを最新のティック価格に
+    self.current_bar.close = tick_decimal['bid']
+    
+    # ボリューム累積
+    self.current_bar.volume += tick_decimal['volume']
+    
+    # ティックカウント増加
+    self.current_bar.tick_count += 1
+    
+    # スプレッドの累積平均計算
+    if self.current_bar.avg_spread is not None:
+        total_spread = self.current_bar.avg_spread * (
+            self.current_bar.tick_count - 1
+        )
+        new_spread = tick_decimal['ask'] - tick_decimal['bid']
+        self.current_bar.avg_spread = (
+            total_spread + new_spread
+        ) / self.current_bar.tick_count
+    
+    # ティックリストに追加
+    self._current_ticks.append(tick)
+```
+
+##### F. その他のメソッドの修正
+```python
+def _check_bar_completion(self, tick_time: datetime) -> bool:
+    # tick_time引数の型はdatetimeのままでOK（tick.timestampを渡す）
+    
+def _get_bar_start_time(self, tick_time: datetime) -> datetime:
+    # tick_time引数の型はdatetimeのままでOK（tick.timestampを渡す）
+```
+
+#### 3.2 テスト対応（簡易修正）
+
+Step 3では最小限の修正でテストを通すことを目標とする（詳細はStep 4で実施）:
+
+```python
+# tests/unit/test_tick_to_bar.py の修正例
+from src.common.models import Tick  # インポート変更
+
+# テストデータの修正
+{
+    "symbol": "EURUSD",
+    "timestamp": base_time + timedelta(seconds=0),  # time → timestamp
+    "bid": 1.04200,  # Decimal → float
+    "ask": 1.04210,  # Decimal → float
+    "volume": 1.0,   # Decimal → float
+}
 ```
 
 ### Step 4: テストコードの移行（作業時間: 2時間）
@@ -353,10 +526,38 @@ tick = Tick(
 - [ ] メモリ使用量の増加が10%以内
 
 ### Step 3 チェックリスト
-- [ ] ローカルTickクラスを削除
-- [ ] 共通Tickモデルをインポート
-- [ ] 全メソッドでtimestamp属性を使用
-- [ ] 既存テストが通る
+
+**実装タスク**
+- [ ] ローカルTickクラスをコメントアウト（一時的）
+- [ ] インポート文の変更
+  - [ ] common.models.Tickをインポート
+  - [ ] TickAdapterをインポート
+  - [ ] 不要なインポートを削除
+- [ ] add_tick()メソッドの修正
+  - [ ] tick.time → tick.timestampへの変更
+  - [ ] エラーハンドリング部分の修正
+- [ ] _create_new_bar()メソッドの修正
+  - [ ] TickAdapter.to_decimal_dict()の使用
+  - [ ] tick.timestamp使用への変更
+- [ ] _update_bar()メソッドの修正
+  - [ ] TickAdapter.to_decimal_dict()の使用
+  - [ ] Decimal計算の維持
+- [ ] check_tick_gap()メソッドの引数確認
+- [ ] ローカルTickクラスを完全削除
+
+**テストタスク**
+- [ ] test_tick_to_bar.pyの最小限修正
+  - [ ] インポートの変更
+  - [ ] time → timestampの変更
+  - [ ] Decimal → floatの変更
+- [ ] ユニットテストの実行
+- [ ] エラー箇所の特定と修正
+
+**検証タスク**
+- [ ] 基本的な変換動作の確認
+- [ ] Decimal精度が維持されているか
+- [ ] 既存の16ファイルへの影響確認
+- [ ] パフォーマンス測定（変換オーバーヘッド）
 
 ### Step 4 チェックリスト
 - [ ] 全テストファイルでcommon.models.Tickを使用
