@@ -228,9 +228,9 @@ async def main():
         # ティックストリーマー作成（バッファサイズとbackpressure閾値を最適化）
         streamer = TickDataStreamer(
             symbol=symbol,
-            buffer_size=5000,  # 1000 -> 5000に増加
+            buffer_size=20000,  # 5000 -> 20000に増加（高頻度ティックに対応）
             spike_threshold_percent=0.1,
-            backpressure_threshold=0.9,  # 0.8 -> 0.9に調整（90%まで許容）
+            backpressure_threshold=0.95,  # 0.9 -> 0.95に調整（95%まで許容）
             mt5_client=connection_manager
         )
         
@@ -241,12 +241,18 @@ async def main():
         # ティック処理とUI更新を分離（非同期タスク）
         async def tick_processor():
             """ティック処理タスク（バックグラウンド）"""
+            consecutive_empty = 0  # 連続して空だった回数
+            base_delay = 0.001  # 基本待機時間（1ms）
+            
             while True:
                 try:
                     # 新しいティックのみを取得（重複を避ける）
                     ticks = await streamer.get_new_ticks()
                     
                     if ticks:
+                        # ティックがある場合は連続カウントをリセット
+                        consecutive_empty = 0
+                        
                         # バッチ処理：すべてのティックを処理
                         for tick_data in ticks:
                             # ティックを処理
@@ -255,9 +261,16 @@ async def main():
                             if completed_bar:
                                 # バーが完成した場合の追加処理
                                 pass
-                    
-                    # 短い待機（CPU使用率を抑える）
-                    await asyncio.sleep(0.01)
+                        
+                        # 処理があった場合は最小待機時間
+                        await asyncio.sleep(base_delay)
+                    else:
+                        # ティックがない場合はカウントを増やす
+                        consecutive_empty += 1
+                        
+                        # 動的待機時間：空の回数に応じて待機時間を増やす（最大0.01秒）
+                        dynamic_delay = min(base_delay * (1 + consecutive_empty * 0.5), 0.01)
+                        await asyncio.sleep(dynamic_delay)
                     
                 except Exception as e:
                     print_error(f"Tick processor error: {e}")
