@@ -79,6 +79,8 @@ class Tick(BaseModel):
 ### Step 1: 互換性プロパティの追加（作業時間: 30分）
 **ファイル:** src/common/models.py
 **作業内容:**
+
+#### 1.1 実装内容
 ```python
 class Tick(BaseModel):
     timestamp: datetime = Field(...)
@@ -86,33 +88,85 @@ class Tick(BaseModel):
     
     @property
     def time(self) -> datetime:
-        """後方互換性のためのプロパティ"""
+        """後方互換性のためのプロパティ
+        
+        TickToBarConverterとの互換性を保つため、
+        time属性でtimestampにアクセスできるようにする。
+        
+        Note:
+            このプロパティはStep 6で削除予定。
+            新規コードではtimestamp属性を使用すること。
+        """
         return self.timestamp
     
     @time.setter
     def time(self, value: datetime):
-        """後方互換性のためのセッター"""
+        """後方互換性のためのセッター
+        
+        Args:
+            value: 設定する時刻値
+        """
         self.timestamp = value
 ```
 
-**テスト:** 
-- 既存のテストが全て通ることを確認
-- timeプロパティの動作テストを追加
+#### 1.2 実装箇所
+- **挿入位置**: to_float32_dict()メソッドの後（108行目以降）
+- **インポート不要**: datetimeは既にインポート済み
+
+#### 1.3 テスト計画
+1. **単体テスト作成**（tests/unit/test_tick_model_compatibility.py）
+   - timeプロパティの読み取りテスト
+   - timeプロパティの書き込みテスト
+   - timestamp属性との同期確認
+
+2. **既存テストの確認**
+   - tests/unit/test_models.py が通ることを確認
+   - 既存のTickモデル使用箇所に影響がないことを確認
+
+#### 1.4 検証項目
+- [ ] timeプロパティでtimestampの値が取得できる
+- [ ] time = valueでtimestamp属性が更新される
+- [ ] 既存のコードが破壊されない
+- [ ] docstringで非推奨であることを明記
 
 ### Step 2: TickToBarConverterアダプターの作成（作業時間: 1時間）
 **ファイル:** src/mt5_data_acquisition/tick_adapter.py（新規）
 **作業内容:**
+
+#### 2.1 実装内容
 ```python
+"""
+Tickモデル間の変換アダプター
+
+common.models.TickとTickToBarConverterの間の
+データ形式の違いを吸収するアダプター。
+"""
+
 from decimal import Decimal
-from src.common.models import Tick as CommonTick
+from typing import Union
 import numpy as np
 
+from src.common.models import Tick as CommonTick
+
+
 class TickAdapter:
-    """common.models.TickをTickToBarConverterで使用できるように変換"""
+    """common.models.TickをTickToBarConverterで使用できるように変換
+    
+    このアダプターは、Float32制約のあるCommonTickと
+    Decimal精度を必要とするTickToBarConverterの間で
+    データ変換を行います。
+    """
     
     @staticmethod
-    def to_converter_format(tick: CommonTick) -> dict:
-        """CommonTickをTickToBarConverter用の形式に変換"""
+    def to_decimal_dict(tick: CommonTick) -> dict:
+        """CommonTickをDecimal形式の辞書に変換
+        
+        Args:
+            tick: 変換元のCommonTickインスタンス
+            
+        Returns:
+            Decimal型の価格データを含む辞書
+        """
         return {
             'symbol': tick.symbol,
             'time': tick.timestamp,  # timestamp -> time
@@ -122,16 +176,60 @@ class TickAdapter:
         }
     
     @staticmethod
-    def from_converter_format(tick_dict: dict) -> CommonTick:
-        """TickToBarConverter形式からCommonTickに変換"""
+    def from_decimal_dict(tick_dict: dict) -> CommonTick:
+        """Decimal形式の辞書からCommonTickに変換
+        
+        Args:
+            tick_dict: Decimal型の価格データを含む辞書
+            
+        Returns:
+            変換されたCommonTickインスタンス
+        """
+        # timeとtimestamp両方に対応
+        timestamp = tick_dict.get('time', tick_dict.get('timestamp'))
+        if timestamp is None:
+            raise ValueError("time or timestamp key is required")
+            
         return CommonTick(
-            timestamp=tick_dict.get('time', tick_dict.get('timestamp')),
+            timestamp=timestamp,
             symbol=tick_dict['symbol'],
             bid=float(tick_dict['bid']),
             ask=float(tick_dict['ask']),
-            volume=float(tick_dict['volume'])
+            volume=float(tick_dict.get('volume', 0.0))
         )
+    
+    @staticmethod
+    def ensure_decimal_precision(value: Union[float, Decimal]) -> Decimal:
+        """値をDecimal型に安全に変換
+        
+        Args:
+            value: 変換する値
+            
+        Returns:
+            Decimal型の値
+        """
+        if isinstance(value, Decimal):
+            return value
+        # Float32精度の値を文字列経由でDecimalに変換
+        return Decimal(str(np.float32(value)))
 ```
+
+#### 2.2 テスト計画
+1. **単体テスト作成**（tests/unit/test_tick_adapter.py）
+   - to_decimal_dict()の変換テスト
+   - from_decimal_dict()の変換テスト
+   - 精度保持の確認テスト
+   - エラーケースのテスト
+
+2. **統合テスト**
+   - CommonTickからDecimalへの往復変換テスト
+   - 精度損失がないことの確認
+
+#### 2.3 検証項目
+- [ ] CommonTickからDecimal辞書への変換が正しい
+- [ ] Decimal辞書からCommonTickへの変換が正しい
+- [ ] timestamp/time両方の属性名に対応
+- [ ] 数値精度が保持される
 
 ### Step 3: TickToBarConverterの更新（作業時間: 2時間）
 **ファイル:** src/mt5_data_acquisition/tick_to_bar.py
