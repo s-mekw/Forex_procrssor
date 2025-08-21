@@ -51,7 +51,7 @@ FOREX_MT5_TIMEOUT=60000
 #### 1. 基本的な変換動作確認（MT5接続版）
 ```bash
 # プロジェクトルートから実行
-python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py
+uv run test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py
 ```
 - MT5からリアルタイムティックを取得
 - 1分バーへの変換プロセスを可視化
@@ -60,7 +60,7 @@ python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py
 
 #### 1b. デモ版（MT5接続不要）
 ```bash
-python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar_demo.py
+uv run test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar_demo.py
 ```
 - シミュレートされたティックデータを使用
 - MT5接続なしで動作確認可能
@@ -92,7 +92,7 @@ uv run test_sandbox/task6_test_SANDBOX/04_gap_detection_test.py
 
 #### 6. Marimoダッシュボード
 ```bash
-marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py
+uv run marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py
 ```
 - Webベースのインタラクティブダッシュボード
 - リアルタイムチャート（ティック、OHLC、ボリューム）
@@ -202,10 +202,10 @@ if hasattr(tick_data, 'timestamp'):
 ### Marimoダッシュボードが起動しない
 ```bash
 # Marimoがインストールされているか確認
-pip install marimo
+uv add marimo
 
 # ブラウザが自動で開かない場合
-marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py --port 8080
+uv run marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py --port 8080
 ```
 
 ## 📝 各テストの特徴
