@@ -19,7 +19,7 @@ from rich.table import Table
 from rich import box
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
-from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
+from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
 from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
@@ -79,20 +79,26 @@ class RealtimeBarBuilder:
             'message': f'Bar completed: {format_timestamp(bar.time)} - {format_timestamp(bar.end_time)}'
         })
         
-    def process_tick(self, tick_data: dict):
+    def process_tick(self, tick_data):
         """ティックを処理"""
         try:
-            # ティック作成
-            tick = Tick(
-                symbol=tick_data["symbol"],
-                time=tick_data["time"],
-                bid=Decimal(str(tick_data["bid"])),
-                ask=Decimal(str(tick_data["ask"])),
-                volume=Decimal(str(tick_data.get("volume", 1.0)))
-            )
+            # TickオブジェクトかDictかを判定
+            if hasattr(tick_data, 'symbol'):
+                # Tickオブジェクトの場合、そのまま使用
+                tick = tick_data
+            else:
+                # 辞書の場合、Tickオブジェクトを作成
+                tick = Tick(
+                    symbol=tick_data["symbol"],
+                    time=tick_data.get("time", tick_data.get("timestamp")),
+                    bid=Decimal(str(tick_data["bid"])),
+                    ask=Decimal(str(tick_data["ask"])),
+                    volume=Decimal(str(tick_data.get("volume", 1.0)))
+                )
             
             # ギャップ検出
-            gap = self.converter.check_tick_gap(tick.time)
+            tick_time = getattr(tick, 'time', None) or getattr(tick, 'timestamp', None)
+            gap = self.converter.check_tick_gap(tick_time)
             if gap:
                 self.gap_count += 1
                 self.last_gap_seconds = gap
@@ -113,7 +119,7 @@ class RealtimeBarBuilder:
             
             # 表示用に保存
             self.recent_ticks.append({
-                'time': format_timestamp(tick.time),
+                'time': format_timestamp(tick_time),
                 'bid': float(tick.bid),
                 'ask': float(tick.ask),
                 'spread': float(tick.ask - tick.bid),
@@ -319,7 +325,7 @@ async def main():
         # MT5設定
         config = BaseConfig()
         mt5_config = {
-            "login": config.mt5_login,
+            "account": config.mt5_login,
             "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
             "server": config.mt5_server,
             "timeout": config.mt5_timeout,
@@ -331,30 +337,26 @@ async def main():
         connection_manager = MT5ConnectionManager(mt5_config)
         
         print_info("Connecting to MT5...")
-        if not await connection_manager.connect():
+        if not connection_manager.connect(mt5_config):
             print_error("Failed to connect to MT5")
             return
         
         print_success("Connected to MT5")
         
-        # ストリーマー設定
-        streamer_config = StreamerConfig(
-            symbols=[symbol],
-            buffer_size=1000,
-            max_tick_age=5.0,
-            enable_throttling=False
+        # ストリーマー作成・開始（バッファサイズを増加）
+        streamer = TickDataStreamer(
+            symbol=symbol,
+            buffer_size=5000,  # バッファサイズを増加
+            mt5_client=connection_manager
         )
-        
-        # ストリーマー作成・開始
-        streamer = TickDataStreamer(connection_manager, streamer_config)
         await streamer.start_streaming()
         print_success("Streaming started")
         
         # ライブ表示
-        with Live(builder.create_display(), refresh_per_second=4, console=console) as live:
+        with Live(builder.create_display(), refresh_per_second=10, console=console) as live:
             while True:
                 # ティック取得・処理
-                ticks = await streamer.get_buffered_ticks(symbol)
+                ticks = await streamer.get_new_ticks()
                 
                 for tick_data in ticks:
                     builder.process_tick(tick_data)
@@ -362,7 +364,7 @@ async def main():
                 # 表示更新
                 live.update(builder.create_display())
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)  # 処理頻度を上げる
                 
     except KeyboardInterrupt:
         print_warning("\nStopping...")
