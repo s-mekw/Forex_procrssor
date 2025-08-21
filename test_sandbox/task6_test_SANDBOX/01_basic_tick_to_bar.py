@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
+from asyncio import Queue
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
@@ -60,10 +61,11 @@ class BasicTickToBarTest:
         self.completed_bars.append(bar)
         self.stats["total_bars"] += 1
         
-        # コンソールに通知
-        print_success(f"Bar completed at {format_timestamp(bar.end_time)}")
-        print_info(f"  OHLC: {float(bar.open):.5f} / {float(bar.high):.5f} / {float(bar.low):.5f} / {float(bar.close):.5f}")
-        print_info(f"  Volume: {float(bar.volume):.2f}, Ticks: {bar.tick_count}")
+        # ライブ表示中はコンソール出力を抑制（パフォーマンス最適化）
+        # 統計情報パネルで確認可能
+        # print_success(f"Bar completed at {format_timestamp(bar.end_time)}")
+        # print_info(f"  OHLC: {float(bar.open):.5f} / {float(bar.high):.5f} / {float(bar.low):.5f} / {float(bar.close):.5f}")
+        # print_info(f"  Volume: {float(bar.volume):.2f}, Ticks: {bar.tick_count}")
         
     def process_tick(self, tick_data) -> Optional[Bar]:
         """ティックを処理"""
@@ -223,12 +225,12 @@ async def main():
         
         print_success("Connected to MT5")
         
-        # ティックストリーマー作成（直接パラメータを渡す）
+        # ティックストリーマー作成（バッファサイズとbackpressure閾値を最適化）
         streamer = TickDataStreamer(
             symbol=symbol,
-            buffer_size=1000,
+            buffer_size=5000,  # 1000 -> 5000に増加
             spike_threshold_percent=0.1,
-            backpressure_threshold=0.8,
+            backpressure_threshold=0.9,  # 0.8 -> 0.9に調整（90%まで許容）
             mt5_client=connection_manager
         )
         
@@ -236,26 +238,42 @@ async def main():
         await streamer.start_streaming()
         print_success("Tick streaming started")
         
-        # ライブ表示
-        with Live(test.create_display(), refresh_per_second=2, console=console) as live:
+        # ティック処理とUI更新を分離（非同期タスク）
+        async def tick_processor():
+            """ティック処理タスク（バックグラウンド）"""
             while True:
-                # ティックを取得（最新の10ティック）
-                ticks = await streamer.get_recent_ticks(n=10)
-                
-                if ticks:
-                    for tick_data in ticks:
-                        # ティックを処理
-                        completed_bar = test.process_tick(tick_data)
-                        
-                        if completed_bar:
-                            # バーが完成した場合の追加処理
-                            pass
-                
-                # 表示更新
+                try:
+                    # 新しいティックのみを取得（重複を避ける）
+                    ticks = await streamer.get_new_ticks()
+                    
+                    if ticks:
+                        # バッチ処理：すべてのティックを処理
+                        for tick_data in ticks:
+                            # ティックを処理
+                            completed_bar = test.process_tick(tick_data)
+                            
+                            if completed_bar:
+                                # バーが完成した場合の追加処理
+                                pass
+                    
+                    # 短い待機（CPU使用率を抑える）
+                    await asyncio.sleep(0.01)
+                    
+                except Exception as e:
+                    print_error(f"Tick processor error: {e}")
+                    await asyncio.sleep(0.1)
+        
+        # ティック処理タスクを開始
+        processor_task = asyncio.create_task(tick_processor())
+        
+        # ライブ表示（更新頻度を1回/秒に調整）
+        with Live(test.create_display(), refresh_per_second=1, console=console) as live:
+            while True:
+                # 表示更新（ティック処理とは独立）
                 live.update(test.create_display())
                 
-                # 少し待機
-                await asyncio.sleep(0.1)
+                # UI更新の待機
+                await asyncio.sleep(0.5)
                 
     except KeyboardInterrupt:
         print_warning("\nStopping test...")
@@ -267,6 +285,13 @@ async def main():
         
     finally:
         # クリーンアップ
+        if 'processor_task' in locals():
+            processor_task.cancel()
+            try:
+                await processor_task
+            except asyncio.CancelledError:
+                pass
+        
         if 'streamer' in locals():
             await streamer.stop_streaming()
             print_info("Streaming stopped")

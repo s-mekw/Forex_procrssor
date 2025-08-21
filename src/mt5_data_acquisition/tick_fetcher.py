@@ -501,6 +501,10 @@ class TickDataStreamer:
             spike_threshold_percent=spike_threshold_percent,
         )
 
+        # 新しいティック追跡用のインデックス
+        self._last_read_index: int = 0
+        self._tick_counter: int = 0  # 総ティック数のカウンター
+
     @property
     def buffer_usage(self) -> float:
         """バッファ使用率を取得
@@ -684,6 +688,7 @@ class TickDataStreamer:
         """
         # バッファがフルの場合、古いデータは自動的に削除される（deque maxlenの機能）
         self.buffer.append(tick)
+        self._tick_counter += 1  # 総ティック数をカウント
 
     async def add_tick(self, tick: Tick) -> None:
         """ティックをバッファに追加（非同期スレッドセーフ版）
@@ -717,12 +722,49 @@ class TickDataStreamer:
                 # dequeから最新n件を取得
                 return list(self.buffer)[-actual_n:]
 
+    async def get_new_ticks(self) -> list[Tick]:
+        """最後に読み取った位置から新しいティックのみを取得
+        
+        このメソッドは重複を避けるため、前回取得した位置を記憶し、
+        新しいティックのみを返します。
+        
+        Returns:
+            list[Tick]: 新しいティックのリスト（前回取得以降のもの）
+        """
+        async with self._buffer_lock:
+            current_ticks = list(self.buffer)
+            total_ticks = len(current_ticks)
+            
+            # 新しいティックがない場合
+            if total_ticks == 0 or self._tick_counter <= self._last_read_index:
+                return []
+            
+            # バッファがリセットされた場合（maxlenによる古いデータの削除）
+            # tick_counterとバッファサイズの差分から、削除されたティック数を計算
+            deleted_ticks = self._tick_counter - total_ticks
+            
+            # last_read_indexが削除された範囲にある場合、バッファの先頭から読み取る
+            if self._last_read_index < deleted_ticks:
+                # バッファ全体が新しいデータ
+                new_ticks = current_ticks
+                self._last_read_index = self._tick_counter
+            else:
+                # 削除を考慮してインデックスを調整
+                buffer_index = self._last_read_index - deleted_ticks
+                new_ticks = current_ticks[buffer_index:]
+                self._last_read_index = self._tick_counter
+            
+            return new_ticks
+
     async def clear_buffer(self) -> None:
         """バッファをクリア"""
         async with self._buffer_lock:
             self.buffer.clear()
             self._stats_buffer_bid.clear()
             self._stats_buffer_ask.clear()
+            # 追跡用カウンターをリセット
+            self._last_read_index = 0
+            self._tick_counter = 0
             # 統計情報もリセット
             self.stats["sample_count"] = 0
             self.stats["mean_bid"] = 0.0
