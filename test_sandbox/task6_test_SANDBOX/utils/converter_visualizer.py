@@ -254,7 +254,7 @@ def create_visual_tick_to_bar(tick: Any, current_bar: Any) -> str:
     # ティック情報
     visual.append("[cyan]New Tick:[/cyan]")
     visual.append(f"  Price: {float(tick.bid):.5f}")
-    visual.append(f"  Time: {tick.timestamp.strftime('%H:%M:%S.%f')[:-3]}")
+    visual.append(f"  Time: {tick.time.strftime('%H:%M:%S.%f')[:-3]}")
     visual.append("")
     visual.append("      ↓")
     visual.append("")

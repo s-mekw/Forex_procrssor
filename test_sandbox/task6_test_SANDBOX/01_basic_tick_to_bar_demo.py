@@ -1,5 +1,6 @@
 """
-基本的なティック→バー変換テスト - MT5からリアルタイムティックを取得してバーに変換
+基本的なティック→バー変換テスト（デモモード版）
+MT5接続なしでシミュレートされたティックデータを使用
 """
 
 import sys
@@ -10,15 +11,14 @@ import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, List
+import random
+import math
 from rich.console import Console
 from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
 
-from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
-from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Tick, Bar
-from src.common.config import BaseConfig
 from utils.bar_display_helpers import (
     print_success, print_error, print_warning, print_info,
     print_section, create_bar_table, create_current_bar_panel,
@@ -28,8 +28,44 @@ from utils.converter_visualizer import create_visual_tick_to_bar
 
 console = Console()
 
-class BasicTickToBarTest:
-    """基本的なティック→バー変換テスト"""
+class TickSimulator:
+    """ティックデータシミュレーター"""
+    
+    def __init__(self, symbol: str, base_price: float = 1.10000):
+        self.symbol = symbol
+        self.base_price = base_price
+        self.current_price = base_price
+        self.tick_count = 0
+        self.time = datetime.now()
+        
+    def generate_tick(self) -> dict:
+        """リアルなティックデータをシミュレート"""
+        # ランダムウォーク + トレンド
+        trend = math.sin(self.tick_count / 100) * 0.0001
+        random_walk = random.gauss(0, 0.00005)
+        self.current_price += trend + random_walk
+        
+        # Bid/Askスプレッド（0.1〜0.3 pips）
+        spread = random.uniform(0.00001, 0.00003)
+        
+        # ボリューム（対数正規分布）
+        volume = max(0.01, random.lognormvariate(0, 0.5))
+        
+        # 時間進行（0.1〜2秒のランダム間隔）
+        self.time += timedelta(seconds=random.uniform(0.1, 2.0))
+        
+        self.tick_count += 1
+        
+        return {
+            "symbol": self.symbol,
+            "time": self.time,
+            "bid": self.current_price,
+            "ask": self.current_price + spread,
+            "volume": volume
+        }
+
+class BasicTickToBarDemo:
+    """基本的なティック→バー変換デモ"""
     
     def __init__(self, symbol: str = "EURUSD"):
         self.symbol = symbol
@@ -55,6 +91,9 @@ class BasicTickToBarTest:
         # バー完成時のコールバックを設定
         self.converter.on_bar_complete = self.on_bar_complete
         
+        # ティックシミュレーター
+        self.simulator = TickSimulator(symbol)
+        
     def on_bar_complete(self, bar: Bar):
         """バー完成時のコールバック"""
         self.completed_bars.append(bar)
@@ -65,31 +104,17 @@ class BasicTickToBarTest:
         print_info(f"  OHLC: {float(bar.open):.5f} / {float(bar.high):.5f} / {float(bar.low):.5f} / {float(bar.close):.5f}")
         print_info(f"  Volume: {float(bar.volume):.2f}, Ticks: {bar.tick_count}")
         
-    def process_tick(self, tick_data) -> Optional[Bar]:
+    def process_tick(self, tick_data: dict) -> Optional[Bar]:
         """ティックを処理"""
         try:
-            # common.models.Tickの場合、tick_to_bar.Tickに変換
-            if hasattr(tick_data, 'timestamp'):
-                # common.models.Tickからtick_to_bar.Tickへ変換
-                tick = Tick(
-                    symbol=tick_data.symbol,
-                    time=tick_data.timestamp,  # timestampをtimeにマップ
-                    bid=Decimal(str(tick_data.bid)),
-                    ask=Decimal(str(tick_data.ask)),
-                    volume=Decimal(str(tick_data.volume)) if tick_data.volume else Decimal("1.0")
-                )
-            elif isinstance(tick_data, Tick):
-                # すでにtick_to_bar.Tickの場合
-                tick = tick_data
-            else:
-                # 辞書の場合は変換
-                tick = Tick(
-                    symbol=tick_data["symbol"],
-                    time=tick_data["time"],
-                    bid=Decimal(str(tick_data["bid"])),
-                    ask=Decimal(str(tick_data["ask"])),
-                    volume=Decimal(str(tick_data.get("volume", 1.0)))
-                )
+            # ティックデータを変換
+            tick = Tick(
+                symbol=tick_data["symbol"],
+                time=tick_data["time"],
+                bid=Decimal(str(tick_data["bid"])),
+                ask=Decimal(str(tick_data["ask"])),
+                volume=Decimal(str(tick_data.get("volume", 1.0)))
+            )
             
             self.last_tick = tick
             self.stats["total_ticks"] += 1
@@ -122,7 +147,7 @@ class BasicTickToBarTest:
         )
         
         # ヘッダー
-        header_text = f"[bold cyan]Tick → Bar Converter Test - {self.symbol}[/bold cyan]"
+        header_text = f"[bold cyan]Tick → Bar Converter Demo - {self.symbol}[/bold cyan]"
         layout["header"].update(Panel(header_text, style="cyan"))
         
         # メインを左右に分割
@@ -189,76 +214,43 @@ class BasicTickToBarTest:
 
 async def main():
     """メイン関数"""
-    print_section("Basic Tick to Bar Conversion Test")
+    print_section("Basic Tick to Bar Conversion Demo")
     
     # 設定
     symbol = "EURUSD"
-    print_info(f"Testing with symbol: {symbol}")
+    print_info(f"Demo mode with simulated data for: {symbol}")
     print_info("Timeframe: 1 minute bars")
+    print_warning("This is a demonstration using simulated tick data")
     print_info("Press Ctrl+C to stop")
     
     # テストインスタンスを作成
-    test = BasicTickToBarTest(symbol)
+    demo = BasicTickToBarDemo(symbol)
     
     try:
-        # MT5設定
-        config = BaseConfig()
-        mt5_config = {
-            "account": config.mt5_login,  # accountキーを使用
-            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
-            "server": config.mt5_server,
-            "timeout": config.mt5_timeout,
-            "retry_count": 3,
-            "retry_delay": 1
-        }
-        
-        # MT5接続マネージャー
-        connection_manager = MT5ConnectionManager()
-        
-        # 接続（同期メソッドなのでawaitを削除）
-        print_info("Connecting to MT5...")
-        if not connection_manager.connect(mt5_config):
-            print_error("Failed to connect to MT5")
-            return
-        
-        print_success("Connected to MT5")
-        
-        # ティックストリーマー作成（直接パラメータを渡す）
-        streamer = TickDataStreamer(
-            symbol=symbol,
-            buffer_size=1000,
-            spike_threshold_percent=0.1,
-            backpressure_threshold=0.8,
-            mt5_client=connection_manager
-        )
-        
-        # ストリーミング開始
-        await streamer.start_streaming()
-        print_success("Tick streaming started")
+        print_success("Starting tick simulation...")
         
         # ライブ表示
-        with Live(test.create_display(), refresh_per_second=2, console=console) as live:
-            while True:
-                # ティックを取得（最新の10ティック）
-                ticks = await streamer.get_recent_ticks(n=10)
+        with Live(demo.create_display(), refresh_per_second=2, console=console) as live:
+            # 300ティック分のシミュレーション
+            for i in range(300):
+                # シミュレートされたティックを生成
+                tick_data = demo.simulator.generate_tick()
                 
-                if ticks:
-                    for tick_data in ticks:
-                        # ティックを処理
-                        completed_bar = test.process_tick(tick_data)
-                        
-                        if completed_bar:
-                            # バーが完成した場合の追加処理
-                            pass
+                # ティックを処理
+                completed_bar = demo.process_tick(tick_data)
+                
+                if completed_bar:
+                    # バーが完成した場合の追加処理
+                    pass
                 
                 # 表示更新
-                live.update(test.create_display())
+                live.update(demo.create_display())
                 
-                # 少し待機
+                # リアルタイム感を出すための待機
                 await asyncio.sleep(0.1)
                 
     except KeyboardInterrupt:
-        print_warning("\nStopping test...")
+        print_warning("\nStopping demo...")
         
     except Exception as e:
         print_error(f"Error: {e}")
@@ -266,26 +258,26 @@ async def main():
         traceback.print_exc()
         
     finally:
-        # クリーンアップ
-        if 'streamer' in locals():
-            await streamer.stop_streaming()
-            print_info("Streaming stopped")
-            
-        if 'connection_manager' in locals():
-            connection_manager.disconnect()
-            print_info("Disconnected from MT5")
-        
         # 最終統計を表示
         print_section("Final Statistics")
-        print_info(f"Total ticks processed: {test.stats['total_ticks']}")
-        print_info(f"Total bars completed: {test.stats['total_bars']}")
+        print_info(f"Total ticks processed: {demo.stats['total_ticks']}")
+        print_info(f"Total bars completed: {demo.stats['total_bars']}")
         
-        if test.stats['total_bars'] > 0:
-            print_info(f"Average ticks per bar: {test.stats['total_ticks'] / test.stats['total_bars']:.1f}")
+        if demo.stats['total_bars'] > 0:
+            print_info(f"Average ticks per bar: {demo.stats['total_ticks'] / demo.stats['total_bars']:.1f}")
         
-        if test.completed_bars:
-            print_info(f"First bar: {format_timestamp(test.completed_bars[0].time)}")
-            print_info(f"Last bar: {format_timestamp(test.completed_bars[-1].time)}")
+        if demo.completed_bars:
+            print_info(f"First bar: {format_timestamp(demo.completed_bars[0].time)}")
+            print_info(f"Last bar: {format_timestamp(demo.completed_bars[-1].time)}")
+            
+            # 価格範囲
+            all_highs = [float(bar.high) for bar in demo.completed_bars]
+            all_lows = [float(bar.low) for bar in demo.completed_bars]
+            print_info(f"Price range: {min(all_lows):.5f} - {max(all_highs):.5f}")
+            
+            # 総ボリューム
+            total_volume = sum(float(bar.volume) for bar in demo.completed_bars)
+            print_info(f"Total volume: {total_volume:.2f}")
 
 if __name__ == "__main__":
     asyncio.run(main())

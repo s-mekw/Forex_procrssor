@@ -2,18 +2,30 @@
 
 このディレクトリには、`src/mt5_data_acquisition/tick_to_bar.py`のTickToBarConverterエンジンの視覚的なE2Eテストが含まれています。
 
+## ✅ 動作確認済み (2025-08-21)
+
+- **MT5接続**: Axiory-Demo サーバーへの接続成功
+- **リアルタイムティック受信**: EURUSD等のリアルタイムデータ取得確認
+- **ティック→バー変換**: 1分足バーの生成を確認
+- **視覚的表示**: Rich libraryによるCLI表示が正常動作
+
 ## 📁 ディレクトリ構造
 
 ```
 task6_test_SANDBOX/
 ├── utils/
-│   ├── bar_display_helpers.py      # 表示用ヘルパー関数
+│   ├── bar_display_helpers.py      # 表示用ヘルパー関数（タイムゾーン修正済み）
 │   └── converter_visualizer.py     # 変換プロセスの可視化
-├── 01_basic_tick_to_bar.py        # 基本的な変換動作確認
+├── 01_basic_tick_to_bar.py        # ✅ 基本的な変換動作確認（MT5接続版）
+├── 01_basic_tick_to_bar_demo.py   # ✅ デモ版（シミュレートデータ）
+├── 01_basic_test_simple.py        # ✅ シンプル版（軽量実装）
 ├── 02_realtime_bar_builder.py     # リアルタイムバー生成の可視化
 ├── 03_multi_symbol_converter.py   # 複数通貨ペアの同時変換
 ├── 04_gap_detection_test.py       # ティック欠損検知テスト
 ├── 06_marimo_bar_dashboard.py     # インタラクティブダッシュボード
+├── test_mt5_connection.py          # MT5接続テスト
+├── test_tick_format.py             # ティック形式確認
+├── test_tick_timezone.py           # タイムゾーン検証
 └── README.md                       # このファイル
 ```
 
@@ -22,21 +34,41 @@ task6_test_SANDBOX/
 ### 前提条件
 - MT5がインストールされ、デモアカウントでログイン可能
 - Python環境に必要なパッケージがインストール済み
-- `.env`ファイルにMT5認証情報が設定済み
+- `.env`ファイルにMT5認証情報が設定済み（FOREX_プレフィックス必須）
+- **重要**: プロジェクトルートディレクトリから実行すること
+
+### 環境変数設定（.env）
+```env
+# FOREX_プレフィックスが必須
+FOREX_MT5_LOGIN=your_demo_login
+FOREX_MT5_PASSWORD=your_demo_password
+FOREX_MT5_SERVER=Axiory-Demo  # または使用するサーバー名
+FOREX_MT5_TIMEOUT=60000
+```
 
 ### 各テストの実行
 
-#### 1. 基本的な変換動作確認
+#### 1. 基本的な変換動作確認（MT5接続版）
 ```bash
-python 01_basic_tick_to_bar.py
+# プロジェクトルートから実行
+python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py
 ```
 - MT5からリアルタイムティックを取得
 - 1分バーへの変換プロセスを可視化
 - OHLC値の更新とバー完成をリアルタイム表示
+- **注意**: バッファサイズの調整が必要な場合があります
+
+#### 1b. デモ版（MT5接続不要）
+```bash
+python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar_demo.py
+```
+- シミュレートされたティックデータを使用
+- MT5接続なしで動作確認可能
+- 機能テストに最適
 
 #### 2. リアルタイムバー生成の可視化
 ```bash
-python 02_realtime_bar_builder.py
+uv run test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py
 ```
 - バー形成過程をアニメーション表示
 - パイプラインビューで変換フローを可視化
@@ -44,7 +76,7 @@ python 02_realtime_bar_builder.py
 
 #### 3. 複数通貨ペアの同時変換
 ```bash
-python 03_multi_symbol_converter.py
+uv run test_sandbox/task6_test_SANDBOX/03_multi_symbol_converter.py
 ```
 - EURUSD、GBPUSD、USDJPYを同時処理
 - 各通貨ペアの変換状況を並列表示
@@ -52,7 +84,7 @@ python 03_multi_symbol_converter.py
 
 #### 4. ティック欠損検知テスト
 ```bash
-python 04_gap_detection_test.py
+uv run test_sandbox/task6_test_SANDBOX/04_gap_detection_test.py
 ```
 - ギャップをシミュレートして検出機能をテスト
 - ギャップイベントのタイムライン表示
@@ -60,7 +92,7 @@ python 04_gap_detection_test.py
 
 #### 6. Marimoダッシュボード
 ```bash
-marimo edit 06_marimo_bar_dashboard.py
+marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py
 ```
 - Webベースのインタラクティブダッシュボード
 - リアルタイムチャート（ティック、OHLC、ボリューム）
@@ -107,9 +139,60 @@ marimo edit 06_marimo_bar_dashboard.py
 ## 🔧 トラブルシューティング
 
 ### MT5接続エラー
-- MT5が起動していることを確認
-- `.env`ファイルの認証情報を確認
-- ネットワーク接続を確認
+
+#### `'BaseConfig' object has no attribute 'mt5'`
+- **原因**: 設定フィールド名の誤り
+- **解決**: `config.mt5_login`、`config.mt5_password`等を使用
+
+#### `Invalid "login" argument`
+- **原因**: MT5ConnectionManagerの引数キー誤り
+- **解決**: `"account"` キーを使用（`"login"`ではない）
+```python
+mt5_config = {
+    "account": config.mt5_login,  # "login"ではなく"account"
+    "password": config.mt5_password.get_secret_value(),
+    "server": config.mt5_server,
+    "timeout": config.mt5_timeout,
+}
+```
+
+#### 環境変数が読み込まれない
+- **原因**: 実行ディレクトリが異なる
+- **解決**: プロジェクトルートから実行、またはFOREX_プレフィックスを確認
+
+### タイムゾーンエラー
+
+#### `can't compare offset-naive and offset-aware datetimes`
+- **原因**: MT5のティックがタイムゾーン付き、ローカルdatetimeがタイムゾーンなし
+- **解決**: bar_display_helpers.pyで修正済み
+```python
+# タイムゾーンを統一
+bar_time = current_bar.time.replace(tzinfo=None) if current_bar.time.tzinfo else current_bar.time
+```
+
+### Tickモデルの互換性問題
+
+#### `'Tick' object is not subscriptable`
+- **原因**: `common.models.Tick`と`tick_to_bar.Tick`の属性名が異なる
+- **解決**: 変換処理を実装
+```python
+if hasattr(tick_data, 'timestamp'):
+    tick = Tick(
+        symbol=tick_data.symbol,
+        time=tick_data.timestamp,  # timestampをtimeにマップ
+        bid=Decimal(str(tick_data.bid)),
+        ask=Decimal(str(tick_data.ask)),
+        volume=Decimal(str(tick_data.volume)) if tick_data.volume else Decimal("1.0")
+    )
+```
+
+### バッファオーバーフロー
+- **症状**: `Buffer full - dropping ticks`警告
+- **原因**: ティック消費速度が生成速度に追いつかない
+- **解決**: 
+  - バッファサイズを増やす: `buffer_size=5000`
+  - 処理間隔を短くする: `await asyncio.sleep(0.1)`
+  - 処理済みティックの追跡を実装
 
 ### 表示が更新されない
 - ティックが受信されているか確認（市場時間外の可能性）
@@ -122,18 +205,20 @@ marimo edit 06_marimo_bar_dashboard.py
 pip install marimo
 
 # ブラウザが自動で開かない場合
-marimo edit 06_marimo_bar_dashboard.py --port 8080
+marimo edit test_sandbox/task6_test_SANDBOX/06_marimo_bar_dashboard.py --port 8080
 ```
 
 ## 📝 各テストの特徴
 
-| テスト | 主な目的 | 表示方法 | 特徴 |
-|--------|----------|----------|------|
-| 01_basic | 基本動作確認 | Rich Terminal | シンプルで分かりやすい |
-| 02_realtime | プロセス可視化 | アニメーション | 動的な表示 |
-| 03_multi | 並列処理 | 比較テーブル | パフォーマンス重視 |
-| 04_gap | エラー処理 | タイムライン | 異常検知フォーカス |
-| 06_marimo | 総合ダッシュボード | Web UI | インタラクティブ |
+| テスト | 主な目的 | 表示方法 | 動作状況 | 特徴 |
+|--------|----------|----------|----------|------|
+| 01_basic | 基本動作確認 | Rich Terminal | ✅ 動作確認済み | MT5リアルタイム接続 |
+| 01_basic_demo | デモ動作 | Rich Terminal | ✅ 完全動作 | シミュレートデータ |
+| 01_basic_simple | 軽量版 | シンプル出力 | ✅ 動作確認済み | バッファ管理改善 |
+| 02_realtime | プロセス可視化 | アニメーション | 🔧 要テスト | 動的な表示 |
+| 03_multi | 並列処理 | 比較テーブル | 🔧 要テスト | パフォーマンス重視 |
+| 04_gap | エラー処理 | タイムライン | 🔧 要テスト | 異常検知フォーカス |
+| 06_marimo | 総合ダッシュボード | Web UI | 🔧 要テスト | インタラクティブ |
 
 ## 🎓 学習ポイント
 
@@ -159,6 +244,30 @@ marimo edit 06_marimo_bar_dashboard.py --port 8080
    - Marimoによるインタラクティブダッシュボード
    - リアルタイムチャート更新
 
+## 🎯 実装の成果
+
+### 達成した機能
+- ✅ MT5からのリアルタイムティック取得
+- ✅ ティック→1分足バーへの変換
+- ✅ バー完成時のコールバック通知
+- ✅ Rich libraryによる視覚的表示
+- ✅ タイムゾーン問題の解決
+- ✅ Tickモデル互換性の実装
+
+### 確認されたバー生成例
+```
+✅ Bar #1 completed at 07:29:00
+   OHLC: 1.16452 / 1.16452 / 1.16450 / 1.16450
+   Volume: 4.00, Ticks: 4
+```
+
+### 今後の改善点
+- 📌 バッファ管理の最適化（高頻度ティック対応）
+- 📌 タイムスタンプ逆転への対処
+- 📌 複数シンボル同時処理の最適化
+
 ---
 
 *これらのテストはTask 6のTickToBarConverterの動作を視覚的に確認し、実際の取引環境での振る舞いを体験するために設計されています。*
+
+**最終更新**: 2025-08-21 | **動作確認済み環境**: Axiory-Demo (Login: 20046505)

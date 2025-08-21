@@ -21,7 +21,8 @@
       "mcp__serena__search_for_pattern",
       "mcp__serena__insert_after_symbol",
       "mcp__serena__replace_symbol_body",
-      "Bash(ruff format:*)"
+      "Bash(ruff format:*)",
+      "Bash(timeout 10 python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py)"
     ]
   },
   "enableAllProjectMcpServers": true,

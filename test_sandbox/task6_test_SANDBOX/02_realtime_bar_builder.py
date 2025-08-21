@@ -319,10 +319,10 @@ async def main():
         # MT5設定
         config = BaseConfig()
         mt5_config = {
-            "login": config.mt5.login,
-            "password": config.mt5.password,
-            "server": config.mt5.server,
-            "timeout": 60000,
+            "login": config.mt5_login,
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout,
             "retry_count": 3,
             "retry_delay": 1
         }

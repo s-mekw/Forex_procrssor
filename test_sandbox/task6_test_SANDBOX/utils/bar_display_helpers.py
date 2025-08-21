@@ -126,9 +126,13 @@ def create_current_bar_panel(current_bar: Optional[Any], symbol: str) -> Panel:
         
         # プログレスバー（バー完成までの進捗）
         now = datetime.now()
-        if now < current_bar.end_time:
-            elapsed = (now - current_bar.time).total_seconds()
-            total = (current_bar.end_time - current_bar.time).total_seconds()
+        # タイムゾーンを統一（両方をnaiveにする）
+        bar_time = current_bar.time.replace(tzinfo=None) if current_bar.time.tzinfo else current_bar.time
+        bar_end_time = current_bar.end_time.replace(tzinfo=None) if current_bar.end_time.tzinfo else current_bar.end_time
+        
+        if now < bar_end_time:
+            elapsed = (now - bar_time).total_seconds()
+            total = (bar_end_time - bar_time).total_seconds()
             progress = min(elapsed / total * 100, 100)
             lines.append("")
             lines.append(f"Progress: [{'█' * int(progress/5)}{'-' * (20-int(progress/5))}] {progress:.1f}%")
