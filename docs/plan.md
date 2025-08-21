@@ -40,7 +40,8 @@
 **タスク6: ティック→バー変換エンジンの実装**
 - 要件1.4の実装（リアルタイムティック→1分足OHLC変換）
 - テスト駆動開発（TDD）アプローチを採用
-- 現在: Step 2/7 実装中
+- 現在: Step 4/7 実装中
+- 状況: Step 1-3完了（4テストPASSED、6テストSKIPPED）
 
 #### 実装対象ファイル
 1. `tests/unit/test_tick_to_bar.py` - ユニットテスト
@@ -239,3 +240,41 @@ def _get_bar_end_time(self, bar_start: datetime) -> datetime:
 - `test_single_minute_bar_generation`: 基本的な1分足生成を検証
 - `test_timestamp_alignment`: バーの開始/終了時刻が正しいことを検証
 - `test_ohlcv_calculation`: OHLCV値の正確性を検証
+
+#### Step 4 実装詳細（現在作業中）
+
+##### 実装対象
+Step 4では、既に実装済みの`get_current_bar()`メソッドの動作確認と、関連テストの有効化を行います。
+
+##### 有効化するテスト
+1. **test_get_current_incomplete_bar** - 未完成バーの取得テスト
+   - 現在作成中のバーが正しく取得できることを確認
+   - バーが存在しない場合はNoneを返すことを確認
+
+2. **test_empty_bar_handling** - 空のバー処理テスト
+   - ティックがない場合のバー処理を確認
+   - 初期状態でcurrent_barがNoneであることを確認
+   - completed_barsが空であることを確認
+
+3. **test_multiple_bars_generation** - 複数バー生成テスト
+   - 複数分のティックデータから正しく複数のバーが生成されることを確認
+   - バー境界を越えた際の処理が正しく動作することを確認
+   - 各バーのOHLCV値が正確であることを確認
+
+##### 実装の確認ポイント
+- `get_current_bar()`が未完成バーを正しく返す
+- バー境界を越えた際の処理が正確
+- 空のバー処理（初期状態）が適切
+- High/Low値の動的更新が正しく動作している（Step 3で実装済み）
+
+##### エッジケース
+- ティックがない状態でのget_current_bar()呼び出し → None
+- 単一ティックのバー → Open=High=Low=Close
+- 複数分にまたがるティックデータ → 正しくバーが分割される
+
+##### 実装手順
+1. test_get_current_incomplete_barのskipマークを削除
+2. test_empty_bar_handlingのskipマークを削除 
+3. test_multiple_bars_generationのskipマークを削除
+4. テストを実行して動作確認（7 passed, 3 skipped目標）
+5. 必要に応じて既存実装の微調整
