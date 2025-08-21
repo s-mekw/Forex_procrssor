@@ -214,19 +214,52 @@ class TestTickToBarConverter:
 
     def test_volume_aggregation(self, converter, sample_ticks):
         """ボリューム集計の正確性テスト"""
-        # 実装後にコメントを外す
-        # total_volume = Decimal("0")
-        #
-        # # ティックを追加してボリュームを集計
-        # for tick_data in sample_ticks[:4]:
-        #     tick = Tick(**tick_data)
-        #     converter.add_tick(tick)
-        #     total_volume += tick.volume
-        #
-        # # 現在のバーのボリュームを確認
-        # current_bar = converter.get_current_bar()
-        # assert current_bar.volume == total_volume
-        pytest.skip("TickToBarConverter not implemented yet")
+        total_volume = Decimal("0")
+        
+        # ティックを追加してボリュームを集計
+        for tick_data in sample_ticks[:4]:
+            tick = Tick(**tick_data)
+            converter.add_tick(tick)
+            total_volume += tick.volume
+        
+        # 現在のバーのボリュームを確認
+        current_bar = converter.get_current_bar()
+        assert current_bar.volume == total_volume
+
+    def test_tick_gap_warning(self, converter, caplog):
+        """ティック欠損検知のテスト"""
+        import logging
+        
+        # ログレベルをWARNINGに設定
+        caplog.set_level(logging.WARNING)
+        
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+        
+        # 最初のティック
+        tick1 = Tick(
+            symbol="EURUSD",
+            time=base_time,
+            bid=Decimal("1.04200"),
+            ask=Decimal("1.04210"),
+            volume=Decimal("1.0")
+        )
+        converter.add_tick(tick1)
+        
+        # 30秒以上後のティック（ギャップあり）
+        tick2 = Tick(
+            symbol="EURUSD",
+            time=base_time + timedelta(seconds=35),
+            bid=Decimal("1.04220"),
+            ask=Decimal("1.04230"),
+            volume=Decimal("1.0")
+        )
+        converter.add_tick(tick2)
+        
+        # 警告ログが出力されたことを確認
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelname == "WARNING"
+        assert "tick_gap_detected" in caplog.records[0].message
+        assert "\"gap_seconds\": 35.0" in caplog.records[0].message
 
     def test_bid_ask_spread_tracking(self, converter):
         """Bid/Askスプレッドの追跡テスト"""

@@ -5,6 +5,8 @@
 時間足バーデータに変換する機能を提供します。
 """
 
+import json
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -46,6 +48,7 @@ class TickToBarConverter:
         symbol: str,
         timeframe: int = 60,
         on_bar_complete: Callable[[Bar], None] | None = None,
+        gap_threshold: int = 30,
     ):
         """
         初期化
@@ -54,13 +57,17 @@ class TickToBarConverter:
             symbol: 通貨ペア
             timeframe: バーの時間枠（秒単位、デフォルト60秒=1分）
             on_bar_complete: バー完成時のコールバック関数
+            gap_threshold: ティック欠損と判定する秒数（デフォルト30秒）
         """
         self.symbol = symbol
         self.timeframe = timeframe
         self.on_bar_complete = on_bar_complete
+        self.gap_threshold = gap_threshold
         self.current_bar: Bar | None = None
         self.completed_bars: list[Bar] = []
         self._current_ticks: list[Tick] = []
+        self.last_tick_time: datetime | None = None
+        self.logger = self._setup_logger()
 
     def add_tick(self, tick: Tick) -> Bar | None:
         """
@@ -72,9 +79,13 @@ class TickToBarConverter:
         Returns:
             完成したバー（完成していない場合はNone）
         """
+        # ティック欠損を検知
+        self.check_tick_gap(tick.time)
+
         # 現在のバーがない場合は新規作成
         if self.current_bar is None:
             self._create_new_bar(tick)
+            self.last_tick_time = tick.time
             return None
 
         # バー完成判定
@@ -92,10 +103,15 @@ class TickToBarConverter:
             # 新しいバーを作成
             self._create_new_bar(tick)
 
+            # 最後のティック時刻を更新
+            self.last_tick_time = tick.time
+
             return completed_bar
         else:
             # 現在のバーを更新
             self._update_bar(tick)
+            # 最後のティック時刻を更新
+            self.last_tick_time = tick.time
             return None
 
     def get_current_bar(self) -> Bar | None:
@@ -115,6 +131,54 @@ class TickToBarConverter:
             完成したバーのリスト
         """
         return self.completed_bars
+
+    def _setup_logger(self) -> logging.Logger:
+        """
+        構造化ログのためのロガー設定
+
+        Returns:
+            設定済みのロガー
+        """
+        logger = logging.getLogger(f"TickToBarConverter.{self.symbol}")
+        logger.setLevel(logging.WARNING)
+
+        # JSONフォーマットのハンドラー設定（既存のハンドラーがない場合のみ）
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter("%(message)s")
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+
+        return logger
+
+    def check_tick_gap(self, current_time: datetime) -> float | None:
+        """
+        ティック欠損を検知して警告ログを出力
+
+        Args:
+            current_time: 現在のティック時刻
+
+        Returns:
+            欠損秒数（欠損がない場合はNone）
+        """
+        if self.last_tick_time is None:
+            return None
+
+        gap_seconds = (current_time - self.last_tick_time).total_seconds()
+
+        if gap_seconds > self.gap_threshold:
+            warning_data = {
+                "event": "tick_gap_detected",
+                "symbol": self.symbol,
+                "gap_seconds": gap_seconds,
+                "threshold": self.gap_threshold,
+                "last_tick_time": self.last_tick_time.isoformat(),
+                "current_time": current_time.isoformat(),
+            }
+            self.logger.warning(json.dumps(warning_data))
+            return gap_seconds
+
+        return None
 
     def _create_new_bar(self, tick: Tick) -> None:
         """
@@ -141,7 +205,7 @@ class TickToBarConverter:
             volume=tick.volume,
             tick_count=1,
             avg_spread=tick.ask - tick.bid,
-            is_complete=False
+            is_complete=False,
         )
 
         # ティックリストをクリアして新しいティックを追加
@@ -172,9 +236,13 @@ class TickToBarConverter:
 
         # スプレッドの累積平均計算
         if self.current_bar.avg_spread is not None:
-            total_spread = self.current_bar.avg_spread * (self.current_bar.tick_count - 1)
+            total_spread = self.current_bar.avg_spread * (
+                self.current_bar.tick_count - 1
+            )
             new_spread = tick.ask - tick.bid
-            self.current_bar.avg_spread = (total_spread + new_spread) / self.current_bar.tick_count
+            self.current_bar.avg_spread = (
+                total_spread + new_spread
+            ) / self.current_bar.tick_count
 
         # ティックリストに追加
         self._current_ticks.append(tick)

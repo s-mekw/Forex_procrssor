@@ -241,7 +241,7 @@ def _get_bar_end_time(self, bar_start: datetime) -> datetime:
 - `test_timestamp_alignment`: バーの開始/終了時刻が正しいことを検証
 - `test_ohlcv_calculation`: OHLCV値の正確性を検証
 
-#### Step 4 実装詳細（現在作業中）
+#### Step 4 実装詳細（完了）
 
 ##### 実装対象
 Step 4では、既に実装済みの`get_current_bar()`メソッドの動作確認と、関連テストの有効化を行います。
@@ -272,9 +272,112 @@ Step 4では、既に実装済みの`get_current_bar()`メソッドの動作確�
 - 単一ティックのバー → Open=High=Low=Close
 - 複数分にまたがるティックデータ → 正しくバーが分割される
 
-##### 実装手順
-1. test_get_current_incomplete_barのskipマークを削除
-2. test_empty_bar_handlingのskipマークを削除 
-3. test_multiple_bars_generationのskipマークを削除
-4. テストを実行して動作確認（7 passed, 3 skipped目標）
-5. 必要に応じて既存実装の微調整
+##### 実装結果
+- ✅ 7 tests passed, 3 skipped達成
+- ✅ 既存実装で全てのテストが正常動作
+- ✅ エッジケースも適切に処理
+
+#### Step 5 実装詳細（現在作業中）
+
+##### 実装対象
+ティック欠損検知と警告機能を追加し、30秒以上のギャップがある場合に構造化ログで警告を出力します。
+
+##### 1. クラスプロパティの追加
+```python
+class TickToBarConverter:
+    def __init__(self, symbol: str, timeframe: int = 60, on_bar_complete: Callable[[Bar], None] | None = None):
+        # 既存のプロパティ...
+        self.last_tick_time: datetime | None = None  # 最後のティック受信時刻
+        self.logger = self._setup_logger()  # JSONロガーの設定
+```
+
+##### 2. ロガー設定メソッド
+```python
+def _setup_logger(self) -> logging.Logger:
+    """構造化ログのためのロガー設定"""
+    logger = logging.getLogger(f"TickToBarConverter.{self.symbol}")
+    logger.setLevel(logging.WARNING)
+    
+    # JSONフォーマットのハンドラー設定
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    
+    return logger
+```
+
+##### 3. ティック欠損検知メソッド
+```python
+def check_tick_gap(self, tick: Tick) -> bool:
+    """30秒以上のティック欠損を検知
+    
+    Returns:
+        bool: 欠損が検出された場合True
+    """
+    if self.last_tick_time is None:
+        return False
+    
+    gap_seconds = (tick.time - self.last_tick_time).total_seconds()
+    
+    if gap_seconds > 30:
+        # 構造化ログ出力
+        log_data = {
+            "timestamp": tick.time.isoformat(),
+            "level": "WARNING",
+            "message": "Tick gap detected",
+            "symbol": self.symbol,
+            "gap_seconds": gap_seconds,
+            "last_tick": self.last_tick_time.isoformat(),
+            "current_tick": tick.time.isoformat()
+        }
+        self.logger.warning(json.dumps(log_data))
+        return True
+    
+    return False
+```
+
+##### 4. add_tick()メソッドの更新
+```python
+def add_tick(self, tick: Tick) -> Bar | None:
+    """ティックを追加し、完成したバーを返す（更新版）"""
+    # 欠損検知を追加
+    self.check_tick_gap(tick)
+    
+    # 既存の処理...
+    bar_start = self._get_bar_start_time(tick.time)
+    completed_bar = None
+    
+    # バー処理ロジック（既存）...
+    
+    # 最後のティック時刻を更新
+    self.last_tick_time = tick.time
+    
+    return completed_bar
+```
+
+##### 5. テストの有効化と更新
+- **test_tick_gap_warning**: 
+  - 30秒以上のギャップでWARNINGログ出力を確認
+  - ログのモック化とアサーション追加
+  
+- **test_volume_aggregation**:
+  - ボリューム累積の正確性を確認
+  - 複数ティックでのボリューム合計値の検証
+
+##### 6. 実装手順
+1. TickToBarConverterクラスにlast_tick_timeプロパティを追加
+2. _setup_logger()メソッドを実装
+3. check_tick_gap()メソッドを実装
+4. add_tick()メソッドに欠損検知と時刻更新を統合
+5. json, loggingモジュールのインポート追加
+6. test_tick_gap_warningのskipマーク削除とモック設定
+7. test_volume_aggregationのskipマーク削除
+8. テスト実行（9 passed, 1 skipped目標）
+
+##### 技術的考慮事項
+- logging.WARNING レベルを使用
+- JSON形式で構造化ログを出力
+- テストではunittest.mockを使用してログ出力を検証
+- 欠損検知は非破壊的（警告のみ、処理は継続）
