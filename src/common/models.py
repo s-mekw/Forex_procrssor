@@ -113,27 +113,6 @@ class Tick(BaseModel):
             "volume": np.float32(self.volume)
         }
 
-    @property
-    def time(self) -> datetime:
-        """後方互換性のためのプロパティ
-        
-        TickToBarConverterとの互換性を保つため、
-        time属性でtimestampにアクセスできるようにする。
-        
-        Note:
-            このプロパティはStep 6で削除予定。
-            新規コードではtimestamp属性を使用すること。
-        """
-        return self.timestamp
-
-    @time.setter
-    def time(self, value: datetime):
-        """後方互換性のためのセッター
-        
-        Args:
-            value: 設定する時刻値
-        """
-        self.timestamp = value
 
 
 class TimeFrame(str, Enum):

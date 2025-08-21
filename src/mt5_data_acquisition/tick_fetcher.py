@@ -33,8 +33,8 @@ except ImportError:
     # テスト環境や開発環境でMT5がインストールされていない場合のフォールバック
     mt5 = None
 
-from common.models import Tick
-from mt5_data_acquisition.mt5_client import MT5ConnectionManager
+from src.common.models import Tick
+from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 
 
 # カスタム例外クラス
