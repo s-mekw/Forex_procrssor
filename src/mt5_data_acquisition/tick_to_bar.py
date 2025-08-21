@@ -6,7 +6,7 @@
 """
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -71,11 +71,32 @@ class TickToBarConverter:
 
         Returns:
             完成したバー（完成していない場合はNone）
-
-        Raises:
-            NotImplementedError: メソッドがまだ実装されていません
         """
-        raise NotImplementedError("add_tick method is not yet implemented")
+        # 現在のバーがない場合は新規作成
+        if self.current_bar is None:
+            self._create_new_bar(tick)
+            return None
+
+        # バー完成判定
+        if self._check_bar_completion(tick.time):
+            # 現在のバーを完成させる
+            self.current_bar.is_complete = True
+            self.completed_bars.append(self.current_bar)
+
+            # コールバック実行
+            if self.on_bar_complete:
+                self.on_bar_complete(self.current_bar)
+
+            completed_bar = self.current_bar
+
+            # 新しいバーを作成
+            self._create_new_bar(tick)
+
+            return completed_bar
+        else:
+            # 現在のバーを更新
+            self._update_bar(tick)
+            return None
 
     def get_current_bar(self) -> Bar | None:
         """
@@ -83,11 +104,8 @@ class TickToBarConverter:
 
         Returns:
             現在作成中のバー（存在しない場合はNone）
-
-        Raises:
-            NotImplementedError: メソッドがまだ実装されていません
         """
-        raise NotImplementedError("get_current_bar method is not yet implemented")
+        return self.current_bar
 
     def get_completed_bars(self) -> list[Bar]:
         """
@@ -104,11 +122,30 @@ class TickToBarConverter:
 
         Args:
             tick: バーの最初のティック
-
-        Raises:
-            NotImplementedError: メソッドがまだ実装されていません
         """
-        raise NotImplementedError("_create_new_bar method is not yet implemented")
+        # ティックの時刻を分単位に正規化（秒とマイクロ秒を0に）
+        bar_start = self._get_bar_start_time(tick.time)
+
+        # 終了時刻を計算（開始時刻 + 59.999999秒）
+        bar_end = self._get_bar_end_time(bar_start)
+
+        # OHLC値を最初のティックで初期化
+        self.current_bar = Bar(
+            symbol=self.symbol,
+            time=bar_start,
+            end_time=bar_end,
+            open=tick.bid,
+            high=tick.bid,
+            low=tick.bid,
+            close=tick.bid,
+            volume=tick.volume,
+            tick_count=1,
+            avg_spread=tick.ask - tick.bid,
+            is_complete=False
+        )
+
+        # ティックリストをクリアして新しいティックを追加
+        self._current_ticks = [tick]
 
     def _update_bar(self, tick: Tick) -> None:
         """
@@ -116,11 +153,31 @@ class TickToBarConverter:
 
         Args:
             tick: バーに追加するティック
-
-        Raises:
-            NotImplementedError: メソッドがまだ実装されていません
         """
-        raise NotImplementedError("_update_bar method is not yet implemented")
+        if not self.current_bar:
+            return
+
+        # High/Lowの更新（max/min）
+        self.current_bar.high = max(self.current_bar.high, tick.bid)
+        self.current_bar.low = min(self.current_bar.low, tick.bid)
+
+        # Closeを最新のティック価格に
+        self.current_bar.close = tick.bid
+
+        # ボリューム累積
+        self.current_bar.volume += tick.volume
+
+        # ティックカウント増加
+        self.current_bar.tick_count += 1
+
+        # スプレッドの累積平均計算
+        if self.current_bar.avg_spread is not None:
+            total_spread = self.current_bar.avg_spread * (self.current_bar.tick_count - 1)
+            new_spread = tick.ask - tick.bid
+            self.current_bar.avg_spread = (total_spread + new_spread) / self.current_bar.tick_count
+
+        # ティックリストに追加
+        self._current_ticks.append(tick)
 
     def _check_bar_completion(self, tick_time: datetime) -> bool:
         """
@@ -131,8 +188,42 @@ class TickToBarConverter:
 
         Returns:
             バーが完成した場合True
-
-        Raises:
-            NotImplementedError: メソッドがまだ実装されていません
         """
-        raise NotImplementedError("_check_bar_completion method is not yet implemented")
+        if not self.current_bar:
+            return False
+
+        # 現在のティック時刻がバーの終了時刻を超えているか判定
+        return tick_time > self.current_bar.end_time
+
+    def _get_bar_start_time(self, tick_time: datetime) -> datetime:
+        """
+        ティック時刻から対応するバーの開始時刻を計算（分単位への切り捨て）
+
+        Args:
+            tick_time: ティックの時刻
+
+        Returns:
+            バーの開始時刻（秒とマイクロ秒が0）
+        """
+        if self.timeframe == 60:
+            # 1分足の場合、秒とマイクロ秒を0にする
+            return tick_time.replace(second=0, microsecond=0)
+        else:
+            # 他のタイムフレームの場合（将来の拡張用）
+            # エポックからの秒数を計算して、タイムフレームで切り捨て
+            epoch = datetime(1970, 1, 1, tzinfo=tick_time.tzinfo)
+            seconds_since_epoch = (tick_time - epoch).total_seconds()
+            bar_start_seconds = (seconds_since_epoch // self.timeframe) * self.timeframe
+            return epoch + timedelta(seconds=bar_start_seconds)
+
+    def _get_bar_end_time(self, bar_start: datetime) -> datetime:
+        """
+        バー開始時刻から終了時刻を計算（開始時刻 + 59.999999秒）
+
+        Args:
+            bar_start: バーの開始時刻
+
+        Returns:
+            バーの終了時刻
+        """
+        return bar_start + timedelta(seconds=self.timeframe - 1, microseconds=999999)

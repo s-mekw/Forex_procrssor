@@ -74,48 +74,44 @@ class TestTickToBarConverter:
 
     def test_single_minute_bar_generation(self, converter, sample_ticks):
         """1分足バー生成の基本テスト（複数ティックから1分足を生成）"""
-        # 実装後にコメントを外す
-        # # 最初の4つのティック（同じ分内）を追加
-        # for tick_data in sample_ticks[:4]:
-        #     tick = Tick(**tick_data)
-        #     completed_bar = converter.add_tick(tick)
-        #     # 分が完了していないのでNoneが返される
-        #     assert completed_bar is None
-        #
-        # # 5つ目のティック（次の分）を追加
-        # tick = Tick(**sample_ticks[4])
-        # completed_bar = converter.add_tick(tick)
-        #
-        # # 前の分のバーが完成して返される
-        # assert completed_bar is not None
-        # assert completed_bar.symbol == "EURUSD"
-        # assert completed_bar.open == Decimal("1.04200")  # 最初のティックのbid
-        # assert completed_bar.high == Decimal("1.04250")  # 最高値
-        # assert completed_bar.low == Decimal("1.04180")   # 最安値
-        # assert completed_bar.close == Decimal("1.04250") # 最後のティックのbid
-        # assert completed_bar.volume == Decimal("5.0")    # 合計ボリューム
-        pytest.skip("TickToBarConverter not implemented yet")
+        # 最初の4つのティック（同じ分内）を追加
+        for tick_data in sample_ticks[:4]:
+            tick = Tick(**tick_data)
+            completed_bar = converter.add_tick(tick)
+            # 分が完了していないのでNoneが返される
+            assert completed_bar is None
+
+        # 5つ目のティック（次の分）を追加
+        tick = Tick(**sample_ticks[4])
+        completed_bar = converter.add_tick(tick)
+
+        # 前の分のバーが完成して返される
+        assert completed_bar is not None
+        assert completed_bar.symbol == "EURUSD"
+        assert completed_bar.open == Decimal("1.04200")  # 最初のティックのbid
+        assert completed_bar.high == Decimal("1.04250")  # 最高値
+        assert completed_bar.low == Decimal("1.04180")   # 最安値
+        assert completed_bar.close == Decimal("1.04250") # 最後のティックのbid
+        assert completed_bar.volume == Decimal("5.0")    # 合計ボリューム
 
     def test_timestamp_alignment(self, converter, sample_ticks):
         """タイムスタンプ整合性のテスト（バーの開始/終了時刻が正しいこと）"""
-        # 実装後にコメントを外す
-        # # ティックを追加
-        # for tick_data in sample_ticks[:4]:
-        #     tick = Tick(**tick_data)
-        #     converter.add_tick(tick)
-        #
-        # # 次の分のティックで前の分が完成
-        # tick = Tick(**sample_ticks[4])
-        # completed_bar = converter.add_tick(tick)
-        #
-        # assert completed_bar is not None
-        # # バーの開始時刻は分の開始時刻（秒を0に正規化）
-        # expected_start = datetime(2025, 1, 20, 10, 0, 0)
-        # assert completed_bar.time == expected_start
-        # # バーの終了時刻は分の終了時刻
-        # expected_end = datetime(2025, 1, 20, 10, 0, 59, 999999)
-        # assert completed_bar.end_time == expected_end
-        pytest.skip("TickToBarConverter not implemented yet")
+        # ティックを追加
+        for tick_data in sample_ticks[:4]:
+            tick = Tick(**tick_data)
+            converter.add_tick(tick)
+
+        # 次の分のティックで前の分が完成
+        tick = Tick(**sample_ticks[4])
+        completed_bar = converter.add_tick(tick)
+
+        assert completed_bar is not None
+        # バーの開始時刻は分の開始時刻（秒を0に正規化）
+        expected_start = datetime(2025, 1, 20, 10, 0, 0)
+        assert completed_bar.time == expected_start
+        # バーの終了時刻は分の終了時刻
+        expected_end = datetime(2025, 1, 20, 10, 0, 59, 999999)
+        assert completed_bar.end_time == expected_end
 
     def test_get_current_incomplete_bar(self, converter, sample_ticks):
         """未完成バーの取得テスト"""
@@ -140,40 +136,38 @@ class TestTickToBarConverter:
 
     def test_ohlcv_accuracy(self, converter):
         """OHLCV値の正確性テスト"""
-        # 実装後にコメントを外す
-        # base_time = datetime(2025, 1, 20, 10, 0, 0)
-        #
-        # # 特定のパターンでティックを作成
-        # ticks_data = [
-        #     {"symbol": "EURUSD", "time": base_time, "bid": Decimal("1.04200"), "ask": Decimal("1.04210"), "volume": Decimal("1.0")},  # Open
-        #     {"symbol": "EURUSD", "time": base_time + timedelta(seconds=10), "bid": Decimal("1.04300"), "ask": Decimal("1.04310"), "volume": Decimal("0.5")},  # High
-        #     {"symbol": "EURUSD", "time": base_time + timedelta(seconds=20), "bid": Decimal("1.04100"), "ask": Decimal("1.04110"), "volume": Decimal("0.5")},  # Low
-        #     {"symbol": "EURUSD", "time": base_time + timedelta(seconds=30), "bid": Decimal("1.04150"), "ask": Decimal("1.04160"), "volume": Decimal("1.0")},  # 中間
-        #     {"symbol": "EURUSD", "time": base_time + timedelta(seconds=50), "bid": Decimal("1.04180"), "ask": Decimal("1.04190"), "volume": Decimal("0.5")},  # Close
-        # ]
-        #
-        # # ティックを追加
-        # for tick_data in ticks_data:
-        #     tick = Tick(**tick_data)
-        #     converter.add_tick(tick)
-        #
-        # # 次の分のティックで完成
-        # next_tick = Tick(
-        #     symbol="EURUSD",
-        #     time=base_time + timedelta(seconds=60),
-        #     bid=Decimal("1.04200"),
-        #     ask=Decimal("1.04210"),
-        #     volume=Decimal("1.0")
-        # )
-        # completed_bar = converter.add_tick(next_tick)
-        #
-        # # OHLCV値を検証
-        # assert completed_bar.open == Decimal("1.04200")   # 最初のティック
-        # assert completed_bar.high == Decimal("1.04300")   # 最高値
-        # assert completed_bar.low == Decimal("1.04100")    # 最安値
-        # assert completed_bar.close == Decimal("1.04180")  # 最後のティック
-        # assert completed_bar.volume == Decimal("3.5")     # 合計ボリューム
-        pytest.skip("TickToBarConverter not implemented yet")
+        base_time = datetime(2025, 1, 20, 10, 0, 0)
+
+        # 特定のパターンでティックを作成
+        ticks_data = [
+            {"symbol": "EURUSD", "time": base_time, "bid": Decimal("1.04200"), "ask": Decimal("1.04210"), "volume": Decimal("1.0")},  # Open
+            {"symbol": "EURUSD", "time": base_time + timedelta(seconds=10), "bid": Decimal("1.04300"), "ask": Decimal("1.04310"), "volume": Decimal("0.5")},  # High
+            {"symbol": "EURUSD", "time": base_time + timedelta(seconds=20), "bid": Decimal("1.04100"), "ask": Decimal("1.04110"), "volume": Decimal("0.5")},  # Low
+            {"symbol": "EURUSD", "time": base_time + timedelta(seconds=30), "bid": Decimal("1.04150"), "ask": Decimal("1.04160"), "volume": Decimal("1.0")},  # 中間
+            {"symbol": "EURUSD", "time": base_time + timedelta(seconds=50), "bid": Decimal("1.04180"), "ask": Decimal("1.04190"), "volume": Decimal("0.5")},  # Close
+        ]
+
+        # ティックを追加
+        for tick_data in ticks_data:
+            tick = Tick(**tick_data)
+            converter.add_tick(tick)
+
+        # 次の分のティックで完成
+        next_tick = Tick(
+            symbol="EURUSD",
+            time=base_time + timedelta(seconds=60),
+            bid=Decimal("1.04200"),
+            ask=Decimal("1.04210"),
+            volume=Decimal("1.0")
+        )
+        completed_bar = converter.add_tick(next_tick)
+
+        # OHLCV値を検証
+        assert completed_bar.open == Decimal("1.04200")   # 最初のティック
+        assert completed_bar.high == Decimal("1.04300")   # 最高値
+        assert completed_bar.low == Decimal("1.04100")    # 最安値
+        assert completed_bar.close == Decimal("1.04180")  # 最後のティック
+        assert completed_bar.volume == Decimal("3.5")     # 合計ボリューム
 
     def test_empty_bar_handling(self, converter):
         """ティックがない場合のバー処理テスト"""

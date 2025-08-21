@@ -113,8 +113,11 @@ class TickToBarConverter:
    - 内部ヘルパーメソッド群
 
 ##### テスト活性化計画
-- Step 2完了時点: `test_converter_initialization`のみ有効化
-- Step 3で: `test_single_minute_bar_generation`等を有効化
+- Step 2完了時点: `test_converter_initialization`のみ有効化（完了）
+- Step 3で: 
+  - `test_single_minute_bar_generation` - 1分足バーの基本生成
+  - `test_timestamp_alignment` - タイムスタンプの正確性
+  - `test_ohlcv_calculation` - OHLCV値の計算精度
 - 段階的にテストを有効化していく
 
 ##### 技術的注意点
@@ -122,3 +125,117 @@ class TickToBarConverter:
 - datetimeのタイムゾーン処理は後のステップで考慮
 - Polarsは集計処理が必要になるStep 7で導入予定
 - 現段階では純粋なPythonで実装
+
+#### Step 3 実装詳細（現在作業中）
+
+##### add_tick()メソッドの実装フロー
+```python
+def add_tick(self, tick: Tick) -> Bar | None:
+    """ティックを追加し、完成したバーを返す
+    
+    処理フロー:
+    1. ティックのタイムスタンプからバー開始時刻を計算
+    2. 新しいバーが必要か判定
+    3. 必要なら現在のバーを完成させて新しいバーを作成
+    4. 現在のバーを更新
+    5. 完成したバーを返却（またはNone）
+    """
+    bar_start = self._get_bar_start_time(tick.time)
+    completed_bar = None
+    
+    # 新しいバーが必要か判定
+    if self.current_bar is None or self.current_bar.time != bar_start:
+        # 現在のバーを完成させる
+        if self.current_bar:
+            self.current_bar.is_complete = True
+            self.completed_bars.append(self.current_bar)
+            if self.on_bar_complete:
+                self.on_bar_complete(self.current_bar)
+            completed_bar = self.current_bar
+        
+        # 新しいバーを作成
+        self._create_new_bar(tick)
+    else:
+        # 現在のバーを更新
+        self._update_bar(tick)
+    
+    return completed_bar
+```
+
+##### _create_new_bar()メソッド
+```python
+def _create_new_bar(self, tick: Tick) -> None:
+    """新しいバーを作成して初期化"""
+    bar_start = self._get_bar_start_time(tick.time)
+    bar_end = self._get_bar_end_time(bar_start)
+    
+    self.current_bar = Bar(
+        symbol=self.symbol,
+        time=bar_start,
+        end_time=bar_end,
+        open=tick.bid,
+        high=tick.bid,
+        low=tick.bid,
+        close=tick.bid,
+        volume=tick.volume,
+        tick_count=1,
+        avg_spread=tick.ask - tick.bid,
+        is_complete=False
+    )
+    
+    self._current_ticks = [tick]
+```
+
+##### _update_bar()メソッド
+```python
+def _update_bar(self, tick: Tick) -> None:
+    """現在のバーのOHLCVを更新"""
+    if not self.current_bar:
+        return
+    
+    # OHLCVの更新
+    self.current_bar.high = max(self.current_bar.high, tick.bid)
+    self.current_bar.low = min(self.current_bar.low, tick.bid)
+    self.current_bar.close = tick.bid
+    self.current_bar.volume += tick.volume
+    self.current_bar.tick_count += 1
+    
+    # 平均スプレッドの更新（累積平均）
+    if self.current_bar.avg_spread:
+        total_spread = self.current_bar.avg_spread * (self.current_bar.tick_count - 1)
+        new_spread = tick.ask - tick.bid
+        self.current_bar.avg_spread = (total_spread + new_spread) / self.current_bar.tick_count
+    
+    self._current_ticks.append(tick)
+```
+
+##### ヘルパーメソッド
+```python
+def _get_bar_start_time(self, tick_time: datetime) -> datetime:
+    """ティックタイムからバー開始時刻を計算（分単位に切り捨て）"""
+    # timeframeが60秒（1分）の場合、分単位に切り捨て
+    if self.timeframe == 60:
+        return tick_time.replace(second=0, microsecond=0)
+    # 他のタイムフレームの場合の処理（将来的に拡張）
+    else:
+        # timeframe秒単位で切り捨て
+        epoch = datetime(1970, 1, 1, tzinfo=tick_time.tzinfo)
+        seconds_since_epoch = (tick_time - epoch).total_seconds()
+        bar_start_seconds = (seconds_since_epoch // self.timeframe) * self.timeframe
+        return epoch + timedelta(seconds=bar_start_seconds)
+
+def _get_bar_end_time(self, bar_start: datetime) -> datetime:
+    """バー開始時刻から終了時刻を計算"""
+    return bar_start + timedelta(seconds=self.timeframe) - timedelta(microseconds=1)
+```
+
+##### 実装時のポイント
+1. **ティックの順序保証**: ティックが時間順に来ることを前提とする（Step 6で逆転処理を追加）
+2. **スプレッド計算**: Bid/Askの差を累積平均で計算
+3. **ボリューム累積**: 各ティックのボリュームを単純加算
+4. **コールバック処理**: バー完成時に外部に通知
+
+##### テスト有効化の準備
+- `test_single_minute_bar_generation`: 基本的な1分足生成を検証
+- `test_timestamp_alignment`: バーの開始/終了時刻が正しいことを検証
+- `test_ohlcv_calculation`: OHLCV値の正確性を検証

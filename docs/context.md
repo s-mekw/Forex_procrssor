@@ -2,8 +2,8 @@
 
 ## 📍 現在の状態
 - タスク: タスク6「ティック→バー変換エンジンの実装」
-- ステップ: 2/7
-- 最終更新: 2025-08-20 11:00
+- ステップ: 3/7
+- 最終更新: 2025-08-20 12:00
 
 ## 📋 計画
 
@@ -49,7 +49,59 @@
   - add_tick()メソッドの実装
   - バー完成判定ロジックの実装
   - OHLCV計算ロジックの実装
-- 完了: [ ]
+- 完了: [x]
+
+#### 詳細実装計画
+1. **add_tick()メソッドの実装**
+   - ティック受信時のバー処理フロー:
+     a. ティックのタイムスタンプから対応するバーの開始時刻を計算
+     b. 現在のバーが存在しない、または新しいバーの開始時刻の場合:
+        - 現在のバーを完成させて保存
+        - 新しいバーを作成（_create_new_bar）
+     c. 現在のバーを更新（_update_bar）
+   - バー完成時にon_bar_completeコールバックを呼び出し
+   - 完成したバーを返却（未完成の場合はNone）
+
+2. **_create_new_bar()メソッドの実装**
+   - 新しいBarインスタンスを作成
+   - 初期値設定:
+     - symbol: コンバーターのシンボル
+     - time: バー開始時刻（分の00秒に正規化）
+     - end_time: バー終了時刻（分の59.999999秒）
+     - open/high/low/close: すべて最初のティックのbid価格
+     - volume: 最初のティックのvolume
+     - tick_count: 1
+     - avg_spread: 最初のスプレッド
+     - is_complete: False
+   - current_barに設定
+   - _current_ticksリストをクリアして新しいティックを追加
+
+3. **_update_bar()メソッドの実装**
+   - 現在のバーのOHLCVを更新:
+     - high: max(current_bar.high, tick.bid)
+     - low: min(current_bar.low, tick.bid)
+     - close: tick.bid（最新のbid価格）
+     - volume: current_bar.volume + tick.volume
+     - tick_count: インクリメント
+     - avg_spread: 累積平均の再計算
+   - _current_ticksリストにティックを追加
+
+4. **_check_bar_completion()メソッドの実装**
+   - ティックのタイムスタンプがバーの終了時刻を超えているか確認
+   - 超えている場合:
+     - current_bar.is_complete = True
+     - completed_barsリストに追加
+     - on_bar_completeコールバックを実行（設定されている場合）
+     - Trueを返す
+   - 超えていない場合: Falseを返す
+
+5. **ヘルパーメソッドの実装**
+   - `_get_bar_start_time(tick_time: datetime) -> datetime`:
+     - tick_timeを分単位に切り捨て（秒とマイクロ秒を0に）
+     - 例: 2025-08-20 12:34:56.789 → 2025-08-20 12:34:00.000
+   - `_get_bar_end_time(bar_start: datetime) -> datetime`:
+     - bar_start + timedelta(seconds=timeframe) - timedelta(microseconds=1)
+     - 例: 2025-08-20 12:34:00.000 → 2025-08-20 12:34:59.999999
 
 ### Step 4: 未完成バーの継続更新機能の実装
 - ファイル: src/mt5_data_acquisition/tick_to_bar.py
@@ -84,12 +136,17 @@
 - 完了: [ ]
 
 ## 🎯 次のアクション
-- Step 3: リアルタイム1分足生成機能の実装
+- Step 3: リアルタイム1分足生成機能の実装（進行中）
   1. add_tick()メソッドの完全実装
-  2. バー完成判定ロジックの実装（時刻境界の判定）
-  3. OHLCV計算ロジックの実装
-  4. 内部ヘルパーメソッドの実装
-- 実装後、基本的なバー生成テストを有効化して動作確認
+  2. _create_new_bar()メソッドの実装
+  3. _update_bar()メソッドの実装
+  4. _check_bar_completion()メソッドの実装
+  5. 時刻計算ヘルパーメソッドの実装
+- 実装後のテスト有効化:
+  - test_single_minute_bar_generation
+  - test_timestamp_alignment
+  - test_ohlcv_calculation
+- 動作確認後、Step 4（未完成バーの継続更新）へ進む
 
 ## 📝 決定事項
 - Polarsを使用した高速データ処理を実装
@@ -103,6 +160,33 @@
 - UTF-8エンコーディングを使用すること
 
 ## 🔨 実装結果
+
+### Step 3 完了
+- ✅ add_tick()メソッドの完全実装
+  - 現在のバーがない場合の新規作成処理
+  - バー完成判定と完成時のコールバック実行
+  - 現在のバーの更新処理
+- ✅ get_current_bar()メソッドの実装
+  - 現在作成中のバーを返す（なければNone）
+- ✅ プライベートメソッドの実装
+  - _create_new_bar(): ティック時刻の分単位正規化、終了時刻計算、OHLC初期化
+  - _update_bar(): High/Low更新（max/min）、Close更新、ボリューム累積、スプレッド平均計算
+  - _check_bar_completion(): バー終了時刻の超過判定
+- ✅ ヘルパーメソッドの追加
+  - _get_bar_start_time(): 分単位への切り捨て処理
+  - _get_bar_end_time(): 開始時刻 + 59.999999秒の計算
+- ✅ テストの有効化と動作確認
+  - test_single_minute_bar_generation: PASSED
+  - test_timestamp_alignment: PASSED
+  - test_ohlcv_calculation: PASSED
+- 📁 変更ファイル: 
+  - C:\Users\shota\repos\Forex_procrssor\src\mt5_data_acquisition\tick_to_bar.py（実装追加）
+  - C:\Users\shota\repos\Forex_procrssor\tests\unit\test_tick_to_bar.py（skipマーク削除）
+- 📝 備考: 
+  - datetime.replace()を使用した時刻正規化
+  - timedelta(seconds=59, microseconds=999999)での終了時刻計算
+  - Decimal型による価格計算の精度維持
+  - 4テストがPASSED、6テストはStep 4以降で実装予定
 
 ### Step 1 完了
 - ✅ tests/unit/test_tick_to_bar.pyを作成
@@ -145,6 +229,37 @@
   - TDDアプローチに従い、段階的にテストを有効化していく予定
 
 ## 👁️ レビュー結果
+
+### Step 3 レビュー
+#### 良い点
+- ✅ add_tick()メソッドが正しく実装されている
+  - バー完成判定ロジックが適切（現在のティック時刻 > バー終了時刻）
+  - 新規バー作成とバー更新の処理フローが正確
+  - コールバック実行機能が適切に実装されている
+- ✅ get_current_bar()メソッドがシンプルかつ適切に実装されている
+- ✅ プライベートメソッドの実装が計画通り
+  - _create_new_bar(): 時刻正規化とOHLC初期化が正しい
+  - _update_bar(): OHLCV更新とスプレッド計算の累積平均が正確
+  - _check_bar_completion(): バー境界判定が明確
+- ✅ ヘルパーメソッドの実装が適切
+  - _get_bar_start_time(): datetime.replace()を使った分単位切り捨て
+  - _get_bar_end_time(): timedelta(seconds=59, microseconds=999999)の計算が正確
+- ✅ テスト結果が期待通り（4 passed, 6 skipped）
+  - test_single_minute_bar_generation: PASSED
+  - test_timestamp_alignment: PASSED
+  - test_ohlcv_accuracy: PASSED
+  - test_converter_initialization: PASSED
+- ✅ Decimal型を使用して価格計算の精度を維持
+- ✅ 型ヒントが完全に実装されている
+
+#### 改善点
+- ⚠️ Ruffエラー: 空白行に余分な空白文字が含まれていた（修正済み）
+  - 21個のW293エラーをすべて修正
+  - docstring内の空白も手動で修正
+- 優先度: 低（すでに修正済み）
+
+#### 判定
+- [x] 合格（次へ進む）
 
 ### Step 1 レビュー（最終）
 #### 良い点
@@ -203,3 +318,12 @@
   - ファイル末尾に改行を追加
 - プロジェクトのコーディング規約に完全準拠
 - テストが正常に動作（1 passed, 9 skipped）
+
+### コミット結果
+- ✅ Hash: `3ac5a58`
+- ✅ Message: `feat: Step 2完了 - TickToBarConverterクラスの基本構造実装`
+- ✅ 変更内容:
+  - 新規作成: src/mt5_data_acquisition/tick_to_bar.py（139行）
+  - 更新: tests/unit/test_tick_to_bar.py（skipマーク削除）
+  - 更新: docs/context.md、docs/plan.md
+- ✅ 次のアクション: Step 3「リアルタイム1分足生成機能の実装」へ進む
