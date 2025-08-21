@@ -307,7 +307,7 @@ async def main():
         # MT5設定
         config = BaseConfig()
         mt5_config = {
-            "login": config.mt5_login,
+            "account": config.mt5_login,  # "login"から"account"に修正
             "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
             "server": config.mt5_server,
             "timeout": config.mt5_timeout,
@@ -325,25 +325,29 @@ async def main():
         
         print_success("Connected to MT5")
         
-        # ストリーマー設定
-        streamer_config = StreamerConfig(
-            symbols=symbols,
-            buffer_size=2000,
-            max_tick_age=5.0,
-            enable_throttling=False
-        )
+        # 各シンボル用のストリーマーを作成
+        streamers = {}
+        for symbol in symbols:
+            # 各シンボル用にTickDataStreamerを作成
+            streamers[symbol] = TickDataStreamer(
+                symbol=symbol,
+                buffer_size=2000,
+                spike_threshold_percent=0.1,
+                backpressure_threshold=0.8,
+                mt5_client=connection_manager
+            )
+            # ストリーミング開始
+            await streamers[symbol].start_streaming()
+            print_success(f"Streaming started for {symbol}")
         
-        # ストリーマー作成・開始
-        streamer = TickDataStreamer(connection_manager, streamer_config)
-        await streamer.start_streaming()
-        print_success("Streaming started for all symbols")
+        print_success("All streamers started successfully")
         
         # ライブ表示
         with Live(converter.create_display(), refresh_per_second=2, console=console) as live:
             while True:
                 # 各シンボルのティックを処理
                 for symbol in symbols:
-                    ticks = await streamer.get_buffered_ticks(symbol)
+                    ticks = await streamers[symbol].get_new_ticks()
                     
                     for tick_data in ticks:
                         converter.process_tick(symbol, tick_data)
@@ -366,8 +370,10 @@ async def main():
         
     finally:
         # クリーンアップ
-        if 'streamer' in locals():
-            await streamer.stop_streaming()
+        if 'streamers' in locals():
+            for symbol, streamer in streamers.items():
+                await streamer.stop_streaming()
+                print_info(f"Stopped streaming for {symbol}")
             
         if 'connection_manager' in locals():
             connection_manager.disconnect()

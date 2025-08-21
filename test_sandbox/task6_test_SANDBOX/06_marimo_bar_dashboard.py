@@ -156,7 +156,7 @@ async def streaming_handler(start_button, stop_button, clear_button, symbol_sele
             # MT5接続
             config = BaseConfig()
             mt5_config = {
-                "login": config.mt5_login,
+                "account": config.mt5_login,  # "login"から"account"に修正
                 "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
                 "server": config.mt5_server,
                 "timeout": config.mt5_timeout,

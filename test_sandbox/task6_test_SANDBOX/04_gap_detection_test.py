@@ -312,7 +312,7 @@ async def main():
         # MT5設定
         config = BaseConfig()
         mt5_config = {
-            "login": config.mt5_login,
+            "account": config.mt5_login,  # "login"から"account"に修正
             "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
             "server": config.mt5_server,
             "timeout": config.mt5_timeout,
@@ -330,16 +330,14 @@ async def main():
         
         print_success("Connected to MT5")
         
-        # ストリーマー設定
-        streamer_config = StreamerConfig(
-            symbols=[symbol],
-            buffer_size=1000,
-            max_tick_age=5.0,
-            enable_throttling=False
-        )
-        
         # ストリーマー作成・開始
-        streamer = TickDataStreamer(connection_manager, streamer_config)
+        streamer = TickDataStreamer(
+            symbol=symbol,
+            buffer_size=1000,
+            spike_threshold_percent=0.1,
+            backpressure_threshold=0.8,
+            mt5_client=connection_manager
+        )
         await streamer.start_streaming()
         print_success("Streaming started")
         
@@ -352,7 +350,7 @@ async def main():
             
             while True:
                 # ティック取得・処理
-                ticks = await streamer.get_buffered_ticks(symbol)
+                ticks = await streamer.get_new_ticks()
                 
                 for i, tick_data in enumerate(ticks):
                     # 定期的に強制ギャップを発生
