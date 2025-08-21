@@ -133,6 +133,12 @@ class Tick(BaseModel):
 **ファイル:** src/mt5_data_acquisition/tick_adapter.py（新規）
 **作業内容:**
 
+#### 2.0 実装準備チェックリスト
+- [x] Step 1が完了していることを確認
+- [x] CommonTickにtimeプロパティが実装されている
+- [ ] tick_adapter.pyの作成場所を確認（mt5_data_acquisitionディレクトリ）
+- [ ] テストファイルの作成場所を確認（tests/unitディレクトリ）
+
 #### 2.1 実装内容
 ```python
 """
@@ -214,16 +220,33 @@ class TickAdapter:
         return Decimal(str(np.float32(value)))
 ```
 
-#### 2.2 テスト計画
+#### 2.2 テスト計画（詳細）
 1. **単体テスト作成**（tests/unit/test_tick_adapter.py）
-   - to_decimal_dict()の変換テスト
-   - from_decimal_dict()の変換テスト
-   - 精度保持の確認テスト
-   - エラーケースのテスト
+   
+   **基本変換テスト（3ケース）**
+   - `test_to_decimal_dict_basic`: CommonTick → Decimal辞書の標準変換
+   - `test_from_decimal_dict_basic`: Decimal辞書 → CommonTickの標準変換
+   - `test_round_trip_conversion`: 往復変換で元のデータが保持されるか
+   
+   **属性名互換性テスト（3ケース）**
+   - `test_from_dict_with_time_key`: timeキーでの辞書からの変換
+   - `test_from_dict_with_timestamp_key`: timestampキーでの辞書からの変換
+   - `test_missing_time_raises_error`: time/timestampキー不在時のValueError
+   
+   **精度テスト（3ケース）**
+   - `test_float32_precision_maintained`: Float32制約下での精度維持
+   - `test_decimal_precision_conversion`: Decimal変換時の精度保持
+   - `test_ensure_decimal_precision_helper`: ヘルパーメソッドの動作確認
+   
+   **エッジケーステスト（3ケース）**
+   - `test_zero_values`: ゼロ値（0.0）の正確な処理
+   - `test_large_numbers`: 大きな数値（1e6以上）の処理
+   - `test_small_decimals`: 小数点以下多桁（1e-6以下）の処理
 
 2. **統合テスト**
    - CommonTickからDecimalへの往復変換テスト
-   - 精度損失がないことの確認
+   - 1000回の連続変換での精度損失測定
+   - メモリリークのチェック
 
 #### 2.3 検証項目
 - [ ] CommonTickからDecimal辞書への変換が正しい
@@ -309,9 +332,25 @@ tick = Tick(
 - [ ] 新規プロパティテストを追加
 
 ### Step 2 チェックリスト
-- [ ] TickAdapterクラスを作成
-- [ ] 変換メソッドのユニットテスト作成
-- [ ] 双方向変換の動作確認
+**実装タスク**
+- [ ] tick_adapter.pyファイルを新規作成
+- [ ] TickAdapterクラスの基本構造を実装
+- [ ] to_decimal_dict()メソッドを実装
+- [ ] from_decimal_dict()メソッドを実装
+- [ ] ensure_decimal_precision()ヘルパーを実装
+
+**テストタスク**
+- [ ] test_tick_adapter.pyファイルを新規作成
+- [ ] 基本変換テスト（3ケース）を実装
+- [ ] 属性名互換性テスト（3ケース）を実装
+- [ ] 精度テスト（3ケース）を実装
+- [ ] エッジケーステスト（3ケース）を実装
+
+**検証タスク**
+- [ ] 全12個のテストケースが成功
+- [ ] 既存のテストに影響がない
+- [ ] パフォーマンスへの影響が5%以内
+- [ ] メモリ使用量の増加が10%以内
 
 ### Step 3 チェックリスト
 - [ ] ローカルTickクラスを削除
