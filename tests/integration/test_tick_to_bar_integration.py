@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from src.mt5_data_acquisition.tick_to_bar import Bar, Tick, TickToBarConverter
+from src.common.models import Tick
+from src.mt5_data_acquisition.tick_to_bar import Bar, TickToBarConverter
 
 
 class TestTickToBarIntegration:
@@ -23,7 +24,7 @@ class TestTickToBarIntegration:
 
     def test_continuous_tick_stream(self) -> None:
         """連続的なティックストリーム処理テスト
-        
+
         5分間の連続ティック（1秒ごと）を処理し、
         5つのバーが正しく生成されることを確認
         """
@@ -39,10 +40,10 @@ class TestTickToBarIntegration:
         for i in range(301):  # 301ティックで5つの完全なバーを生成
             tick = Tick(
                 symbol="EURUSD",
-                time=current_time,
-                bid=Decimal("1.1234") + Decimal(str(i % 10)) / Decimal("10000"),
-                ask=Decimal("1.1236") + Decimal(str(i % 10)) / Decimal("10000"),
-                volume=Decimal("1.0")
+                timestamp=current_time,
+                bid=1.1234 + (i % 10) / 10000,
+                ask=1.1236 + (i % 10) / 10000,
+                volume=1.0
             )
             converter.add_tick(tick)
             current_time += timedelta(seconds=1)
@@ -60,7 +61,7 @@ class TestTickToBarIntegration:
 
     def test_market_gap_handling(self, caplog: Any) -> None:
         """市場時間外のギャップ処理テスト（週末シミュレーション）
-        
+
         金曜日の最終ティックから月曜日の最初のティックまでの
         ギャップを処理し、適切に警告が出力されることを確認
         """
@@ -69,20 +70,20 @@ class TestTickToBarIntegration:
         # 金曜日の最終ティック（22:59:30）
         friday_tick = Tick(
             symbol="EURUSD",
-            time=datetime(2025, 8, 22, 22, 59, 30),  # 金曜日
-            bid=Decimal("1.1234"),
-            ask=Decimal("1.1236"),
-            volume=Decimal("1.0")
+            timestamp=datetime(2025, 8, 22, 22, 59, 30),  # 金曜日
+            bid=1.1234,
+            ask=1.1236,
+            volume=1.0
         )
         converter.add_tick(friday_tick)
 
         # 月曜日の最初のティック（0:00:05）- 週末のギャップ
         monday_tick = Tick(
             symbol="EURUSD",
-            time=datetime(2025, 8, 25, 0, 0, 5),  # 月曜日
-            bid=Decimal("1.1240"),
-            ask=Decimal("1.1242"),
-            volume=Decimal("2.0")
+            timestamp=datetime(2025, 8, 25, 0, 0, 5),  # 月曜日
+            bid=1.1240,
+            ask=1.1242,
+            volume=2.0
         )
 
         # ログレベルを設定
@@ -103,7 +104,7 @@ class TestTickToBarIntegration:
 
     def test_high_frequency_ticks(self) -> None:
         """高頻度ティック処理テスト（1秒間に10ティック）
-        
+
         同一秒内での複数ティック処理を行い、
         OHLCVが正しく更新されることを確認
         """
@@ -120,10 +121,10 @@ class TestTickToBarIntegration:
                 price_variation = Decimal(str(tick_count % 20)) / Decimal("10000")
                 tick = Tick(
                     symbol="EURUSD",
-                    time=tick_time,
-                    bid=Decimal("1.1234") + price_variation,
-                    ask=Decimal("1.1236") + price_variation,
-                    volume=Decimal("0.1")
+                    timestamp=tick_time,
+                    bid=1.1234 + float(price_variation),
+                    ask=1.1236 + float(price_variation),
+                    volume=0.1
                 )
                 result = converter.add_tick(tick)
                 tick_count += 1
@@ -135,10 +136,10 @@ class TestTickToBarIntegration:
         # 60秒後に次のティックを追加してバーを完成させる
         final_tick = Tick(
             symbol="EURUSD",
-            time=base_time + timedelta(seconds=60),
-            bid=Decimal("1.1234"),
-            ask=Decimal("1.1236"),
-            volume=Decimal("1.0")
+            timestamp=base_time + timedelta(seconds=60),
+            bid=1.1234,
+            ask=1.1236,
+            volume=1.0
         )
         completed_bar = converter.add_tick(final_tick)
 
@@ -146,15 +147,16 @@ class TestTickToBarIntegration:
         assert completed_bar is not None
         assert completed_bar.is_complete is True
         assert completed_bar.tick_count == 600  # 60秒 × 10ティック/秒
-        assert completed_bar.volume == Decimal("60.0")  # 0.1 × 600
+        # Float32精度を考慮した比較
+        assert abs(completed_bar.volume - Decimal("60.0")) < Decimal("0.01")  # 0.1 × 600
 
-        # High/Lowが正しく記録されていることを確認
-        assert completed_bar.high == Decimal("1.1253")  # 1.1234 + 19/10000
-        assert completed_bar.low == Decimal("1.1234")   # 最小値
+        # High/Lowが正しく記録されていることを確認（Float32精度を考慮）
+        assert abs(completed_bar.high - Decimal("1.1253")) < Decimal("0.0001")  # 1.1234 + 19/10000
+        assert abs(completed_bar.low - Decimal("1.1234")) < Decimal("0.0001")   # 最小値
 
     def test_callback_chain(self) -> None:
         """バー完成通知の連鎖処理テスト
-        
+
         複数のリスナーへの通知をシミュレートし、
         バー完成時のコールバックが連続して呼ばれることを確認
         """
@@ -180,10 +182,10 @@ class TestTickToBarIntegration:
         for _i in range(181):  # 181ティック = 3分 + 1秒
             tick = Tick(
                 symbol="EURUSD",
-                time=current_time,
-                bid=Decimal("1.1234"),
-                ask=Decimal("1.1236"),
-                volume=Decimal("1.0")
+                timestamp=current_time,
+                bid=1.1234,
+                ask=1.1236,
+                volume=1.0
             )
             converter.add_tick(tick)
             current_time += timedelta(seconds=1)
@@ -207,7 +209,7 @@ class TestPerformance:
 
     def test_large_tick_volume(self) -> None:
         """大量ティック処理のパフォーマンステスト
-        
+
         10,000ティックを処理し、処理速度を測定
         目標: 10,000ティック/秒以上
         """
@@ -220,10 +222,10 @@ class TestPerformance:
         for i in range(10000):
             tick = Tick(
                 symbol="EURUSD",
-                time=current_time,
-                bid=Decimal("1.1234") + Decimal(str(i % 100)) / Decimal("10000"),
-                ask=Decimal("1.1236") + Decimal(str(i % 100)) / Decimal("10000"),
-                volume=Decimal("1.0")
+                timestamp=current_time,
+                bid=1.1234 + (i % 100) / 10000,
+                ask=1.1236 + (i % 100) / 10000,
+                volume=1.0
             )
             ticks.append(tick)
             current_time += timedelta(seconds=1)
@@ -247,7 +249,7 @@ class TestPerformance:
 
     def test_one_hour_data_generation(self) -> None:
         """1時間分のデータ生成テスト
-        
+
         3,600ティック（1時間分）を処理し、
         60個のバーが正しく生成されることを確認
         """
@@ -258,10 +260,10 @@ class TestPerformance:
         for i in range(3601):  # 3601ティックで60個の完全なバーを生成
             tick = Tick(
                 symbol="EURUSD",
-                time=start_time + timedelta(seconds=i),
-                bid=Decimal("1.1234") + Decimal(str(i % 50)) / Decimal("10000"),
-                ask=Decimal("1.1236") + Decimal(str(i % 50)) / Decimal("10000"),
-                volume=Decimal("1.0")
+                timestamp=start_time + timedelta(seconds=i),
+                bid=1.1234 + (i % 50) / 10000,
+                ask=1.1236 + (i % 50) / 10000,
+                volume=1.0
             )
             converter.add_tick(tick)
 
@@ -275,7 +277,7 @@ class TestPerformance:
 
     def test_memory_usage(self) -> None:
         """メモリ使用量測定テスト
-        
+
         1時間分のティックデータを処理し、
         メモリ使用量が10MB以下であることを確認
         """
@@ -288,10 +290,10 @@ class TestPerformance:
         for i in range(3600):
             tick = Tick(
                 symbol="EURUSD",
-                time=start_time + timedelta(seconds=i),
-                bid=Decimal("1.1234"),
-                ask=Decimal("1.1236"),
-                volume=Decimal("1.0")
+                timestamp=start_time + timedelta(seconds=i),
+                bid=1.1234,
+                ask=1.1236,
+                volume=1.0
             )
             converter.add_tick(tick)
 
@@ -322,7 +324,7 @@ class TestPerformance:
 
     def test_memory_with_limit(self) -> None:
         """メモリ制限付きのテスト
-        
+
         completed_barsリストのサイズ制限を確認
         （将来の最適化のためのテスト）
         """
@@ -336,10 +338,10 @@ class TestPerformance:
             # 各分の最初のティックのみ（簡略化）
             tick = Tick(
                 symbol="EURUSD",
-                time=current_time,
-                bid=Decimal("1.1234"),
-                ask=Decimal("1.1236"),
-                volume=Decimal("1.0")
+                timestamp=current_time,
+                bid=1.1234,
+                ask=1.1236,
+                volume=1.0
             )
             converter.add_tick(tick)
 
@@ -347,10 +349,10 @@ class TestPerformance:
             current_time += timedelta(minutes=1)
             tick = Tick(
                 symbol="EURUSD",
-                time=current_time,
-                bid=Decimal("1.1234"),
-                ask=Decimal("1.1236"),
-                volume=Decimal("1.0")
+                timestamp=current_time,
+                bid=1.1234,
+                ask=1.1236,
+                volume=1.0
             )
             converter.add_tick(tick)
 
