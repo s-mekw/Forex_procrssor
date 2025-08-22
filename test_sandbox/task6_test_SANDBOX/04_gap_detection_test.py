@@ -64,6 +64,10 @@ class GapDetectionTest:
         # 警告ログ
         self.warning_logs: List[str] = []
         
+        # シミュレーション用の時刻管理
+        self.simulated_last_time: Optional[datetime] = None
+        self.time_offset = timedelta(seconds=0)  # 実時刻とシミュレーション時刻の差分
+        
     def simulate_gap(self) -> float:
         """ギャップをシミュレート"""
         if self.simulate_gaps and random.random() < self.gap_probability:
@@ -74,31 +78,40 @@ class GapDetectionTest:
     def process_tick(self, tick: Tick, force_gap: bool = False):
         """ティックを処理（ギャップシミュレーション付き）"""
         try:
+            # シミュレーション時刻の初期化
+            if self.simulated_last_time is None:
+                self.simulated_last_time = tick.timestamp
+            
+            # 実時刻でティックが到着（シミュレーション時刻を計算）
+            simulated_timestamp = tick.timestamp + self.time_offset
+            
             # ギャップシミュレーション
             if force_gap or self.simulate_gap() > 0:
                 gap_seconds = random.uniform(self.min_gap_seconds, self.max_gap_seconds)
-                simulated_time = tick.timestamp + timedelta(seconds=gap_seconds)
+                # 時刻オフセットを増やしてギャップをシミュレート
+                self.time_offset += timedelta(seconds=gap_seconds)
+                simulated_timestamp = tick.timestamp + self.time_offset
                 
                 # ギャップイベントを記録
                 self.gap_events.append({
                     "timestamp": datetime.now(),
                     "gap_seconds": gap_seconds,
-                    "before_time": tick.timestamp,
-                    "after_time": simulated_time,
+                    "before_time": self.simulated_last_time,
+                    "after_time": simulated_timestamp,
                     "type": "simulated"
                 })
-                
-                # 新しいTickオブジェクトを作成（タイムスタンプを変更）
-                tick = Tick(
-                    symbol=tick.symbol,
-                    timestamp=simulated_time,
-                    bid=tick.bid,
-                    ask=tick.ask,
-                    volume=tick.volume
-                )
             
-            # ギャップ検出
-            gap = self.converter.check_tick_gap(tick.timestamp)
+            # シミュレーション時刻でTickを作成
+            simulated_tick = Tick(
+                symbol=tick.symbol,
+                timestamp=simulated_timestamp,
+                bid=tick.bid,
+                ask=tick.ask,
+                volume=tick.volume
+            )
+            
+            # ギャップ検出（シミュレーション時刻で）
+            gap = self.converter.check_tick_gap(simulated_tick.timestamp)
             if gap:
                 self.total_gaps += 1
                 self.max_gap = max(self.max_gap, gap)
@@ -111,23 +124,24 @@ class GapDetectionTest:
                         "timestamp": datetime.now(),
                         "gap_seconds": gap,
                         "before_time": self.last_tick_time,
-                        "after_time": tick.timestamp,
+                        "after_time": simulated_tick.timestamp,
                         "type": "detected"
                     })
                 
                 # 警告ログに追加
-                warning_msg = f"Gap detected: {gap:.1f}s at {format_timestamp(tick.timestamp)}"
+                warning_msg = f"Gap detected: {gap:.1f}s at {format_timestamp(simulated_tick.timestamp)}"
                 self.warning_logs.append(warning_msg)
                 
                 if len(self.warning_logs) > 20:
                     self.warning_logs.pop(0)
             
-            # コンバーターに追加
-            self.converter.add_tick(tick)
+            # コンバーターに追加（シミュレーション時刻のティック）
+            self.converter.add_tick(simulated_tick)
             
             # 統計更新
             self.total_ticks += 1
-            self.last_tick_time = tick.timestamp
+            self.last_tick_time = simulated_tick.timestamp
+            self.simulated_last_time = simulated_timestamp
             
         except Exception as e:
             print_error(f"Error processing tick: {e}")
@@ -358,7 +372,8 @@ async def main():
                 # 表示更新
                 live.update(test.create_display())
                 
-                await asyncio.sleep(0.1)
+                # 処理速度を上げてバッファオーバーフローを防ぐ
+                await asyncio.sleep(0.01)
                 
     except KeyboardInterrupt:
         print_warning("\nStopping...")
