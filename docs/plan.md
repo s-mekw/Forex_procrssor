@@ -78,19 +78,63 @@
   - メモリ使用量が指定闾値内に収まる
   - パフォーマンスが目標値を達成する
 
-#### Step 8: エラーハンドリングのテスト追加
+#### Step 8: エラーハンドリングのテスト追加 🔄 進行中
 - ファイル: `tests/unit/test_data_processor.py`
 - 作業: 異常系のテストケースを追加
+- 詳細:
+  1. **test_invalid_data_types**
+     - 非Float32データ型の処理テスト
+     - 文字列カラムが数値カラムとして期待される場合
+     - 欠損値（null/NaN）のハンドリング
+     - 適切なエラーメッセージとログ出力の確認
+  
+  2. **test_empty_dataframe_handling**
+     - 空のDataFrameを処理する際の動作
+     - optimize_dtypesメソッドの安全性
+     - create_lazyframeの空データ対応
+     - チャンク処理での空データハンドリング
+  
+  3. **test_excessive_data_size**
+     - メモリに収まらない大規模データの処理
+     - チャンクサイズの自動調整確認
+     - OutOfMemoryErrorのキャッチと復旧
+     - プログレスバーやログでの適切な通知
+  
+  4. **test_corrupted_file_handling**
+     - 破損したCSV/Parquetファイルの読み込み
+     - 不正なフォーマットのファイル処理
+     - FileNotFoundErrorのハンドリング
+     - スキーマ不整合の検出と報告
+  
+  5. **test_memory_pressure_handling**
+     - メモリ不足状況のシミュレーション
+     - adjust_chunk_sizeの動的調整確認
+     - メモリ使用率が高い場合の処理速度低下
+     - グレースフルデグレデーションの確認
+  
+  6. **test_invalid_parameters**
+     - 負のチャンクサイズの処理
+     - 無効な集計関数名の処理
+     - 不正なフィルタ条件の処理
+     - ValueError/TypeErrorの適切な発生
 
-#### Step 9: エラーハンドリングのテスト追加
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: 異常系のテストケースを追加
+- 目標成果:
+  - 各エラーケースが適切にキャッチされる
+  - エラーメッセージがユーザーフレンドリー
+  - ログ出力が適切なレベルで記録される
+  - リカバリー可能なエラーは自動復旧を試みる
 
-#### Step 10: エラーハンドリングの実装
+#### Step 9: エラーハンドリングの実装
 - ファイル: `src/data_processing/processor.py`
-- 作業: 例外処理とロギングを実装
+- 作業: Step 8のテストをパスさせるエラーハンドリング実装
+- 詳細:
+  - 各メソッドに適切なtry-exceptブロックを追加
+  - カスタム例外クラスの定義（ProcessingErrorなど）
+  - エラーログの詳細化（traceback情報を含む）
+  - リカバリー機能の実装（リトライ、フォールバック）
+  - バリデーションロジックの強化
 
-#### Step 11: 統合テストとドキュメント更新
+#### Step 10: 統合テストとドキュメント更新
 - ファイル: `tests/unit/test_data_processor.py`, `docs/context.md`
 - 作業: 全体のテスト実行と最終確認、ドキュメント更新
 

@@ -12,6 +12,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -803,15 +804,369 @@ class TestPolarsProcessingEngine:
             if os.path.exists(batch_path):
                 os.unlink(batch_path)
 
-    def test_error_handling_invalid_data(self):
-        """不正なデータに対するエラーハンドリングのテスト"""
-        # TODO: エラーハンドリングの実装後にテストを有効化
-        pass
+    def test_invalid_data_types(self, caplog):
+        """不適切なデータ型の処理を検証"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        engine = PolarsProcessingEngine()
+        
+        # 1. 文字列が数値カラムに混入した場合
+        # strict=Falseで混合型のDataFrameを作成
+        invalid_data = pl.DataFrame(
+            {
+                "timestamp": [datetime.now()] * 5,
+                "open": ["invalid", "1.0800", "1.0810", "1.0820", "1.0830"],  # 文字列として作成
+                "high": [1.0900, 1.0910, 1.0920, 1.0930, 1.0940],
+                "low": [1.0750, 1.0760, 1.0770, 1.0780, 1.0790],
+                "close": [1.0850, 1.0860, 1.0870, 1.0880, 1.0890],
+                "volume": [1000, 2000, 3000, 4000, 5000],
+            }
+        )
+        
+        # データ型最適化でエラーが発生することを確認（文字列カラムをFloat32に変換しようとする）
+        with pytest.raises((pl.exceptions.ComputeError, pl.exceptions.InvalidOperationError, ValueError)):
+            # openカラムを強制的にFloat型に変換しようとする
+            invalid_data = invalid_data.with_columns(pl.col("open").cast(pl.Float64))
+            engine.optimize_dtypes(invalid_data)
+        
+        # ログにエラーメッセージが記録されることを確認
+        assert "error" in caplog.text.lower() or "warning" in caplog.text.lower()
+        
+        # 2. 日付型と数値型の混在（カラムのデータ型が一貫していない場合のテスト）
+        # 異なるアプローチ: オブジェクト型として作成
+        mixed_values = [1.5, "not_a_number", 3.0]
+        mixed_type_data = pl.DataFrame({
+            "timestamp": [datetime.now()] * 3,
+            "value": mixed_values,  # 混在型
+        }, strict=False)
+        
+        # LazyFrame作成時の型チェック
+        lazy_df = engine.create_lazyframe(mixed_type_data)
+        
+        # 数値演算でエラーが発生（文字列に対する数値演算）
+        with pytest.raises((pl.exceptions.InvalidOperationError, pl.exceptions.ComputeError)):
+            # 文字列カラムを数値として扱おうとする
+            result = lazy_df.with_columns(
+                pl.col("value").cast(pl.Float64) * 2
+            ).collect()
+        
+        # 3. null/NaN値の適切な処理
+        null_data = pl.DataFrame({
+            "timestamp": [datetime.now()] * 5,
+            "open": [1.0800, None, 1.0810, float('nan'), 1.0830],
+            "high": [1.0900, 1.0910, None, 1.0930, float('nan')],
+            "low": [1.0750, 1.0760, 1.0770, None, 1.0790],
+            "close": [None, 1.0860, 1.0870, 1.0880, None],
+            "volume": [1000, None, 3000, None, 5000],
+        })
+        
+        # null値を含むデータの最適化
+        optimized = engine.optimize_dtypes(null_data)
+        
+        # null値が保持されていることを確認
+        assert optimized["open"].null_count() > 0
+        assert optimized["close"].null_count() > 0
+        
+        # フィルタリングでnull値を処理
+        lazy_null = engine.create_lazyframe(optimized)
+        filtered = engine.apply_filters(
+            lazy_null,
+            filters=[("open", ">", 1.08)]
+        ).collect()
+        
+        # null値は自動的に除外される
+        assert filtered["open"].null_count() == 0
 
-    def test_error_handling_empty_data(self):
-        """空データに対するエラーハンドリングのテスト"""
-        # TODO: エラーハンドリングの実装後にテストを有効化
-        pass
+    def test_empty_dataframe_handling(self, caplog):
+        """空のDataFrameに対する安全な処理"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        engine = PolarsProcessingEngine()
+        
+        # 1. 完全に空のDataFrame
+        empty_df = pl.DataFrame()
+        
+        # データ型最適化
+        with caplog.at_level("WARNING"):
+            result = engine.optimize_dtypes(empty_df)
+            assert result.shape == (0, 0)
+            assert "empty" in caplog.text.lower()
+        
+        # 2. カラムはあるが行が0のDataFrame
+        empty_with_schema = pl.DataFrame({
+            "timestamp": [],
+            "open": [],
+            "high": [],
+            "low": [],
+            "close": [],
+            "volume": [],
+        }, schema={
+            "timestamp": pl.Datetime,
+            "open": pl.Float64,
+            "high": pl.Float64,
+            "low": pl.Float64,
+            "close": pl.Float64,
+            "volume": pl.Float64,
+        })
+        
+        # 空データの最適化
+        optimized_empty = engine.optimize_dtypes(empty_with_schema)
+        assert optimized_empty.shape[0] == 0
+        assert optimized_empty["open"].dtype == pl.Float32
+        
+        # 3. LazyFrameの作成と処理
+        lazy_empty = engine.create_lazyframe(empty_with_schema)
+        
+        # フィルタリング（エラーなく空の結果を返す）
+        filtered_empty = engine.apply_filters(
+            lazy_empty,
+            filters=[("volume", ">", 1000)]
+        ).collect()
+        assert filtered_empty.shape[0] == 0
+        
+        # 集計（エラーなく空の結果を返す）
+        agg_empty = engine.apply_aggregations(
+            lazy_empty,
+            aggregations={"close": ["mean", "sum"]}
+        ).collect()
+        assert agg_empty.shape[0] == 1  # グローバル集計は1行
+        
+        # 4. チャンク処理
+        result_chunks = engine.process_in_chunks(
+            empty_with_schema,
+            chunk_size=100,
+            process_func=lambda x: x
+        )
+        assert len(result_chunks) == 0 or result_chunks.shape[0] == 0
+
+    def test_excessive_data_size(self, caplog):
+        """メモリ制限を超える大規模データの処理"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        engine = PolarsProcessingEngine(chunk_size=100_000)
+        
+        # メモリ情報のモック
+        with patch('psutil.virtual_memory') as mock_memory:
+            # 利用可能メモリを1GBに設定
+            mock_memory.return_value.available = 1 * 1024 * 1024 * 1024  # 1GB
+            mock_memory.return_value.total = 8 * 1024 * 1024 * 1024  # 8GB
+            mock_memory.return_value.percent = 87.5  # 87.5%使用中
+            
+            # 大規模データのシミュレーション（実際には小さいデータ）
+            large_data = pl.DataFrame({
+                "timestamp": [datetime.now()] * 1000,
+                "value": np.random.rand(1000),
+            })
+            
+            # チャンクサイズの自動調整を確認
+            new_chunk_size = engine.adjust_chunk_size()
+            
+            # メモリ使用率が高いため、チャンクサイズが縮小される
+            assert new_chunk_size < engine.chunk_size
+            assert new_chunk_size == engine.chunk_size // 2
+            
+            # 警告ログが出力される
+            assert "memory usage high" in caplog.text.lower() or "adjusting" in caplog.text.lower()
+            
+            # チャンク処理が正常に動作
+            with caplog.at_level("INFO"):
+                result = engine.process_in_chunks(
+                    large_data,
+                    chunk_size=new_chunk_size,
+                    process_func=lambda x: x.select(pl.col("value").mean())
+                )
+                assert result is not None
+                assert "processing chunk" in caplog.text.lower() or "chunk" in caplog.text.lower()
+
+    def test_corrupted_file_handling(self, caplog):
+        """破損ファイルの読み込みエラー処理"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        engine = PolarsProcessingEngine()
+        
+        # 1. 不正なCSVファイルの作成
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            corrupted_csv_path = f.name
+            # 不完全なCSVデータ（カラム数が一致しない）
+            f.write("col1,col2,col3\n")
+            f.write("1,2\n")  # カラム不足
+            f.write("3,4,5,6\n")  # カラム過多
+            f.write("invalid,data\n")
+        
+        try:
+            # CSVの読み込みでエラー
+            with pytest.raises(pl.exceptions.ComputeError):
+                pl.read_csv(corrupted_csv_path)
+            
+            # stream_csvメソッドでのエラーハンドリング
+            with caplog.at_level("ERROR"):
+                lazy_csv = engine.stream_csv(corrupted_csv_path)
+                if lazy_csv is not None:
+                    with pytest.raises(pl.exceptions.ComputeError):
+                        lazy_csv.collect()
+                assert "error" in caplog.text.lower()
+        finally:
+            os.unlink(corrupted_csv_path)
+        
+        # 2. 存在しないファイル
+        non_existent = "/path/to/non/existent/file.parquet"
+        
+        with caplog.at_level("ERROR"):
+            result = engine.stream_parquet(non_existent)
+            assert result is None or isinstance(result, pl.LazyFrame)
+            if "error" in caplog.text.lower():
+                assert "not found" in caplog.text.lower() or "exist" in caplog.text.lower()
+        
+        # 3. スキーマ不整合のParquetファイル
+        with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as f:
+            parquet_path = f.name
+            
+            # 最初のスキーマでファイルを作成
+            df1 = pl.DataFrame({
+                "id": [1, 2, 3],
+                "value": [1.0, 2.0, 3.0],
+            })
+            df1.write_parquet(parquet_path)
+        
+        try:
+            # 異なるスキーマでの読み込みを試みる
+            expected_schema = {
+                "id": pl.Int32,
+                "value": pl.Float32,
+                "extra_column": pl.String,  # 存在しないカラム
+            }
+            
+            # スキーマの不一致でエラーまたは警告
+            lazy_parquet = pl.scan_parquet(parquet_path)
+            result_df = lazy_parquet.collect()
+            
+            # 存在しないカラムへのアクセスでエラー
+            with pytest.raises(pl.exceptions.ColumnNotFoundError):
+                result_df.select("extra_column")
+                
+        finally:
+            os.unlink(parquet_path)
+
+    def test_memory_pressure_handling(self):
+        """メモリ逼迫時の動作確認"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        engine = PolarsProcessingEngine(chunk_size=100_000)
+        
+        # psutil.Processのモック
+        with patch('psutil.Process') as mock_process_class:
+            mock_process = MagicMock()
+            mock_process_class.return_value = mock_process
+            
+            # メモリ使用率を段階的に変更
+            memory_percentages = [85.0, 90.0, 95.0]
+            
+            with patch('psutil.virtual_memory') as mock_memory:
+                for mem_percent in memory_percentages:
+                    # メモリ使用率を設定
+                    mock_memory.return_value.percent = mem_percent
+                    mock_memory.return_value.available = (100 - mem_percent) * 10 * 1024 * 1024
+                    mock_memory.return_value.total = 100 * 10 * 1024 * 1024
+                    
+                    # チャンクサイズの調整
+                    new_size = engine.adjust_chunk_size()
+                    
+                    # メモリ使用率が80%を超えているため、チャンクサイズが縮小
+                    if mem_percent > 80:
+                        assert new_size < engine.chunk_size
+                        # 縮小率の確認
+                        assert new_size == engine.chunk_size // 2
+                    
+                    # 新しいチャンクサイズを設定
+                    engine.chunk_size = new_size
+                    
+                    # 最小チャンクサイズの確認
+                    assert engine.chunk_size >= 1_000
+        
+        # グレースフルデグレデーションのテスト
+        test_data = pl.DataFrame({
+            "timestamp": [datetime.now()] * 10000,
+            "value": np.random.rand(10000),
+        })
+        
+        with patch('psutil.virtual_memory') as mock_memory:
+            # 極度のメモリ逼迫（95%使用）
+            mock_memory.return_value.percent = 95.0
+            mock_memory.return_value.available = 500 * 1024 * 1024  # 500MB
+            
+            # 処理は継続されるが、チャンクサイズは最小に
+            result = engine.process_in_chunks(
+                test_data,
+                chunk_size=engine.adjust_chunk_size(),
+                process_func=lambda x: x.select(pl.col("value").mean())
+            )
+            
+            # 処理が完了することを確認
+            assert result is not None
+            
+            # チャンクサイズが適切に調整されている
+            assert engine.chunk_size <= 10_000
+
+    def test_invalid_parameters(self, caplog):
+        """不正なパラメータの検証"""
+        from src.data_processing.processor import PolarsProcessingEngine
+        
+        # 1. 負のチャンクサイズ
+        with pytest.raises(ValueError) as exc_info:
+            PolarsProcessingEngine(chunk_size=-1000)
+        assert "chunk_size must be positive" in str(exc_info.value).lower()
+        
+        engine = PolarsProcessingEngine()
+        
+        # 2. 存在しない集計関数名
+        df = pl.DataFrame({
+            "timestamp": [datetime.now()] * 5,
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+        })
+        lazy_df = engine.create_lazyframe(df)
+        
+        with pytest.raises(ValueError) as exc_info:
+            engine.apply_aggregations(
+                lazy_df,
+                aggregations={"value": ["invalid_function"]}
+            )
+        assert "unsupported aggregation" in str(exc_info.value).lower()
+        
+        # 3. 不正なフィルタ条件式
+        # 無効な演算子
+        with pytest.raises(ValueError) as exc_info:
+            engine.apply_filters(
+                lazy_df,
+                filters=[("value", "invalid_op", 3.0)]
+            )
+        assert "unsupported operator" in str(exc_info.value).lower()
+        
+        # 4. 無効なカラム名
+        with pytest.raises(pl.exceptions.ColumnNotFoundError):
+            engine.apply_filters(
+                lazy_df,
+                filters=[("non_existent_column", ">", 3.0)]
+            ).collect()
+        
+        # 5. 無効なデータ型パラメータ
+        with pytest.raises((TypeError, ValueError)):
+            engine.optimize_dtypes(df, categorical_threshold="invalid")  # 数値であるべき
+        
+        # 6. process_in_chunksの無効なパラメータ
+        with pytest.raises((TypeError, ValueError)):
+            engine.process_in_chunks(
+                df,
+                chunk_size=0,  # 0は無効
+                process_func=lambda x: x
+            )
+        
+        # 7. 無効な処理関数
+        with pytest.raises(TypeError):
+            engine.process_in_chunks(
+                df,
+                chunk_size=100,
+                process_func="not_a_function"  # 関数であるべき
+            )
 
 
 class TestDataValidation:
