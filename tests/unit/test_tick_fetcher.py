@@ -130,6 +130,380 @@ class TestRingBuffer:
         assert streamer.buffer[1] == ticks[3]
         assert streamer.buffer[2] == ticks[4]
 
+class TestGetNewTicks:
+    """get_new_ticks()メソッドの包括的なテスト"""
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_basic(self):
+        """基本的な新規ティック取得をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDJPY", buffer_size=100)
+        
+        # 初回呼び出し：空のリストを返す
+        new_ticks = await streamer.get_new_ticks()
+        assert new_ticks == []
+        
+        # 5個のティックを追加
+        for i in range(5):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDJPY",
+                bid=150.0 + i * 0.001,
+                ask=150.002 + i * 0.001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 新しい5個のティックを取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 5
+        assert new_ticks[0].bid == pytest.approx(150.0, rel=1e-6)
+        assert new_ticks[4].bid == pytest.approx(150.004, rel=1e-6)
+        
+        # 再度呼び出すと空のリスト（新しいティックなし）
+        new_ticks = await streamer.get_new_ticks()
+        assert new_ticks == []
+        
+        # さらに3個追加
+        for i in range(3):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDJPY",
+                bid=150.005 + i * 0.001,
+                ask=150.007 + i * 0.001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 新しい3個のみ取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 3
+        assert new_ticks[0].bid == pytest.approx(150.005, rel=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_empty_buffer(self):
+        """空バッファでの動作をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        
+        streamer = TickDataStreamer(symbol="EURUSD", buffer_size=50)
+        
+        # 空のバッファから取得
+        new_ticks = await streamer.get_new_ticks()
+        assert new_ticks == []
+        
+        # 複数回呼び出しても空
+        for _ in range(3):
+            new_ticks = await streamer.get_new_ticks()
+            assert new_ticks == []
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_buffer_rotation(self):
+        """バッファローテーション時の動作をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        buffer_size = 10
+        streamer = TickDataStreamer(symbol="GBPUSD", buffer_size=buffer_size)
+        
+        # バッファサイズの2倍のティックを追加
+        for i in range(buffer_size * 2):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="GBPUSD",
+                bid=1.3000 + i * 0.0001,
+                ask=1.3002 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 最初の取得：バッファに残っている10個を取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == buffer_size
+        # 古いティックは削除され、新しい10個のみ
+        assert new_ticks[0].bid == pytest.approx(1.3010, rel=1e-6)
+        assert new_ticks[-1].bid == pytest.approx(1.3019, rel=1e-6)
+        
+        # さらに5個追加
+        for i in range(5):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="GBPUSD",
+                bid=1.3020 + i * 0.0001,
+                ask=1.3022 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 新しい5個のみ取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 5
+        assert new_ticks[0].bid == pytest.approx(1.3020, rel=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_after_buffer_overflow(self):
+        """バッファオーバーフロー後の正しい取得をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        buffer_size = 5
+        streamer = TickDataStreamer(symbol="AUDUSD", buffer_size=buffer_size)
+        
+        # 3個追加して取得
+        for i in range(3):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="AUDUSD",
+                bid=0.7000 + i * 0.0001,
+                ask=0.7002 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 3
+        
+        # バッファサイズを超える10個を追加（オーバーフロー発生）
+        for i in range(10):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="AUDUSD",
+                bid=0.7003 + i * 0.0001,
+                ask=0.7005 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # オーバーフロー後も正しく新しいティックを取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == buffer_size  # バッファサイズ分のみ
+        # 最新の5個が取得される
+        assert new_ticks[0].bid == pytest.approx(0.7008, rel=1e-6)
+        assert new_ticks[-1].bid == pytest.approx(0.7012, rel=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_concurrent_access(self):
+        """複数の非同期タスクからの同時アクセスをテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDCHF", buffer_size=100)
+        
+        async def add_ticks(start_price, count):
+            """ティックを追加するタスク"""
+            for i in range(count):
+                tick = Tick(
+                    timestamp=datetime.utcnow(),
+                    symbol="USDCHF",
+                    bid=start_price + i * 0.0001,
+                    ask=start_price + 0.0002 + i * 0.0001,
+                    volume=1000.0
+                )
+                streamer._add_to_buffer(tick)
+                await asyncio.sleep(0.001)  # 小さな遅延
+        
+        async def read_ticks(reader_id):
+            """ティックを読み取るタスク"""
+            results = []
+            for _ in range(3):
+                new_ticks = await streamer.get_new_ticks()
+                results.append(len(new_ticks))
+                await asyncio.sleep(0.005)
+            return results
+        
+        # 並行実行
+        add_task = asyncio.create_task(add_ticks(0.9000, 20))
+        read_task1 = asyncio.create_task(read_ticks(1))
+        read_task2 = asyncio.create_task(read_ticks(2))
+        
+        await add_task
+        results1 = await read_task1
+        results2 = await read_task2
+        
+        # 各リーダーが異なるティックを取得（重複なし）
+        total_read1 = sum(results1)
+        total_read2 = sum(results2)
+        assert total_read1 > 0
+        assert total_read2 > 0
+        # 合計が追加したティック数を超えない
+        assert total_read1 + total_read2 <= 20
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_after_clear_buffer(self):
+        """バッファクリア後の動作をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="NZDUSD", buffer_size=50)
+        
+        # 10個のティックを追加
+        for i in range(10):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="NZDUSD",
+                bid=0.6000 + i * 0.0001,
+                ask=0.6002 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 一部を取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 10
+        
+        # バッファをクリア
+        await streamer.clear_buffer()
+        
+        # クリア後は空を返す
+        new_ticks = await streamer.get_new_ticks()
+        assert new_ticks == []
+        
+        # 新しいティックを追加
+        for i in range(5):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="NZDUSD",
+                bid=0.6100 + i * 0.0001,
+                ask=0.6102 + i * 0.0001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # クリア後の新しいティックを正しく取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == 5
+        assert new_ticks[0].bid == pytest.approx(0.6100, rel=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_large_batch(self):
+        """大量ティックの一括処理をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="USDCAD", buffer_size=1000)
+        
+        # 500個のティックを一括追加
+        batch_size = 500
+        for i in range(batch_size):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="USDCAD",
+                bid=1.3500 + i * 0.00001,
+                ask=1.3502 + i * 0.00001,
+                volume=1000.0 + i
+            )
+            streamer._add_to_buffer(tick)
+        
+        # 一括で全て取得
+        new_ticks = await streamer.get_new_ticks()
+        assert len(new_ticks) == batch_size
+        
+        # データの整合性確認
+        for i, tick in enumerate(new_ticks):
+            assert tick.bid == pytest.approx(1.3500 + i * 0.00001, rel=1e-8)
+            assert tick.volume == pytest.approx(1000.0 + i, rel=1e-6)
+        
+        # 再度呼び出すと空
+        new_ticks = await streamer.get_new_ticks()
+        assert new_ticks == []
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_tracking_accuracy(self):
+        """インデックス追跡の正確性をテスト"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        
+        streamer = TickDataStreamer(symbol="EURJPY", buffer_size=20)
+        
+        # 段階的にティックを追加して取得
+        total_added = 0
+        total_retrieved = 0
+        
+        for batch in range(5):
+            # 各バッチで異なる数のティックを追加
+            batch_size = (batch + 1) * 3
+            for i in range(batch_size):
+                tick = Tick(
+                    timestamp=datetime.utcnow(),
+                    symbol="EURJPY",
+                    bid=160.0 + (total_added + i) * 0.001,
+                    ask=160.002 + (total_added + i) * 0.001,
+                    volume=1000.0
+                )
+                streamer._add_to_buffer(tick)
+            total_added += batch_size
+            
+            # 新しいティックを取得
+            new_ticks = await streamer.get_new_ticks()
+            total_retrieved += len(new_ticks)
+            
+            # 正しい数のティックが取得されたか確認
+            if total_added <= 20:  # バッファサイズ以内
+                assert len(new_ticks) == batch_size
+            
+        # バッファサイズを考慮した総取得数の確認
+        assert total_retrieved == min(total_added, 20 + (total_added - 20))
+
+    @pytest.mark.asyncio
+    async def test_get_new_ticks_vs_get_recent_ticks_performance(self):
+        """get_new_ticks()とget_recent_ticks()の性能比較"""
+        from mt5_data_acquisition.tick_fetcher import TickDataStreamer
+        from common.models import Tick
+        import time
+        
+        streamer = TickDataStreamer(symbol="GBPJPY", buffer_size=1000)
+        
+        # 1000個のティックを追加
+        for i in range(1000):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="GBPJPY",
+                bid=180.0 + i * 0.001,
+                ask=180.002 + i * 0.001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        # get_recent_ticks()の重複処理をシミュレート
+        processed_ticks_recent = set()
+        start_time = time.perf_counter()
+        for _ in range(10):
+            recent_ticks = await streamer.get_recent_ticks(n=100)
+            for tick in recent_ticks:
+                # 重複チェック（実際の処理をシミュレート）
+                tick_id = (tick.bid, tick.ask, tick.volume)
+                if tick_id not in processed_ticks_recent:
+                    processed_ticks_recent.add(tick_id)
+        time_recent = time.perf_counter() - start_time
+        
+        # get_new_ticks()で同じ処理（重複なし）
+        await streamer.clear_buffer()
+        for i in range(1000):
+            tick = Tick(
+                timestamp=datetime.utcnow(),
+                symbol="GBPJPY",
+                bid=180.0 + i * 0.001,
+                ask=180.002 + i * 0.001,
+                volume=1000.0
+            )
+            streamer._add_to_buffer(tick)
+        
+        processed_ticks_new = []
+        start_time = time.perf_counter()
+        for _ in range(10):
+            new_ticks = await streamer.get_new_ticks()
+            processed_ticks_new.extend(new_ticks)
+        time_new = time.perf_counter() - start_time
+        
+        # get_new_ticks()の方が効率的（重複処理なし）
+        assert len(processed_ticks_new) == 1000  # 全て一度だけ処理
+        # 性能比較（get_new_ticks()の方が高速なはず）
+        # ただし、環境依存のため厳密な比較は避ける
+        print(f"get_recent_ticks time: {time_recent:.4f}s")
+        print(f"get_new_ticks time: {time_new:.4f}s")
+        print(f"Performance improvement: {(time_recent/time_new - 1)*100:.1f}%")
+
 
 class TestSpikeFilter:
     """スパイクフィルター（5σルール + 価格変動率）のテスト"""

@@ -1,0 +1,481 @@
+"""
+ティック欠損検知テスト - ギャップ検出機能の動作確認
+"""
+
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+import asyncio
+import time
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import List, Dict, Any, Optional
+import random
+from rich.console import Console
+from rich.live import Live
+from rich.layout import Layout
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+from rich.text import Text
+
+from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
+from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter
+from src.common.models import Tick
+from src.common.config import BaseConfig
+from utils.bar_display_helpers import (
+    print_success, print_error, print_warning, print_info,
+    print_section, format_timestamp
+)
+from utils.converter_visualizer import create_gap_detection_visual
+
+console = Console()
+
+class GapDetectionTest:
+    """ギャップ検出テスト"""
+    
+    def __init__(self, symbol: str = "EURUSD"):
+        self.symbol = symbol
+        self.converter = TickToBarConverter(
+            symbol=symbol,
+            timeframe=60,
+            gap_threshold=5,  # 5秒でギャップとして検出
+            max_completed_bars=50
+        )
+        
+        # ギャップ統計
+        self.gap_events: List[Dict[str, Any]] = []
+        self.total_gaps = 0
+        self.max_gap = 0.0
+        self.total_gap_time = 0.0
+        
+        # シミュレーション設定
+        self.simulate_gaps = True
+        self.gap_probability = 0.1  # 10%の確率でギャップを発生
+        self.min_gap_seconds = 6
+        self.max_gap_seconds = 30
+        
+        # ティック統計
+        self.total_ticks = 0
+        self.last_tick_time: Optional[datetime] = None
+        self.start_time = datetime.now()
+        
+        # 警告ログ
+        self.warning_logs: List[str] = []
+        
+        # シミュレーション用の時刻管理
+        self.simulated_last_time: Optional[datetime] = None
+        self.time_offset = timedelta(seconds=0)  # 実時刻とシミュレーション時刻の差分
+        
+    def simulate_gap(self) -> float:
+        """ギャップをシミュレート"""
+        if self.simulate_gaps and random.random() < self.gap_probability:
+            gap_seconds = random.uniform(self.min_gap_seconds, self.max_gap_seconds)
+            return gap_seconds
+        return 0
+    
+    def process_tick(self, tick: Tick, force_gap: bool = False):
+        """ティックを処理（ギャップシミュレーション付き）"""
+        try:
+            # シミュレーション時刻の初期化
+            if self.simulated_last_time is None:
+                self.simulated_last_time = tick.timestamp
+            
+            # 実時刻でティックが到着（シミュレーション時刻を計算）
+            simulated_timestamp = tick.timestamp + self.time_offset
+            
+            # ギャップシミュレーション
+            if force_gap or self.simulate_gap() > 0:
+                gap_seconds = random.uniform(self.min_gap_seconds, self.max_gap_seconds)
+                # 時刻オフセットを増やしてギャップをシミュレート
+                self.time_offset += timedelta(seconds=gap_seconds)
+                simulated_timestamp = tick.timestamp + self.time_offset
+                
+                # シミュレートされたギャップイベントを記録
+                self.gap_events.append({
+                    "timestamp": datetime.now(),
+                    "gap_seconds": gap_seconds,
+                    "before_time": self.simulated_last_time,
+                    "after_time": simulated_timestamp,
+                    "type": "simulated"
+                })
+            
+            # シミュレーション時刻でTickを作成
+            simulated_tick = Tick(
+                symbol=tick.symbol,
+                timestamp=simulated_timestamp,
+                bid=tick.bid,
+                ask=tick.ask,
+                volume=tick.volume
+            )
+            
+            # 以前のlast_tick_timeを保存（ギャップ検出用）
+            previous_tick_time = self.converter.last_tick_time
+            
+            # コンバーターに追加（内部でギャップ検出が自動実行される）
+            self.converter.add_tick(simulated_tick)
+            
+            # ギャップが検出されたかチェック（時間差から判定）
+            if previous_tick_time:
+                gap_seconds = (simulated_tick.timestamp - previous_tick_time).total_seconds()
+                if gap_seconds > self.converter.gap_threshold:
+                    self.total_gaps += 1
+                    self.max_gap = max(self.max_gap, gap_seconds)
+                    self.total_gap_time += gap_seconds
+                    
+                    # 検出されたギャップイベントを記録（シミュレートでない場合のみ）
+                    if not (force_gap or (self.gap_events and 
+                           abs((self.gap_events[-1]["timestamp"] - datetime.now()).total_seconds()) < 0.1)):
+                        self.gap_events.append({
+                            "timestamp": datetime.now(),
+                            "gap_seconds": gap_seconds,
+                            "before_time": previous_tick_time,
+                            "after_time": simulated_tick.timestamp,
+                            "type": "detected"
+                        })
+                    
+                    # 警告ログに追加
+                    warning_msg = f"Gap detected: {gap_seconds:.1f}s at {format_timestamp(simulated_tick.timestamp)}"
+                    self.warning_logs.append(warning_msg)
+                    
+                    if len(self.warning_logs) > 20:
+                        self.warning_logs.pop(0)
+            
+            # 統計更新
+            self.total_ticks += 1
+            self.last_tick_time = simulated_tick.timestamp
+            self.simulated_last_time = simulated_timestamp
+            
+        except Exception as e:
+            print_error(f"Error processing tick: {e}")
+
+    def process_tick_fast(self, tick: Tick):
+        """高速処理用の簡易版（表示更新なし、ギャップシミュレーションなし）"""
+        try:
+            # シミュレーション時刻の初期化
+            if self.simulated_last_time is None:
+                self.simulated_last_time = tick.timestamp
+            
+            # シミュレーション時刻でTickを作成（現在のオフセットを適用）
+            simulated_timestamp = tick.timestamp + self.time_offset
+            simulated_tick = Tick(
+                symbol=tick.symbol,
+                timestamp=simulated_timestamp,
+                bid=tick.bid,
+                ask=tick.ask,
+                volume=tick.volume
+            )
+            
+            # 以前のlast_tick_timeを保存（ギャップ検出用）
+            previous_tick_time = self.converter.last_tick_time
+            
+            # コンバーターに追加（ギャップ検出は内部で自動実行）
+            self.converter.add_tick(simulated_tick)
+            
+            # ギャップが検出されたかチェック（時間差から判定）
+            # 高速処理では統計更新のみ、イベント記録はしない
+            if previous_tick_time:
+                gap_seconds = (simulated_tick.timestamp - previous_tick_time).total_seconds()
+                if gap_seconds > self.converter.gap_threshold:
+                    self.total_gaps += 1
+                    self.max_gap = max(self.max_gap, gap_seconds)
+                    self.total_gap_time += gap_seconds
+            
+            # 統計更新（最小限）
+            self.total_ticks += 1
+            self.last_tick_time = simulated_tick.timestamp
+            self.simulated_last_time = simulated_timestamp
+            
+        except Exception as e:
+            # エラーは静かに処理（ログ出力を避けて高速化）
+            pass
+    
+    def create_gap_timeline(self) -> Panel:
+        """ギャップタイムライン表示"""
+        lines = []
+        lines.append("[bold]Gap Event Timeline:[/bold]")
+        lines.append("")
+        
+        # 最新10件のギャップイベント
+        recent_gaps = self.gap_events[-10:]
+        
+        if not recent_gaps:
+            lines.append("[dim]No gaps detected yet[/dim]")
+        else:
+            for gap_event in recent_gaps:
+                timestamp = gap_event["timestamp"].strftime("%H:%M:%S")
+                gap_seconds = gap_event["gap_seconds"]
+                gap_type = gap_event["type"]
+                
+                # ギャップの大きさによって色分け
+                if gap_seconds < 10:
+                    color = "yellow"
+                elif gap_seconds < 20:
+                    color = "orange1"
+                else:
+                    color = "red"
+                
+                # タイプによってマーク
+                if gap_type == "simulated":
+                    mark = "📍"
+                else:
+                    mark = "⚠️"
+                
+                bar_length = min(int(gap_seconds), 30)
+                bar = "█" * bar_length
+                
+                lines.append(f"{mark} {timestamp} [{color}]{bar}[/{color}] {gap_seconds:.1f}s")
+        
+        return Panel("\n".join(lines), title="Gap Timeline", border_style="yellow")
+    
+    def create_statistics_panel(self) -> Panel:
+        """統計パネル"""
+        elapsed = (datetime.now() - self.start_time).total_seconds()
+        
+        lines = []
+        lines.append(f"[bold]Gap Detection Statistics:[/bold]")
+        lines.append(f"  Total Gaps: {self.total_gaps}")
+        lines.append(f"  Max Gap: {self.max_gap:.1f}s")
+        
+        if self.total_gaps > 0:
+            avg_gap = self.total_gap_time / self.total_gaps
+            lines.append(f"  Avg Gap: {avg_gap:.1f}s")
+            lines.append(f"  Total Gap Time: {self.total_gap_time:.1f}s")
+            
+            gap_ratio = (self.total_gap_time / elapsed) * 100 if elapsed > 0 else 0
+            lines.append(f"  Gap Ratio: {gap_ratio:.1f}%")
+        
+        lines.append("")
+        lines.append(f"[bold]Processing Statistics:[/bold]")
+        lines.append(f"  Total Ticks: {self.total_ticks}")
+        lines.append(f"  Bars Created: {len(self.converter.completed_bars)}")
+        
+        if elapsed > 0:
+            tick_rate = self.total_ticks / elapsed
+            lines.append(f"  Tick Rate: {tick_rate:.1f}/s")
+        
+        lines.append("")
+        lines.append(f"[bold]Simulation Settings:[/bold]")
+        lines.append(f"  Gap Threshold: {self.converter.gap_threshold}s")
+        lines.append(f"  Gap Probability: {self.gap_probability*100:.0f}%")
+        lines.append(f"  Gap Range: {self.min_gap_seconds}-{self.max_gap_seconds}s")
+        
+        return Panel("\n".join(lines), title="Statistics", border_style="blue")
+    
+    def create_warning_log_panel(self) -> Panel:
+        """警告ログパネル"""
+        if not self.warning_logs:
+            content = "[dim]No warnings yet[/dim]"
+        else:
+            content = "\n".join(self.warning_logs[-10:])
+        
+        return Panel(content, title="Warning Log", border_style="orange1")
+    
+    def create_gap_analysis_table(self) -> Table:
+        """ギャップ分析テーブル"""
+        table = Table(title="Gap Analysis", box=box.ROUNDED)
+        
+        table.add_column("Time", style="cyan")
+        table.add_column("Gap (s)", justify="right")
+        table.add_column("Type", justify="center")
+        table.add_column("Before", style="dim")
+        table.add_column("After", style="dim")
+        table.add_column("Impact", justify="center")
+        
+        for gap_event in self.gap_events[-15:]:
+            gap_seconds = gap_event["gap_seconds"]
+            
+            # インパクト評価
+            if gap_seconds < 10:
+                impact = "[yellow]Low[/yellow]"
+            elif gap_seconds < 20:
+                impact = "[orange1]Medium[/orange1]"
+            else:
+                impact = "[red]High[/red]"
+            
+            # タイプ表示
+            if gap_event["type"] == "simulated":
+                type_str = "[blue]Simulated[/blue]"
+            else:
+                type_str = "[green]Detected[/green]"
+            
+            table.add_row(
+                gap_event["timestamp"].strftime("%H:%M:%S"),
+                f"{gap_seconds:.1f}",
+                type_str,
+                format_timestamp(gap_event["before_time"]) if gap_event["before_time"] else "N/A",
+                format_timestamp(gap_event["after_time"]),
+                impact
+            )
+        
+        return table
+    
+    def create_display(self) -> Layout:
+        """表示レイアウト作成"""
+        layout = Layout()
+        
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="main"),
+            Layout(name="footer", size=12)
+        )
+        
+        # ヘッダー
+        header_text = f"[bold cyan]Gap Detection Test - {self.symbol}[/bold cyan]"
+        layout["header"].update(Panel(header_text, style="cyan"))
+        
+        # メインを3列に分割
+        layout["main"].split_row(
+            Layout(name="left"),
+            Layout(name="center"),
+            Layout(name="right")
+        )
+        
+        # 左側 - ギャップタイムライン
+        layout["left"].update(self.create_gap_timeline())
+        
+        # 中央 - 現在のギャップ状態
+        current_gap = self.gap_events[-1]["gap_seconds"] if self.gap_events else 0
+        gap_visual = create_gap_detection_visual(current_gap, self.converter.gap_threshold)
+        layout["center"].split_column(
+            Layout(gap_visual),
+            Layout(self.create_warning_log_panel())
+        )
+        
+        # 右側 - 統計
+        layout["right"].update(self.create_statistics_panel())
+        
+        # フッター - ギャップ分析テーブル
+        layout["footer"].update(self.create_gap_analysis_table())
+        
+        return layout
+
+async def main():
+    """メイン関数"""
+    print_section("Gap Detection Test")
+    
+    symbol = "EURUSD"
+    print_info(f"Testing gap detection for {symbol}")
+    print_info("Simulating random gaps to test detection")
+    print_warning("Gap threshold: 5 seconds")
+    print_info("Press Ctrl+C to stop")
+    
+    # テスト作成
+    test = GapDetectionTest(symbol)
+    
+    try:
+        # MT5設定
+        config = BaseConfig()
+        mt5_config = {
+            "account": config.mt5_login,  # "login"から"account"に修正
+            "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
+            "server": config.mt5_server,
+            "timeout": config.mt5_timeout,
+            "retry_count": 3,
+            "retry_delay": 1
+        }
+        
+        # 接続
+        connection_manager = MT5ConnectionManager()
+        
+        print_info("Connecting to MT5...")
+        if not connection_manager.connect(mt5_config):
+            print_error("Failed to connect to MT5")
+            return
+        
+        print_success("Connected to MT5")
+        
+        # ストリーマー作成・開始
+        streamer = TickDataStreamer(
+            symbol=symbol,
+            buffer_size=5000,  # バッファサイズを増加（1000→5000）
+            spike_threshold_percent=0.1,
+            backpressure_threshold=0.8,
+            mt5_client=connection_manager
+        )
+        await streamer.start_streaming()
+        print_success("Streaming started")
+        
+        # 初期ギャップを強制的に発生させる
+        print_warning("Forcing initial gap for demonstration...")
+        
+        # ライブ表示
+        with Live(test.create_display(), refresh_per_second=2, console=console) as live:
+            force_gap_counter = 0
+            
+            # 表示更新制御用の変数
+            last_display_update = time.time()
+            tick_counter = 0
+            DISPLAY_UPDATE_INTERVAL = 0.5  # 0.5秒ごと
+            UPDATE_EVERY_N_TICKS = 100  # または100ティックごと
+            
+            while True:
+                # ティック取得
+                ticks = await streamer.get_new_ticks()
+                
+                if ticks:
+                    # バッチ処理：最後以外は簡易処理
+                    if len(ticks) > 1:
+                        for tick in ticks[:-1]:
+                            test.process_tick_fast(tick)
+                            force_gap_counter += 1
+                            tick_counter += 1
+                    
+                    # 最後のティックのみ完全処理
+                    force_gap = (force_gap_counter % 50 == 0 and force_gap_counter > 0)
+                    test.process_tick(ticks[-1], force_gap=force_gap)
+                    force_gap_counter += 1
+                    tick_counter += 1
+                    
+                    # 表示更新（時間またはカウンタ条件を満たした場合）
+                    current_time = time.time()
+                    time_elapsed = current_time - last_display_update
+                    
+                    if (time_elapsed > DISPLAY_UPDATE_INTERVAL or 
+                        tick_counter >= UPDATE_EVERY_N_TICKS):
+                        live.update(test.create_display())
+                        last_display_update = current_time
+                        tick_counter = 0
+                
+                # 処理速度を上げてバッファオーバーフローを防ぐ
+                await asyncio.sleep(0.01)
+                
+    except KeyboardInterrupt:
+        print_warning("\nStopping...")
+        
+    except Exception as e:
+        print_error(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # クリーンアップ
+        if 'streamer' in locals():
+            await streamer.stop_streaming()
+            
+        if 'connection_manager' in locals():
+            connection_manager.disconnect()
+        
+        # 最終統計
+        print_section("Final Gap Detection Results")
+        print_info(f"Total gaps detected: {test.total_gaps}")
+        
+        if test.total_gaps > 0:
+            print_info(f"Maximum gap: {test.max_gap:.1f} seconds")
+            print_info(f"Average gap: {test.total_gap_time/test.total_gaps:.1f} seconds")
+            print_info(f"Total gap time: {test.total_gap_time:.1f} seconds")
+        
+        print_info(f"Total ticks processed: {test.total_ticks}")
+        
+        # ギャップイベントサマリー
+        if test.gap_events:
+            print_info("\nGap Event Summary:")
+            simulated = sum(1 for g in test.gap_events if g["type"] == "simulated")
+            detected = sum(1 for g in test.gap_events if g["type"] == "detected")
+            print_info(f"  Simulated gaps: {simulated}")
+            print_info(f"  Detected gaps: {detected}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
