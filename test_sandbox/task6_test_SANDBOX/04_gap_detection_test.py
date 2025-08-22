@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Any, Optional
@@ -388,6 +389,12 @@ async def main():
         with Live(test.create_display(), refresh_per_second=2, console=console) as live:
             force_gap_counter = 0
             
+            # 表示更新制御用の変数
+            last_display_update = time.time()
+            tick_counter = 0
+            DISPLAY_UPDATE_INTERVAL = 0.5  # 0.5秒ごと
+            UPDATE_EVERY_N_TICKS = 100  # または100ティックごと
+            
             while True:
                 # ティック取得
                 ticks = await streamer.get_new_ticks()
@@ -398,14 +405,23 @@ async def main():
                         for tick in ticks[:-1]:
                             test.process_tick_fast(tick)
                             force_gap_counter += 1
+                            tick_counter += 1
                     
                     # 最後のティックのみ完全処理
                     force_gap = (force_gap_counter % 50 == 0 and force_gap_counter > 0)
                     test.process_tick(ticks[-1], force_gap=force_gap)
                     force_gap_counter += 1
+                    tick_counter += 1
                     
-                    # 表示更新（ティックがある場合のみ）
-                    live.update(test.create_display())
+                    # 表示更新（時間またはカウンタ条件を満たした場合）
+                    current_time = time.time()
+                    time_elapsed = current_time - last_display_update
+                    
+                    if (time_elapsed > DISPLAY_UPDATE_INTERVAL or 
+                        tick_counter >= UPDATE_EVERY_N_TICKS):
+                        live.update(test.create_display())
+                        last_display_update = current_time
+                        tick_counter = 0
                 
                 # 処理速度を上げてバッファオーバーフローを防ぐ
                 await asyncio.sleep(0.01)
