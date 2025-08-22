@@ -29,7 +29,7 @@ from rich import box
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
-from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
+from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
 from src.common.config import get_config, ConfigManager
@@ -57,9 +57,10 @@ class PolarsDataShowcase:
             # MT5接続用の設定辞書を作成
             mt5_config = {
                 "account": int(config.mt5_login),  # int型に変換
-                "password": str(config.mt5_password),  # str型を明示
+                "password": config.mt5_password.get_secret_value() if config.mt5_password else "",  # SecretStrから値を取得
                 "server": str(config.mt5_server),
-                "timeout": int(config.mt5_timeout)
+                "timeout": int(config.mt5_timeout),
+                "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe"  # Axiory MT5のパスを追加
             }
             
             self.connection_manager = MT5ConnectionManager()
@@ -68,21 +69,17 @@ class PolarsDataShowcase:
                 return False
                 
             # TickStreamerの設定
-            config = StreamerConfig(
+            self.tick_streamer = TickDataStreamer(
                 symbol="EURUSD",
                 buffer_size=1000,
                 spike_threshold_percent=0.5,
-                backpressure_threshold=0.8
-            )
-            self.tick_streamer = TickDataStreamer(
-                connection_manager=self.connection_manager,
-                config=config
+                backpressure_threshold=0.8,
+                mt5_client=self.connection_manager
             )
             
             # Polarsエンジンの初期化
             self.polars_engine = PolarsProcessingEngine(
-                max_memory_mb=100,  # テスト用に小さく設定
-                chunk_size=50
+                chunk_size=50  # テスト用に小さく設定
             )
             
             console.print("[green]✅ 接続とエンジン初期化完了[/green]")
@@ -228,7 +225,7 @@ class PolarsDataShowcase:
                 await asyncio.sleep(1)
                 
                 # 新しいティックを取得
-                new_ticks = self.tick_streamer.get_new_ticks()
+                new_ticks = await self.tick_streamer.get_new_ticks()
                 self.collected_ticks.extend(new_ticks)
                 
                 # プログレスバーを更新

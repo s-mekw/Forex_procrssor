@@ -35,6 +35,7 @@ from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.ohlc_fetcher import OHLCFetcher
 from src.data_processing.processor import PolarsProcessingEngine, MemoryLimitError
 from src.common.models import OHLC
+from src.common.config import get_config, ConfigManager
 
 console = Console()
 
@@ -79,8 +80,22 @@ class LargeDatasetStreaming:
     def setup_connections(self) -> bool:
         """接続とエンジンを初期化"""
         try:
+            # ConfigManagerから設定を取得
+            config_manager = ConfigManager()
+            config_manager.load_config()
+            config = get_config()
+            
+            # MT5接続用の設定辞書を作成
+            mt5_config = {
+                "account": int(config.mt5_login),  # int型に変換
+                "password": config.mt5_password.get_secret_value() if config.mt5_password else "",  # SecretStrから値を取得
+                "server": str(config.mt5_server),
+                "timeout": int(config.mt5_timeout),
+                "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe"  # Axiory MT5のパスを追加
+            }
+            
             self.connection_manager = MT5ConnectionManager()
-            if not self.connection_manager.connect():
+            if not self.connection_manager.connect(mt5_config):
                 console.print("[red]❌ MT5への接続に失敗[/red]")
                 return False
                 
@@ -88,9 +103,7 @@ class LargeDatasetStreaming:
             
             # ストリーミング用Polarsエンジン
             self.polars_engine = PolarsProcessingEngine(
-                max_memory_mb=150,  # メモリ制限を設定
-                chunk_size=100,     # 初期チャンクサイズ
-                enable_streaming=True
+                chunk_size=100     # 初期チャンクサイズ
             )
             
             console.print("[green]✅ 大容量データ処理システム初期化完了[/green]")

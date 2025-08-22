@@ -32,7 +32,7 @@ from queue import Queue
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
-from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
+from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
 from src.common.config import get_config, ConfigManager
@@ -78,9 +78,10 @@ class RealtimeProcessingDemo:
             # MT5接続用の設定辞書を作成
             mt5_config = {
                 "account": int(config.mt5_login),  # int型に変換
-                "password": str(config.mt5_password),  # str型を明示
+                "password": config.mt5_password.get_secret_value() if config.mt5_password else "",  # SecretStrから値を取得
                 "server": str(config.mt5_server),
-                "timeout": int(config.mt5_timeout)
+                "timeout": int(config.mt5_timeout),
+                "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe"  # Axiory MT5のパスを追加
             }
             
             self.connection_manager = MT5ConnectionManager()
@@ -89,20 +90,16 @@ class RealtimeProcessingDemo:
                 return False
                 
             # TickStreamer設定
-            config = StreamerConfig(
+            self.tick_streamer = TickDataStreamer(
                 symbol="EURUSD",
                 buffer_size=500,
                 spike_threshold_percent=0.3,
-                backpressure_threshold=0.75
-            )
-            self.tick_streamer = TickDataStreamer(
-                connection_manager=self.connection_manager,
-                config=config
+                backpressure_threshold=0.75,
+                mt5_client=self.connection_manager
             )
             
             # Polarsエンジン（動的チャンクサイズ調整用）
             self.polars_engine = PolarsProcessingEngine(
-                max_memory_mb=80,  # より小さなメモリ制限
                 chunk_size=25      # 小さな初期チャンクサイズ
             )
             
