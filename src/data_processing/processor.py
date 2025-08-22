@@ -21,6 +21,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Custom exception classes
+class ProcessingError(Exception):
+    """Base class for data processing errors."""
+    pass
+
+
+class DataTypeError(ProcessingError):
+    """Raised when data type validation fails."""
+    pass
+
+
+class MemoryLimitError(ProcessingError):
+    """Raised when memory limits are exceeded."""
+    pass
+
+
+class FileValidationError(ProcessingError):
+    """Raised when file validation fails."""
+    pass
+
+
 class PolarsProcessingEngine:
     """
     High-performance data processing engine using Polars.
@@ -35,7 +56,12 @@ class PolarsProcessingEngine:
 
         Args:
             chunk_size: Number of rows to process per chunk (default: 100,000)
+        
+        Raises:
+            ValueError: If chunk_size is not positive
         """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
         self.chunk_size = chunk_size
         self._float32_schema = {
             "open": pl.Float32,
@@ -45,6 +71,260 @@ class PolarsProcessingEngine:
             "volume": pl.Float32,
         }
         logger.info(f"PolarsProcessingEngine initialized with chunk_size={chunk_size}")
+
+    def validate_datatypes(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Validate and fix data types in a DataFrame.
+        
+        This method attempts to convert columns to appropriate numeric types
+        and handles mixed data types gracefully.
+        
+        Args:
+            df: DataFrame to validate
+            
+        Returns:
+            DataFrame with validated and corrected data types
+            
+        Raises:
+            DataTypeError: If data types cannot be corrected
+        """
+        try:
+            for col in df.columns:
+                dtype = df[col].dtype
+                
+                # Check for string columns that should be numeric
+                if dtype == pl.Utf8:
+                    # Try to convert to numeric if possible
+                    try:
+                        # First try to convert to Float32
+                        df = df.with_columns(
+                            pl.col(col).str.replace(",", "").cast(pl.Float32, strict=False)
+                        )
+                        logger.info(f"Converted string column {col} to Float32")
+                    except Exception as e:
+                        # If conversion fails, keep as string but log warning
+                        logger.warning(f"Column {col} contains non-numeric strings, keeping as text: {e}")
+                
+                # Convert Float64 to Float32 for consistency
+                elif dtype == pl.Float64:
+                    df = df.with_columns(pl.col(col).cast(pl.Float32))
+                    logger.debug(f"Converted {col} from Float64 to Float32")
+                
+                # Ensure integer types are handled appropriately
+                elif dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                    # Convert to Float32 for consistency with float-based processing
+                    df = df.with_columns(pl.col(col).cast(pl.Float32))
+                    logger.debug(f"Converted {col} from {dtype} to Float32")
+                
+                # Handle datetime columns - keep as is
+                elif dtype == pl.Datetime:
+                    logger.debug(f"Column {col} is datetime, keeping as is")
+                
+                # Handle null values
+                elif dtype == pl.Null:
+                    logger.warning(f"Column {col} contains only null values")
+                
+            return df
+            
+        except Exception as e:
+            logger.error(f"Data type validation failed: {e}")
+            raise DataTypeError(f"Failed to validate data types: {e}")
+    
+    def handle_empty_dataframe(self, df: pl.DataFrame | pl.LazyFrame) -> bool:
+        """
+        Check if a DataFrame is empty and handle appropriately.
+        
+        Args:
+            df: DataFrame or LazyFrame to check
+            
+        Returns:
+            True if the DataFrame is empty, False otherwise
+        """
+        try:
+            if isinstance(df, pl.DataFrame):
+                is_empty = len(df) == 0
+                if is_empty:
+                    logger.warning("Empty DataFrame detected")
+                return is_empty
+            elif isinstance(df, pl.LazyFrame):
+                # For LazyFrame, check schema
+                try:
+                    schema = df.collect_schema()
+                    if not schema:
+                        logger.warning("Empty LazyFrame schema detected")
+                        return True
+                    # Try to get count without collecting all data
+                    count = df.select(pl.count()).collect()[0, 0]
+                    if count == 0:
+                        logger.warning("LazyFrame has no rows")
+                        return True
+                    return False
+                except Exception:
+                    # If we can't determine, assume not empty
+                    return False
+            return False
+        except Exception as e:
+            logger.error(f"Error checking for empty DataFrame: {e}")
+            return False
+    
+    def handle_memory_limit(self, required_memory_mb: float) -> bool:
+        """
+        Check if required memory exceeds available memory.
+        
+        Args:
+            required_memory_mb: Required memory in megabytes
+            
+        Returns:
+            True if memory is available, False if limit exceeded
+        """
+        try:
+            memory_info = psutil.virtual_memory()
+            available_mb = memory_info.available / (1024 * 1024)
+            
+            if required_memory_mb > available_mb:
+                logger.warning(
+                    f"Memory limit exceeded: required {required_memory_mb:.1f}MB, "
+                    f"available {available_mb:.1f}MB"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error checking memory limit: {e}")
+            return True  # Assume memory is available if we can't check
+    
+    def validate_file(self, file_path: str | Path) -> bool:
+        """
+        Validate that a file exists and is readable.
+        
+        Args:
+            file_path: Path to the file to validate
+            
+        Returns:
+            True if file is valid, False otherwise
+        """
+        try:
+            file_path = Path(file_path)
+            
+            if not file_path.exists():
+                logger.error(f"File not found: {file_path}")
+                return False
+            
+            if not file_path.is_file():
+                logger.error(f"Path is not a file: {file_path}")
+                return False
+            
+            # Check file extension
+            valid_extensions = ['.csv', '.parquet', '.json', '.txt']
+            if file_path.suffix.lower() not in valid_extensions:
+                logger.warning(f"Unusual file extension: {file_path.suffix}")
+            
+            # Check if file is readable
+            if not file_path.stat().st_size > 0:
+                logger.warning(f"File is empty: {file_path}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"File validation error: {e}")
+            return False
+    
+    def handle_memory_pressure(self) -> int:
+        """
+        Handle memory pressure by adjusting processing parameters.
+        
+        Returns:
+            Adjusted chunk size based on memory pressure
+        """
+        try:
+            memory_info = psutil.virtual_memory()
+            memory_percent = memory_info.percent
+            
+            if memory_percent >= 95:
+                # Extreme memory pressure
+                new_chunk_size = max(1_000, self.chunk_size // 4)
+                logger.warning(
+                    f"Extreme memory pressure ({memory_percent:.1f}%), "
+                    f"reducing chunk size to {new_chunk_size:,}"
+                )
+            elif memory_percent >= 90:
+                # High memory pressure
+                new_chunk_size = max(1_000, self.chunk_size // 3)
+                logger.warning(
+                    f"High memory pressure ({memory_percent:.1f}%), "
+                    f"reducing chunk size to {new_chunk_size:,}"
+                )
+            elif memory_percent >= 80:
+                # Moderate memory pressure
+                new_chunk_size = max(1_000, self.chunk_size // 2)
+                logger.info(
+                    f"Memory usage high ({memory_percent:.1f}%), "
+                    f"adjusting chunk size to {new_chunk_size:,}"
+                )
+            else:
+                # No memory pressure
+                new_chunk_size = self.chunk_size
+            
+            self.chunk_size = new_chunk_size
+            return new_chunk_size
+            
+        except Exception as e:
+            logger.error(f"Error handling memory pressure: {e}")
+            return self.chunk_size
+    
+    def validate_parameters(
+        self,
+        chunk_size: int | None = None,
+        aggregations: dict[str, list[str]] | None = None,
+        filters: list[tuple[str, str, Any]] | None = None,
+        process_func: Any = None,
+    ) -> None:
+        """
+        Validate input parameters for various methods.
+        
+        Args:
+            chunk_size: Optional chunk size to validate
+            aggregations: Optional aggregations to validate
+            filters: Optional filters to validate
+            process_func: Optional processing function to validate
+            
+        Raises:
+            ValueError: If parameters are invalid
+            TypeError: If parameters have wrong type
+        """
+        # Validate chunk_size
+        if chunk_size is not None:
+            if not isinstance(chunk_size, int):
+                raise TypeError(f"chunk_size must be an integer, got {type(chunk_size)}")
+            if chunk_size <= 0:
+                raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        
+        # Validate aggregations
+        if aggregations is not None:
+            valid_aggs = {'mean', 'sum', 'min', 'max', 'std', 'count', 'first', 'last'}
+            for col, funcs in aggregations.items():
+                for func in funcs:
+                    if func not in valid_aggs:
+                        raise ValueError(
+                            f"Unsupported aggregation function: {func}. "
+                            f"Valid functions: {valid_aggs}"
+                        )
+        
+        # Validate filters
+        if filters is not None:
+            valid_ops = {'>', '<', '>=', '<=', '==', '!='}
+            for col, op, val in filters:
+                if op not in valid_ops:
+                    raise ValueError(
+                        f"Unsupported operator: {op}. "
+                        f"Valid operators: {valid_ops}"
+                    )
+        
+        # Validate process_func
+        if process_func is not None:
+            if not callable(process_func):
+                raise TypeError(
+                    f"process_func must be callable, got {type(process_func)}"
+                )
 
     def optimize_dtypes(
         self, df: pl.DataFrame, categorical_threshold: float = 0.5
@@ -64,6 +344,28 @@ class PolarsProcessingEngine:
         Returns:
             DataFrame with optimized data types
         """
+        # Validate input parameters
+        if not isinstance(categorical_threshold, (int, float)):
+            raise TypeError("categorical_threshold must be a number")
+        if not 0 <= categorical_threshold <= 1:
+            raise ValueError("categorical_threshold must be between 0 and 1")
+        
+        # Check for empty DataFrame
+        if self.handle_empty_dataframe(df):
+            # For empty DataFrame, still apply type conversions to schema
+            if len(df) == 0 and len(df.columns) > 0:
+                # Convert float columns to Float32 even for empty DataFrame
+                for col in df.columns:
+                    if df[col].dtype in [pl.Float64, pl.Float32]:
+                        df = df.with_columns(pl.col(col).cast(pl.Float32))
+            return df
+        
+        # Validate data types first
+        try:
+            df = self.validate_datatypes(df)
+        except DataTypeError:
+            logger.warning("Data type validation failed, continuing with original types")
+        
         original_memory = df.estimated_size()
         optimizations = []
 
@@ -138,8 +440,16 @@ class PolarsProcessingEngine:
         Returns:
             LazyFrame for deferred execution
         """
+        # Check for empty DataFrame
+        if self.handle_empty_dataframe(df):
+            # Return empty LazyFrame with schema preserved
+            return df.lazy()
+        
         # First optimize data types
-        df = self.optimize_dtypes(df)
+        try:
+            df = self.optimize_dtypes(df)
+        except Exception as e:
+            logger.warning(f"Data type optimization failed: {e}, using original types")
 
         # Convert to LazyFrame
         lazy_df = df.lazy()
@@ -305,6 +615,13 @@ class PolarsProcessingEngine:
                 ('close', '>=', 1.0850)
             ]
         """
+        # Validate parameters
+        self.validate_parameters(filters=filters)
+        
+        # Check for empty LazyFrame
+        if self.handle_empty_dataframe(lazy_df):
+            return lazy_df
+        
         result = lazy_df
 
         for column, operator, value in filters:
@@ -356,6 +673,26 @@ class PolarsProcessingEngine:
         """
         if aggregations is None:
             aggregations = {}
+        
+        # Validate parameters
+        self.validate_parameters(aggregations=aggregations)
+        
+        # Check for empty LazyFrame
+        if self.handle_empty_dataframe(lazy_df):
+            # For empty data, return appropriate empty result
+            if group_by:
+                return lazy_df
+            else:
+                # For global aggregation on empty data, return single row with nulls
+                # Create a single row with null values for all aggregation results
+                null_exprs = []
+                for column, funcs in aggregations.items():
+                    for func in funcs:
+                        null_exprs.append(pl.lit(None).alias(f"{column}_{func}"))
+                if null_exprs:
+                    return pl.DataFrame().lazy().select(null_exprs)
+                else:
+                    return lazy_df.limit(0)
 
         # Build aggregation expressions
         agg_exprs = []
@@ -421,7 +758,19 @@ class PolarsProcessingEngine:
 
             result = engine.process_in_chunks(large_df, process_chunk)
         """
+        # Validate parameters first (before using default)
+        if chunk_size is not None:
+            self.validate_parameters(chunk_size=chunk_size, process_func=process_func)
+        else:
+            self.validate_parameters(process_func=process_func)
+        
         chunk_size = chunk_size or self.chunk_size
+        
+        # Check for empty data
+        if self.handle_empty_dataframe(data):
+            if isinstance(data, pl.LazyFrame):
+                return pl.DataFrame()
+            return data  # Return empty DataFrame as is
 
         # Convert LazyFrame to DataFrame if needed
         if isinstance(data, pl.LazyFrame):
@@ -497,18 +846,22 @@ class PolarsProcessingEngine:
 
         if decrease or memory_percent > 80:
             # Decrease chunk size if memory usage is high
-            self.chunk_size = max(10_000, self.chunk_size // 2)
-            logger.info(
-                f"Decreased chunk size: {old_size:,} → {self.chunk_size:,} "
-                f"(memory usage: {memory_percent:.1f}%)"
-            )
+            new_size = max(1_000, self.chunk_size // 2)
+            if new_size != self.chunk_size:
+                self.chunk_size = new_size
+                logger.info(
+                    f"Decreased chunk size: {old_size:,} → {self.chunk_size:,} "
+                    f"(memory usage: {memory_percent:.1f}%)"
+                )
         elif memory_percent < 50:
             # Increase chunk size if memory usage is low
-            self.chunk_size = min(1_000_000, self.chunk_size * 2)
-            logger.info(
-                f"Increased chunk size: {old_size:,} → {self.chunk_size:,} "
-                f"(memory usage: {memory_percent:.1f}%)"
-            )
+            new_size = min(1_000_000, self.chunk_size * 2)
+            if new_size != self.chunk_size:
+                self.chunk_size = new_size
+                logger.info(
+                    f"Increased chunk size: {old_size:,} → {self.chunk_size:,} "
+                    f"(memory usage: {memory_percent:.1f}%)"
+                )
         else:
             logger.debug(
                 f"Chunk size unchanged at {self.chunk_size:,} "
@@ -522,7 +875,7 @@ class PolarsProcessingEngine:
         file_path: str | Path,
         schema_overrides: dict[str, pl.DataType] | None = None,
         n_rows: int | None = None,
-    ) -> pl.LazyFrame:
+    ) -> pl.LazyFrame | None:
         """
         Stream CSV file using LazyFrame for memory-efficient processing.
 
@@ -542,9 +895,11 @@ class PolarsProcessingEngine:
             result = lazy_df.filter(pl.col("volume") > 5000).collect()
         """
         file_path = Path(file_path)
-
-        if not file_path.exists():
-            raise FileNotFoundError(f"CSV file not found: {file_path}")
+        
+        # Validate file
+        if not self.validate_file(file_path):
+            logger.error(f"Invalid CSV file: {file_path}")
+            return None
 
         # Default to Float32 for numeric columns if not specified
         if schema_overrides is None:
@@ -566,16 +921,19 @@ class PolarsProcessingEngine:
             logger.info(f"CSV streaming initialized: ~{estimated_rows:,} rows")
             return lazy_df
 
+        except pl.exceptions.ComputeError as e:
+            logger.error(f"CSV parsing error: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error streaming CSV file: {e}")
-            raise
+            return None
 
     def stream_parquet(
         self,
         file_path: str | Path,
         columns: list[str] | None = None,
         n_rows: int | None = None,
-    ) -> pl.LazyFrame:
+    ) -> pl.LazyFrame | None:
         """
         Stream Parquet file using LazyFrame for high-performance processing.
 
@@ -595,9 +953,11 @@ class PolarsProcessingEngine:
             result = lazy_df.filter(pl.col("close") > 1.08).collect()
         """
         file_path = Path(file_path)
-
-        if not file_path.exists():
-            raise FileNotFoundError(f"Parquet file not found: {file_path}")
+        
+        # Validate file
+        if not self.validate_file(file_path):
+            logger.error(f"Invalid Parquet file: {file_path}")
+            return None
 
         logger.info(f"Streaming Parquet file: {file_path}")
 
@@ -632,7 +992,7 @@ class PolarsProcessingEngine:
 
         except Exception as e:
             logger.error(f"Error streaming Parquet file: {e}")
-            raise
+            return None
 
     def process_batches(
         self,
