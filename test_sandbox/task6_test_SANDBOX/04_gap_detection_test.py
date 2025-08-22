@@ -93,7 +93,7 @@ class GapDetectionTest:
                 self.time_offset += timedelta(seconds=gap_seconds)
                 simulated_timestamp = tick.timestamp + self.time_offset
                 
-                # ギャップイベントを記録
+                # シミュレートされたギャップイベントを記録
                 self.gap_events.append({
                     "timestamp": datetime.now(),
                     "gap_seconds": gap_seconds,
@@ -111,33 +111,37 @@ class GapDetectionTest:
                 volume=tick.volume
             )
             
-            # ギャップ検出（シミュレーション時刻で）
-            gap = self.converter.check_tick_gap(simulated_tick.timestamp)
-            if gap:
-                self.total_gaps += 1
-                self.max_gap = max(self.max_gap, gap)
-                self.total_gap_time += gap
-                
-                # 実際に検出されたギャップを記録
-                if not (force_gap or self.gap_events and 
-                       self.gap_events[-1]["timestamp"] == datetime.now()):
-                    self.gap_events.append({
-                        "timestamp": datetime.now(),
-                        "gap_seconds": gap,
-                        "before_time": self.last_tick_time,
-                        "after_time": simulated_tick.timestamp,
-                        "type": "detected"
-                    })
-                
-                # 警告ログに追加
-                warning_msg = f"Gap detected: {gap:.1f}s at {format_timestamp(simulated_tick.timestamp)}"
-                self.warning_logs.append(warning_msg)
-                
-                if len(self.warning_logs) > 20:
-                    self.warning_logs.pop(0)
+            # 以前のlast_tick_timeを保存（ギャップ検出用）
+            previous_tick_time = self.converter.last_tick_time
             
-            # コンバーターに追加（シミュレーション時刻のティック）
+            # コンバーターに追加（内部でギャップ検出が自動実行される）
             self.converter.add_tick(simulated_tick)
+            
+            # ギャップが検出されたかチェック（時間差から判定）
+            if previous_tick_time:
+                gap_seconds = (simulated_tick.timestamp - previous_tick_time).total_seconds()
+                if gap_seconds > self.converter.gap_threshold:
+                    self.total_gaps += 1
+                    self.max_gap = max(self.max_gap, gap_seconds)
+                    self.total_gap_time += gap_seconds
+                    
+                    # 検出されたギャップイベントを記録（シミュレートでない場合のみ）
+                    if not (force_gap or (self.gap_events and 
+                           abs((self.gap_events[-1]["timestamp"] - datetime.now()).total_seconds()) < 0.1)):
+                        self.gap_events.append({
+                            "timestamp": datetime.now(),
+                            "gap_seconds": gap_seconds,
+                            "before_time": previous_tick_time,
+                            "after_time": simulated_tick.timestamp,
+                            "type": "detected"
+                        })
+                    
+                    # 警告ログに追加
+                    warning_msg = f"Gap detected: {gap_seconds:.1f}s at {format_timestamp(simulated_tick.timestamp)}"
+                    self.warning_logs.append(warning_msg)
+                    
+                    if len(self.warning_logs) > 20:
+                        self.warning_logs.pop(0)
             
             # 統計更新
             self.total_ticks += 1
@@ -164,8 +168,20 @@ class GapDetectionTest:
                 volume=tick.volume
             )
             
+            # 以前のlast_tick_timeを保存（ギャップ検出用）
+            previous_tick_time = self.converter.last_tick_time
+            
             # コンバーターに追加（ギャップ検出は内部で自動実行）
             self.converter.add_tick(simulated_tick)
+            
+            # ギャップが検出されたかチェック（時間差から判定）
+            # 高速処理では統計更新のみ、イベント記録はしない
+            if previous_tick_time:
+                gap_seconds = (simulated_tick.timestamp - previous_tick_time).total_seconds()
+                if gap_seconds > self.converter.gap_threshold:
+                    self.total_gaps += 1
+                    self.max_gap = max(self.max_gap, gap_seconds)
+                    self.total_gap_time += gap_seconds
             
             # 統計更新（最小限）
             self.total_ticks += 1
