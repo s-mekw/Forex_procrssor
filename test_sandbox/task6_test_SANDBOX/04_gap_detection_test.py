@@ -71,34 +71,31 @@ class GapDetectionTest:
             return gap_seconds
         return 0
     
-    def process_tick(self, tick_data: dict, force_gap: bool = False):
+    def process_tick(self, tick: Tick, force_gap: bool = False):
         """ティックを処理（ギャップシミュレーション付き）"""
         try:
             # ギャップシミュレーション
             if force_gap or self.simulate_gap() > 0:
                 gap_seconds = random.uniform(self.min_gap_seconds, self.max_gap_seconds)
-                simulated_time = tick_data["time"] + timedelta(seconds=gap_seconds)
+                simulated_time = tick.timestamp + timedelta(seconds=gap_seconds)
                 
                 # ギャップイベントを記録
                 self.gap_events.append({
                     "timestamp": datetime.now(),
                     "gap_seconds": gap_seconds,
-                    "before_time": tick_data["time"],
+                    "before_time": tick.timestamp,
                     "after_time": simulated_time,
                     "type": "simulated"
                 })
                 
-                tick_data = tick_data.copy()
-                tick_data["time"] = simulated_time
-            
-            # ティック作成
-            tick = Tick(
-                symbol=tick_data["symbol"],
-                timestamp=tick_data.get("timestamp", tick_data.get("time")),
-                bid=float(tick_data["bid"]),
-                ask=float(tick_data["ask"]),
-                volume=float(tick_data.get("volume", 1.0))
-            )
+                # 新しいTickオブジェクトを作成（タイムスタンプを変更）
+                tick = Tick(
+                    symbol=tick.symbol,
+                    timestamp=simulated_time,
+                    bid=tick.bid,
+                    ask=tick.ask,
+                    volume=tick.volume
+                )
             
             # ギャップ検出
             gap = self.converter.check_tick_gap(tick.timestamp)
@@ -352,10 +349,10 @@ async def main():
                 # ティック取得・処理
                 ticks = await streamer.get_new_ticks()
                 
-                for i, tick_data in enumerate(ticks):
+                for i, tick in enumerate(ticks):
                     # 定期的に強制ギャップを発生
                     force_gap = (force_gap_counter % 50 == 0 and force_gap_counter > 0)
-                    test.process_tick(tick_data, force_gap=force_gap)
+                    test.process_tick(tick, force_gap=force_gap)
                     force_gap_counter += 1
                 
                 # 表示更新
