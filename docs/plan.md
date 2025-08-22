@@ -30,17 +30,29 @@
 - ファイル: `tests/unit/test_data_processor.py`
 - 作業: 遅延評価のテストケースを追加
 
-#### Step 6: LazyFrame処理の実装
-- ファイル: `src/data_processing/processor.py`
-- 作業: LazyFrameを使った遅延評価処理を実装
-
-#### Step 7: チャンク処理のテスト追加
+#### Step 6: チャンク処理のテスト追加
 - ファイル: `tests/unit/test_data_processor.py`
 - 作業: 大規模データのチャンク処理テストを追加
+- 詳細:
+  - チャンクサイズの設定と検証（デフォルト: 100,000行）
+  - 大規模データ（100万行以上）の分割処理
+  - チャンクごとの処理と集約
+  - メモリ使用量の監視と検証
+  - ストリーミング処理のテスト（scan_csv/scan_parquet）
+  - パフォーマンス測定（処理時間の計測）
 
-#### Step 8: チャンク処理の実装
+#### Step 7: チャンク処理の実装
 - ファイル: `src/data_processing/processor.py`
 - 作業: チャンク処理とストリーミング処理を実装
+- 詳細:
+  - process_in_chunksメソッドの実装
+  - チャンクサイズの動的調整機能
+  - ストリーミング処理の実装（scan_csv/scan_parquet）
+  - メモリ効率的なデータ処理
+
+#### Step 8: エラーハンドリングのテスト追加
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: 異常系のテストケースを追加
 
 #### Step 9: エラーハンドリングのテスト追加
 - ファイル: `tests/unit/test_data_processor.py`
