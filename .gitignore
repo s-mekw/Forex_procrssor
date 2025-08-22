@@ -137,6 +137,9 @@ cython_debug/
 # VS Code
 .vscode/
 
+# Serena IDE
+.serena/
+
 # Forex Processor specific files
 # データファイル
 *.csv

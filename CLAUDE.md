@@ -34,6 +34,7 @@ Kiro-style Spec Driven Development implementation using claude code slash comman
 5. **Update task status**: Mark tasks as completed when working on them
 6. **Keep steering current**: Run `/kiro:steering` after significant changes
 7. **Check spec compliance**: Use `/kiro:spec-status` to verify alignment
+8. use `uv`
 
 ## Steering Configuration
 

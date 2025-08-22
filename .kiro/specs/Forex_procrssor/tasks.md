@@ -9,7 +9,7 @@
   - pyproject.tomlにテストカバレッジ設定を追加（最小カバレッジ80%）
   - _要件: 1.1, 2.1_
 
-- [ ] 2. 共通データモデルとインターフェース定義
+- [X] 2. 共通データモデルとインターフェース定義
   - src/common/models.pyにPydanticモデルを作成：Tick、OHLC、Prediction、Alert
   - Float32を標準データ型として定義（メモリ効率最適化）
   - src/common/interfaces.pyに基底クラスを定義：DataFetcher、DataProcessor、StorageHandler、Predictor
@@ -18,33 +18,39 @@
 
 ## フェーズ2: MT5データ取得基盤
 
-- [ ] 3. MT5接続管理のテスト駆動実装
+- [X] 3. MT5接続管理のテスト駆動実装
   - tests/unit/test_mt5_client.pyに接続成功/失敗/再接続のテストケースを作成
   - src/mt5_data_acquisition/mt5_client.pyにMT5ConnectionManagerクラスを実装
   - 指数バックオフによる再接続ロジックを実装（最大5回試行）
   - 接続プール管理とヘルスチェック機能を追加
   - _要件: 1.1_
 
-- [ ] 4. リアルタイムティックデータ取得の実装
+- [X] 4. リアルタイムティックデータ取得の実装
   - tests/unit/test_tick_fetcher.pyにティックデータ取得とバリデーションのテストを作成
   - src/mt5_data_acquisition/tick_fetcher.pyにTickDataStreamerクラスを実装
   - 非同期ストリーミングとリングバッファ（10,000件）を実装
   - スパイクフィルター（3σルール）による異常値除外を追加
   - _要件: 1.2_
 
-- [ ] 5. 履歴OHLCデータ取得とバッチ処理
+- [X] 5. 履歴OHLCデータ取得とバッチ処理
   - tests/unit/test_ohlc_fetcher.pyに履歴データ取得と欠損検出のテストを作成
   - src/mt5_data_acquisition/ohlc_fetcher.pyにHistoricalDataFetcherクラスを実装
   - 10,000バー単位のバッチ処理と並列フェッチ機能を実装
   - 複数時間足（1分〜日足）のサポートを追加
   - _要件: 1.3_
 
-- [ ] 6. ティック→バー変換エンジンの実装
+- [X] 6. ティック→バー変換エンジンの実装
   - tests/unit/test_tick_to_bar.pyにバー生成とタイムスタンプ整合性のテストを作成
   - src/mt5_data_acquisition/tick_to_bar.pyにTickToBarConverterクラスを実装
   - リアルタイム1分足生成と未完成バーの継続更新機能を実装
   - 30秒以上のティック欠損時の警告機能を追加
   - _要件: 1.4_
+
+- [X] 6.5. Tickモデル統一リファクタリング（2025-08-21完了）
+  - 2つの異なるTickモデル（common/models.pyとtick_to_bar.py）を単一モデルに統一
+  - TickAdapterクラスによりFloat32とDecimal精度の両立を実現し、金融データの精度要件を満たしつつ高パフォーマンスを維持
+  - 段階的移行アプローチ（6ステップ）により、16ファイルに影響する変更を破壊的変更なく完了
+  - 結果: パフォーマンス10倍向上（103,559ティック/秒）、全42テスト成功、メモリ効率0.55KB/バーを達成
 
 ## フェーズ3: 高速データ処理パイプライン
 

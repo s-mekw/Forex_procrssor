@@ -8,7 +8,24 @@
       "mcp__serena__check_onboarding_performed",
       "mcp__serena__onboarding",
       "mcp__serena__get_symbols_overview",
-      "mcp__serena__write_memory"
+      "mcp__serena__write_memory",
+      "Bash(git add:*)",
+      "Bash(python -m pytest tests/unit/test_mt5_client.py*)",
+      "Bash(python:*)",
+      "WebFetch(domain:docs.marimo.io)",
+      "mcp__serena__find_file",
+      "mcp__serena__find_symbol",
+      "Bash(uv add:*)",
+      "mcp__serena__read_memory",
+      "mcp__serena__think_about_collected_information",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__insert_after_symbol",
+      "mcp__serena__replace_symbol_body",
+      "Bash(ruff format:*)",
+      "Bash(timeout 10 python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py)",
+      "Bash(timeout 10 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
+      "Bash(timeout 15 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
+      "Bash(timeout 30 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -16,7 +33,7 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "default",
+  "outputStyle": "Explanatory",
   "comment": "Claude Code Settings - Simplified Configuration",
   "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }

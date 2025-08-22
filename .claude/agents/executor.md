@@ -1,7 +1,7 @@
 ---
 name: executor
 description: 実装する時に使います。計画に基づいてコードを作成・編集します。
-model: inherit
+model: opus
 color: blue
 ---
 
@@ -21,6 +21,9 @@ color: blue
 1. 計画に記載されたステップを実装
 2. 実装内容を明確に記録
 3. エラーがあれば報告
+4. - Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
+5.    Testing Requirements
+   - Framework: `uv run --frozen pytest`
 
 ## 出力フォーマット
 ```markdown
