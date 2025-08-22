@@ -8,9 +8,12 @@ using Polars library with Float32 optimization for memory efficiency.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
+import psutil
 
 if TYPE_CHECKING:
     pass
@@ -391,3 +394,321 @@ class PolarsProcessingEngine:
             logger.debug("Applied non-grouped aggregations")
 
         return result
+
+    def process_in_chunks(
+        self,
+        data: pl.DataFrame | pl.LazyFrame,
+        process_func: Callable[[pl.DataFrame], pl.DataFrame],
+        chunk_size: int | None = None,
+    ) -> pl.DataFrame:
+        """
+        Process large DataFrames in chunks to control memory usage.
+
+        This method divides data into chunks and processes each chunk separately,
+        which is essential for handling datasets larger than available memory.
+
+        Args:
+            data: Input DataFrame or LazyFrame to process
+            process_func: Function to apply to each chunk
+            chunk_size: Optional custom chunk size (uses self.chunk_size if None)
+
+        Returns:
+            Processed DataFrame with all chunks combined
+
+        Example:
+            def process_chunk(df):
+                return df.filter(pl.col("volume") > 5000)
+
+            result = engine.process_in_chunks(large_df, process_chunk)
+        """
+        chunk_size = chunk_size or self.chunk_size
+
+        # Convert LazyFrame to DataFrame if needed
+        if isinstance(data, pl.LazyFrame):
+            data = data.collect()
+
+        n_rows = len(data)
+        n_chunks = (n_rows + chunk_size - 1) // chunk_size
+
+        logger.info(
+            f"Processing {n_rows:,} rows in {n_chunks} chunks of {chunk_size:,} rows"
+        )
+
+        processed_chunks = []
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
+        for i in range(0, n_rows, chunk_size):
+            chunk_end = min(i + chunk_size, n_rows)
+            chunk_num = i // chunk_size + 1
+
+            # Extract chunk
+            chunk = data.slice(i, chunk_end - i)
+
+            # Process chunk
+            try:
+                processed_chunk = process_func(chunk)
+                processed_chunks.append(processed_chunk)
+
+                # Monitor memory
+                current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                memory_increase = current_memory - initial_memory
+
+                logger.debug(
+                    f"Chunk {chunk_num}/{n_chunks} processed: "
+                    f"{len(processed_chunk):,} rows, "
+                    f"memory +{memory_increase:.1f} MB"
+                )
+
+                # Adjust chunk size if memory usage is too high
+                if memory_increase > 500:  # More than 500MB increase
+                    self.adjust_chunk_size(decrease=True)
+
+            except Exception as e:
+                logger.error(f"Error processing chunk {chunk_num}: {e}")
+                raise
+
+        # Combine all processed chunks
+        if processed_chunks:
+            result = pl.concat(processed_chunks)
+            logger.info(f"Chunk processing complete: {len(result):,} rows in result")
+            return result
+        else:
+            logger.warning("No chunks were successfully processed")
+            return pl.DataFrame()
+
+    def adjust_chunk_size(self, decrease: bool = False) -> int:
+        """
+        Dynamically adjust chunk size based on memory usage.
+
+        This method monitors system memory and adjusts the chunk size
+        to optimize processing performance while avoiding memory issues.
+
+        Args:
+            decrease: If True, decrease chunk size; if False, increase it
+
+        Returns:
+            New chunk size after adjustment
+        """
+        memory_info = psutil.virtual_memory()
+        memory_percent = memory_info.percent
+
+        old_size = self.chunk_size
+
+        if decrease or memory_percent > 80:
+            # Decrease chunk size if memory usage is high
+            self.chunk_size = max(10_000, self.chunk_size // 2)
+            logger.info(
+                f"Decreased chunk size: {old_size:,} → {self.chunk_size:,} "
+                f"(memory usage: {memory_percent:.1f}%)"
+            )
+        elif memory_percent < 50:
+            # Increase chunk size if memory usage is low
+            self.chunk_size = min(1_000_000, self.chunk_size * 2)
+            logger.info(
+                f"Increased chunk size: {old_size:,} → {self.chunk_size:,} "
+                f"(memory usage: {memory_percent:.1f}%)"
+            )
+        else:
+            logger.debug(
+                f"Chunk size unchanged at {self.chunk_size:,} "
+                f"(memory usage: {memory_percent:.1f}%)"
+            )
+
+        return self.chunk_size
+
+    def stream_csv(
+        self,
+        file_path: str | Path,
+        schema_overrides: dict[str, pl.DataType] | None = None,
+        n_rows: int | None = None,
+    ) -> pl.LazyFrame:
+        """
+        Stream CSV file using LazyFrame for memory-efficient processing.
+
+        This method uses scan_csv to read CSV files lazily, allowing
+        processing of files larger than available memory.
+
+        Args:
+            file_path: Path to CSV file
+            schema_overrides: Optional schema overrides (defaults to Float32 for numeric columns)
+            n_rows: Optional limit on number of rows to read
+
+        Returns:
+            LazyFrame for streaming processing
+
+        Example:
+            lazy_df = engine.stream_csv("large_data.csv")
+            result = lazy_df.filter(pl.col("volume") > 5000).collect()
+        """
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"CSV file not found: {file_path}")
+
+        # Default to Float32 for numeric columns if not specified
+        if schema_overrides is None:
+            schema_overrides = self._float32_schema.copy()
+
+        logger.info(f"Streaming CSV file: {file_path}")
+
+        try:
+            lazy_df = pl.scan_csv(
+                file_path,
+                schema_overrides=schema_overrides,
+                n_rows=n_rows,
+            )
+
+            # Get estimated row count (without loading data)
+            with pl.StringCache():
+                estimated_rows = lazy_df.select(pl.count()).collect()[0, 0]
+
+            logger.info(f"CSV streaming initialized: ~{estimated_rows:,} rows")
+            return lazy_df
+
+        except Exception as e:
+            logger.error(f"Error streaming CSV file: {e}")
+            raise
+
+    def stream_parquet(
+        self,
+        file_path: str | Path,
+        columns: list[str] | None = None,
+        n_rows: int | None = None,
+    ) -> pl.LazyFrame:
+        """
+        Stream Parquet file using LazyFrame for high-performance processing.
+
+        Parquet files support column pruning and predicate pushdown,
+        making them ideal for efficient data processing.
+
+        Args:
+            file_path: Path to Parquet file
+            columns: Optional list of columns to read (reads all if None)
+            n_rows: Optional limit on number of rows to read
+
+        Returns:
+            LazyFrame for streaming processing
+
+        Example:
+            lazy_df = engine.stream_parquet("data.parquet", columns=["timestamp", "close"])
+            result = lazy_df.filter(pl.col("close") > 1.08).collect()
+        """
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"Parquet file not found: {file_path}")
+
+        logger.info(f"Streaming Parquet file: {file_path}")
+
+        try:
+            # scan_parquetの引数を調整（columnsパラメータは存在しない）
+            if n_rows is not None:
+                lazy_df = pl.scan_parquet(file_path, n_rows=n_rows)
+            else:
+                lazy_df = pl.scan_parquet(file_path)
+
+            # カラムの選択は後で行う
+            if columns:
+                lazy_df = lazy_df.select(columns)
+
+            # Get metadata without loading data
+            with pl.StringCache():
+                if columns:
+                    estimated_rows = lazy_df.select(pl.count()).collect()[0, 0]
+                    logger.info(
+                        f"Parquet streaming initialized: ~{estimated_rows:,} rows, "
+                        f"{len(columns)} columns selected"
+                    )
+                else:
+                    schema = lazy_df.collect_schema()
+                    estimated_rows = lazy_df.select(pl.count()).collect()[0, 0]
+                    logger.info(
+                        f"Parquet streaming initialized: ~{estimated_rows:,} rows, "
+                        f"{len(schema)} columns"
+                    )
+
+            return lazy_df
+
+        except Exception as e:
+            logger.error(f"Error streaming Parquet file: {e}")
+            raise
+
+    def process_batches(
+        self,
+        batches: list[pl.DataFrame | pl.LazyFrame],
+        process_func: Callable[[pl.DataFrame], pl.DataFrame],
+        preserve_order: bool = True,
+    ) -> pl.DataFrame:
+        """
+        Process multiple batches of data with optional order preservation.
+
+        This method processes multiple data batches and combines the results,
+        useful for parallel processing scenarios.
+
+        Args:
+            batches: List of DataFrames or LazyFrames to process
+            process_func: Function to apply to each batch
+            preserve_order: If True, maintain original batch order in result
+
+        Returns:
+            Combined DataFrame with all processed batches
+
+        Example:
+            batches = [df1, df2, df3]
+            result = engine.process_batches(batches, lambda df: df.filter(pl.col("volume") > 5000))
+        """
+        if not batches:
+            logger.warning("No batches provided for processing")
+            return pl.DataFrame()
+
+        logger.info(f"Processing {len(batches)} batches")
+
+        processed_batches = []
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
+        for i, batch in enumerate(batches, 1):
+            try:
+                # Convert LazyFrame to DataFrame if needed
+                if isinstance(batch, pl.LazyFrame):
+                    batch = batch.collect()
+
+                # Process batch
+                processed_batch = process_func(batch)
+
+                if preserve_order:
+                    # Add batch index for order preservation
+                    processed_batch = processed_batch.with_columns(
+                        pl.lit(i).alias("_batch_idx")
+                    )
+
+                processed_batches.append(processed_batch)
+
+                # Monitor memory
+                current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                memory_increase = current_memory - initial_memory
+
+                logger.debug(
+                    f"Batch {i}/{len(batches)} processed: "
+                    f"{len(processed_batch):,} rows, "
+                    f"memory +{memory_increase:.1f} MB"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing batch {i}: {e}")
+                raise
+
+        # Combine all processed batches
+        if processed_batches:
+            result = pl.concat(processed_batches)
+
+            if preserve_order and "_batch_idx" in result.columns:
+                # Sort by batch index and remove the column
+                result = result.sort("_batch_idx").drop("_batch_idx")
+
+            logger.info(f"Batch processing complete: {len(result):,} rows in result")
+            return result
+        else:
+            logger.warning("No batches were successfully processed")
+            return pl.DataFrame()

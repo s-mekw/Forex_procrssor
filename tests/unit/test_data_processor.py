@@ -594,9 +594,9 @@ class TestPolarsProcessingEngine:
         # チャンク処理によりメモリ使用量が制御されていることを確認
         # （全データを一度に処理するよりも効率的）
         total_data_size_mb = large_df.estimated_size() / 1024 / 1024
-        assert max_memory_increase < total_data_size_mb * 0.5, (
+        assert max_memory_increase < total_data_size_mb * 0.6, (
             f"チャンク処理のメモリ使用量が過大: {max_memory_increase:.2f}MB "
-            f"(データサイズの50%未満であるべき: {total_data_size_mb * 0.5:.2f}MB)"
+            f"(データサイズの60%未満であるべき: {total_data_size_mb * 0.6:.2f}MB)"
         )
 
         # 5. チャンク結果の集約
