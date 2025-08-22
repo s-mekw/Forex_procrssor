@@ -32,6 +32,7 @@ from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer, StreamerConfig
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
+from src.common.config import get_config, ConfigManager
 
 console = Console()
 
@@ -48,8 +49,21 @@ class PolarsDataShowcase:
     def setup_connections(self) -> bool:
         """MT5接続とPolarsエンジンを初期化"""
         try:
+            # ConfigManagerから設定を取得
+            config_manager = ConfigManager()
+            config_manager.load_config()
+            config = get_config()
+            
+            # MT5接続用の設定辞書を作成
+            mt5_config = {
+                "account": int(config.mt5_login),  # int型に変換
+                "password": str(config.mt5_password),  # str型を明示
+                "server": str(config.mt5_server),
+                "timeout": int(config.mt5_timeout)
+            }
+            
             self.connection_manager = MT5ConnectionManager()
-            if not self.connection_manager.connect():
+            if not self.connection_manager.connect(mt5_config):
                 console.print("[red]❌ MT5への接続に失敗しました[/red]")
                 return False
                 

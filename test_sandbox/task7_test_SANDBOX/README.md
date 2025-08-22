@@ -32,8 +32,7 @@ test_sandbox/task7_test_SANDBOX/
 
 ```bash
 # 実行方法
-cd test_sandbox/task7_test_SANDBOX
-python 01_polars_mt5_data_showcase.py
+uv run python test_sandbox/task7_test_SANDBOX/01_polars_mt5_data_showcase.py
 ```
 
 ### 2. 02_realtime_polars_processing.py
@@ -47,7 +46,7 @@ python 01_polars_mt5_data_showcase.py
   - バックグラウンド処理とフォアグラウンド表示の分離
 
 ```bash
-python 02_realtime_polars_processing.py
+uv run python test_sandbox/task7_test_SANDBOX/02_realtime_polars_processing.py
 ```
 
 ### 3. 03_large_dataset_streaming.py  
@@ -61,7 +60,7 @@ python 02_realtime_polars_processing.py
   - ガベージコレクションとメモリ最適化
 
 ```bash
-python 03_large_dataset_streaming.py
+uv run python test_sandbox/task7_test_SANDBOX/03_large_dataset_streaming.py
 ```
 
 ### 4. 04_data_aggregation_pipeline.py
@@ -75,7 +74,7 @@ python 03_large_dataset_streaming.py
   - 各段階のパフォーマンス監視と可視化
 
 ```bash
-python 04_data_aggregation_pipeline.py
+uv run python test_sandbox/task7_test_SANDBOX/04_data_aggregation_pipeline.py
 ```
 
 ## 🛠 前提条件
@@ -105,9 +104,18 @@ MetaTrader5>=5.0.0
 
 ## 🎮 実行方法
 
-### 基本実行
+### 推奨実行方法（uv使用）
 プロジェクトルートから実行：
 
+```bash
+# プロジェクトルートで各テストを実行
+uv run python test_sandbox/task7_test_SANDBOX/01_polars_mt5_data_showcase.py
+uv run python test_sandbox/task7_test_SANDBOX/02_realtime_polars_processing.py
+uv run python test_sandbox/task7_test_SANDBOX/03_large_dataset_streaming.py
+uv run python test_sandbox/task7_test_SANDBOX/04_data_aggregation_pipeline.py
+```
+
+### 代替実行方法（直接Python）
 ```bash
 # プロジェクトルートで
 cd test_sandbox/task7_test_SANDBOX
@@ -117,14 +125,6 @@ python 01_polars_mt5_data_showcase.py
 python 02_realtime_polars_processing.py  
 python 03_large_dataset_streaming.py
 python 04_data_aggregation_pipeline.py
-```
-
-### uvを使用した実行（推奨）
-```bash
-# プロジェクトルートで
-uv run python test_sandbox/task7_test_SANDBOX/01_polars_mt5_data_showcase.py
-uv run python test_sandbox/task7_test_SANDBOX/02_realtime_polars_processing.py
-# ... 以下同様
 ```
 
 ### 中断方法
