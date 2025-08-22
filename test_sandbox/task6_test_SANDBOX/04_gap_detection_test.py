@@ -344,9 +344,9 @@ async def main():
         # ストリーマー作成・開始
         streamer = TickDataStreamer(
             symbol=symbol,
-            buffer_size=1000,
+            buffer_size=5000,  # バッファサイズを増加（1000→5000）
             spike_threshold_percent=0.1,
-            backpressure_threshold=0.8,
+            backpressure_threshold=0.6,  # 早期背圧制御（0.8→0.6）
             mt5_client=connection_manager
         )
         await streamer.start_streaming()
