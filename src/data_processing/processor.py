@@ -8,7 +8,7 @@ using Polars library with Float32 optimization for memory efficiency.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
@@ -43,25 +43,82 @@ class PolarsProcessingEngine:
         }
         logger.info(f"PolarsProcessingEngine initialized with chunk_size={chunk_size}")
 
-    def optimize_dtypes(self, df: pl.DataFrame) -> pl.DataFrame:
+    def optimize_dtypes(
+        self, df: pl.DataFrame, categorical_threshold: float = 0.5
+    ) -> pl.DataFrame:
         """
-        Optimize DataFrame data types by converting to Float32.
+        Optimize DataFrame data types for memory efficiency.
 
-        This method converts numeric columns to Float32 for memory efficiency
-        while preserving data precision up to 2 decimal places.
+        This method performs comprehensive data type optimization:
+        - Converts Float64 to Float32
+        - Downcasts integers to smallest appropriate type
+        - Converts string columns to categorical when appropriate
 
         Args:
             df: Input DataFrame to optimize
+            categorical_threshold: Threshold for unique value ratio to convert to categorical (default: 0.5)
 
         Returns:
             DataFrame with optimized data types
         """
-        # Convert Float64 columns to Float32
-        float_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
+        original_memory = df.estimated_size()
+        optimizations = []
 
+        # 1. Convert Float64 columns to Float32
+        float_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
         if float_cols:
             df = df.with_columns([pl.col(col).cast(pl.Float32) for col in float_cols])
-            logger.debug(f"Converted {len(float_cols)} columns from Float64 to Float32")
+            optimizations.append(f"Float64→Float32: {len(float_cols)} columns")
+
+        # 2. Optimize integer columns
+        int_cols = [
+            col
+            for col in df.columns
+            if df[col].dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]
+        ]
+
+        for col in int_cols:
+            if df[col].dtype == pl.Int64:
+                # Get min and max values
+                col_min = df[col].min()
+                col_max = df[col].max()
+
+                if col_min is not None and col_max is not None:
+                    # Determine optimal integer type
+                    if -128 <= col_min and col_max <= 127:
+                        df = df.with_columns(pl.col(col).cast(pl.Int8))
+                        optimizations.append(f"{col}: Int64→Int8")
+                    elif -32768 <= col_min and col_max <= 32767:
+                        df = df.with_columns(pl.col(col).cast(pl.Int16))
+                        optimizations.append(f"{col}: Int64→Int16")
+                    elif -2147483648 <= col_min and col_max <= 2147483647:
+                        df = df.with_columns(pl.col(col).cast(pl.Int32))
+                        optimizations.append(f"{col}: Int64→Int32")
+
+        # 3. Convert string columns to categorical if appropriate
+        str_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+
+        for col in str_cols:
+            unique_ratio = df[col].n_unique() / len(df)
+            if unique_ratio <= categorical_threshold:
+                df = df.with_columns(pl.col(col).cast(pl.Categorical))
+                optimizations.append(
+                    f"{col}: String→Categorical (unique ratio: {unique_ratio:.2%})"
+                )
+
+        # Report memory savings
+        optimized_memory = df.estimated_size()
+        memory_reduction = 1 - (optimized_memory / original_memory)
+
+        if optimizations:
+            logger.info(
+                f"Memory optimization completed: {memory_reduction:.1%} reduction "
+                f"({original_memory:,} → {optimized_memory:,} bytes)"
+            )
+            for optimization in optimizations[:5]:  # Log first 5 optimizations
+                logger.debug(f"  - {optimization}")
+            if len(optimizations) > 5:
+                logger.debug(f"  ... and {len(optimizations) - 5} more optimizations")
 
         return df
 
@@ -86,3 +143,138 @@ class PolarsProcessingEngine:
         logger.debug("Created LazyFrame for deferred execution")
 
         return lazy_df
+
+    def get_memory_report(self, df: pl.DataFrame) -> dict[str, Any]:
+        """
+        Generate a detailed memory usage report for a DataFrame.
+
+        This method analyzes memory usage by column and data type,
+        providing insights for optimization opportunities.
+
+        Args:
+            df: DataFrame to analyze
+
+        Returns:
+            Dictionary containing memory usage statistics
+        """
+        total_memory = df.estimated_size()
+        n_rows = len(df)
+        n_cols = len(df.columns)
+
+        # Analyze memory by column
+        column_memory = {}
+        dtype_summary = {}
+
+        for col in df.columns:
+            col_df = df.select(col)
+            col_memory = col_df.estimated_size()
+            col_dtype = str(df[col].dtype)
+
+            column_memory[col] = {
+                "memory_bytes": col_memory,
+                "memory_mb": col_memory / (1024 * 1024),
+                "dtype": col_dtype,
+                "percentage": (col_memory / total_memory) * 100
+                if total_memory > 0
+                else 0,
+            }
+
+            # Aggregate by data type
+            if col_dtype not in dtype_summary:
+                dtype_summary[col_dtype] = {
+                    "count": 0,
+                    "total_memory_bytes": 0,
+                    "columns": [],
+                }
+
+            dtype_summary[col_dtype]["count"] += 1
+            dtype_summary[col_dtype]["total_memory_bytes"] += col_memory
+            dtype_summary[col_dtype]["columns"].append(col)
+
+        # Calculate potential savings
+        optimization_potential = self._calculate_optimization_potential(df)
+
+        report = {
+            "total_memory_bytes": total_memory,
+            "total_memory_mb": total_memory / (1024 * 1024),
+            "n_rows": n_rows,
+            "n_columns": n_cols,
+            "bytes_per_row": total_memory / n_rows if n_rows > 0 else 0,
+            "column_memory": column_memory,
+            "dtype_summary": dtype_summary,
+            "optimization_potential": optimization_potential,
+        }
+
+        logger.info(
+            f"Memory Report: {report['total_memory_mb']:.2f} MB total, "
+            f"{report['bytes_per_row']:.0f} bytes/row, "
+            f"potential savings: {optimization_potential['potential_savings_mb']:.2f} MB"
+        )
+
+        return report
+
+    def _calculate_optimization_potential(self, df: pl.DataFrame) -> dict[str, Any]:
+        """
+        Calculate potential memory savings from optimization.
+
+        Args:
+            df: DataFrame to analyze
+
+        Returns:
+            Dictionary with optimization potential metrics
+        """
+        potential_savings = 0
+        suggestions = []
+
+        # Check for Float64 columns that could be Float32
+        float64_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
+        if float64_cols:
+            for col in float64_cols:
+                col_memory = df.select(col).estimated_size()
+                # Float32 uses half the memory of Float64
+                potential_savings += col_memory * 0.5
+                suggestions.append(f"{col}: Float64 → Float32")
+
+        # Check for oversized integer columns
+        for col in df.columns:
+            if df[col].dtype == pl.Int64:
+                col_min = df[col].min()
+                col_max = df[col].max()
+                if col_min is not None and col_max is not None:
+                    col_memory = df.select(col).estimated_size()
+                    if -128 <= col_min and col_max <= 127:
+                        # Could use Int8 (1 byte) instead of Int64 (8 bytes)
+                        potential_savings += col_memory * 0.875
+                        suggestions.append(f"{col}: Int64 → Int8")
+                    elif -32768 <= col_min and col_max <= 32767:
+                        # Could use Int16 (2 bytes) instead of Int64 (8 bytes)
+                        potential_savings += col_memory * 0.75
+                        suggestions.append(f"{col}: Int64 → Int16")
+                    elif -2147483648 <= col_min and col_max <= 2147483647:
+                        # Could use Int32 (4 bytes) instead of Int64 (8 bytes)
+                        potential_savings += col_memory * 0.5
+                        suggestions.append(f"{col}: Int64 → Int32")
+
+        # Check for string columns that could be categorical
+        for col in df.columns:
+            if df[col].dtype == pl.Utf8:
+                unique_ratio = df[col].n_unique() / len(df)
+                if unique_ratio <= 0.5:
+                    col_memory = df.select(col).estimated_size()
+                    # Categorical typically saves 50-90% for low cardinality
+                    estimated_savings = col_memory * 0.7
+                    potential_savings += estimated_savings
+                    suggestions.append(
+                        f"{col}: String → Categorical (unique ratio: {unique_ratio:.2%})"
+                    )
+
+        return {
+            "potential_savings_bytes": int(potential_savings),
+            "potential_savings_mb": potential_savings / (1024 * 1024),
+            "potential_savings_percentage": (
+                potential_savings / df.estimated_size() * 100
+            )
+            if df.estimated_size() > 0
+            else 0,
+            "suggestions": suggestions[:10],  # Limit to top 10 suggestions
+        }
