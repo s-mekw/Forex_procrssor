@@ -12,6 +12,11 @@
 #### Step 2: 基本的なデータ型定義テスト
 - ファイル: `tests/unit/test_data_processor.py`
 - 作業: Float32統一のスキーマ定義テストを追加
+- 詳細:
+  - Forexデータのスキーマ定義（timestamp, open, high, low, close, volume）
+  - Float32への自動変換テスト
+  - メモリ使用量の検証テスト
+  - データ型の整合性チェック
 
 #### Step 3: 実装ファイルの作成
 - ファイル: `src/data_processing/processor.py`
