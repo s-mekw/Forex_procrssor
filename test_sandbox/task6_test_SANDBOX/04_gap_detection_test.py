@@ -145,6 +145,35 @@ class GapDetectionTest:
             
         except Exception as e:
             print_error(f"Error processing tick: {e}")
+
+    def process_tick_fast(self, tick: Tick):
+        """高速処理用の簡易版（表示更新なし、ギャップシミュレーションなし）"""
+        try:
+            # シミュレーション時刻の初期化
+            if self.simulated_last_time is None:
+                self.simulated_last_time = tick.timestamp
+            
+            # シミュレーション時刻でTickを作成（現在のオフセットを適用）
+            simulated_timestamp = tick.timestamp + self.time_offset
+            simulated_tick = Tick(
+                symbol=tick.symbol,
+                timestamp=simulated_timestamp,
+                bid=tick.bid,
+                ask=tick.ask,
+                volume=tick.volume
+            )
+            
+            # コンバーターに追加（ギャップ検出は内部で自動実行）
+            self.converter.add_tick(simulated_tick)
+            
+            # 統計更新（最小限）
+            self.total_ticks += 1
+            self.last_tick_time = simulated_tick.timestamp
+            self.simulated_last_time = simulated_timestamp
+            
+        except Exception as e:
+            # エラーは静かに処理（ログ出力を避けて高速化）
+            pass
     
     def create_gap_timeline(self) -> Panel:
         """ギャップタイムライン表示"""
@@ -360,17 +389,23 @@ async def main():
             force_gap_counter = 0
             
             while True:
-                # ティック取得・処理
+                # ティック取得
                 ticks = await streamer.get_new_ticks()
                 
-                for i, tick in enumerate(ticks):
-                    # 定期的に強制ギャップを発生
+                if ticks:
+                    # バッチ処理：最後以外は簡易処理
+                    if len(ticks) > 1:
+                        for tick in ticks[:-1]:
+                            test.process_tick_fast(tick)
+                            force_gap_counter += 1
+                    
+                    # 最後のティックのみ完全処理
                     force_gap = (force_gap_counter % 50 == 0 and force_gap_counter > 0)
-                    test.process_tick(tick, force_gap=force_gap)
+                    test.process_tick(ticks[-1], force_gap=force_gap)
                     force_gap_counter += 1
-                
-                # 表示更新
-                live.update(test.create_display())
+                    
+                    # 表示更新（ティックがある場合のみ）
+                    live.update(test.create_display())
                 
                 # 処理速度を上げてバッファオーバーフローを防ぐ
                 await asyncio.sleep(0.01)
