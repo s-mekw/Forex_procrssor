@@ -27,9 +27,8 @@ TEST_SYMBOLS = {
 # ストリーミング設定
 STREAMING_CONFIG = {
     "buffer_size": 1000,
-    "spike_threshold": 3.0,
+    "spike_threshold_percent": 0.1,  # spike_threshold → spike_threshold_percent (価格変動率%)
     "backpressure_threshold": 0.8,
-    "stats_window_size": 100,  # statistics_window → stats_window_size
 }
 
 # TickDataStreamer用の追加設定（StreamerConfigに含まれないパラメータ）
@@ -74,6 +73,7 @@ def get_mt5_credentials() -> dict:
         "password": MT5_CONFIG["password"],
         "server": MT5_CONFIG["server"],
         "timeout": MT5_CONFIG["timeout"],
+        "path": MT5_CONFIG["path"],  # Axiory MT5のパスを追加
     }
 
 def get_mt5_config() -> dict:
@@ -83,6 +83,7 @@ def get_mt5_config() -> dict:
         "password": MT5_CONFIG["password"],
         "server": MT5_CONFIG["server"],
         "timeout": MT5_CONFIG["timeout"],
+        "path": MT5_CONFIG["path"],  # Axiory MT5のパスを追加
     }
 
 def get_test_symbol(category: str = "default") -> str:
@@ -101,7 +102,7 @@ def create_tick_streamer(symbol: str, mt5_client):
     streamer_params = {
         "symbol": symbol,
         "mt5_client": mt5_client,
-        **STREAMING_CONFIG,  # buffer_size, spike_threshold, backpressure_threshold, stats_window_size
+        **STREAMING_CONFIG,  # buffer_size, spike_threshold_percent, backpressure_threshold
         "max_retries": ADDITIONAL_STREAMER_CONFIG["max_retries"],
         "circuit_breaker_threshold": ADDITIONAL_STREAMER_CONFIG["circuit_breaker_threshold"],
         "circuit_breaker_timeout": ADDITIONAL_STREAMER_CONFIG["circuit_breaker_timeout"],
