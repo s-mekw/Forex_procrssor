@@ -60,7 +60,7 @@ class PolarsDataShowcase:
                 "password": config.mt5_password.get_secret_value() if config.mt5_password else "",  # SecretStrから値を取得
                 "server": str(config.mt5_server),
                 "timeout": int(config.mt5_timeout),
-                "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe"  # Axiory MT5のパスを追加
+                "path": config.mt5_path  # MT5実行ファイルのパス（環境変数から読み込み）
             }
             
             self.connection_manager = MT5ConnectionManager()
