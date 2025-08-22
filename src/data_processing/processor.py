@@ -278,3 +278,116 @@ class PolarsProcessingEngine:
             else 0,
             "suggestions": suggestions[:10],  # Limit to top 10 suggestions
         }
+
+    def apply_filters(
+        self, lazy_df: pl.LazyFrame, filters: list[tuple[str, str, Any]]
+    ) -> pl.LazyFrame:
+        """
+        Apply filtering operations to a LazyFrame.
+
+        This method applies multiple filter conditions to a LazyFrame
+        using lazy evaluation for optimal performance.
+
+        Args:
+            lazy_df: Input LazyFrame to filter
+            filters: List of filter conditions as tuples (column, operator, value)
+                    Supported operators: '>', '<', '>=', '<=', '==', '!='
+
+        Returns:
+            LazyFrame with filters applied (not yet executed)
+
+        Example:
+            filters = [
+                ('volume', '>', 5000),
+                ('close', '>=', 1.0850)
+            ]
+        """
+        result = lazy_df
+
+        for column, operator, value in filters:
+            if operator == ">":
+                result = result.filter(pl.col(column) > value)
+            elif operator == "<":
+                result = result.filter(pl.col(column) < value)
+            elif operator == ">=":
+                result = result.filter(pl.col(column) >= value)
+            elif operator == "<=":
+                result = result.filter(pl.col(column) <= value)
+            elif operator == "==":
+                result = result.filter(pl.col(column) == value)
+            elif operator == "!=":
+                result = result.filter(pl.col(column) != value)
+            else:
+                raise ValueError(f"Unsupported operator: {operator}")
+
+            logger.debug(f"Applied filter: {column} {operator} {value}")
+
+        return result
+
+    def apply_aggregations(
+        self,
+        lazy_df: pl.LazyFrame,
+        group_by: list[str] | None = None,
+        aggregations: dict[str, list[str]] | None = None,
+    ) -> pl.LazyFrame:
+        """
+        Apply aggregation operations to a LazyFrame.
+
+        This method performs various aggregation operations with optional grouping,
+        maintaining lazy evaluation for performance optimization.
+
+        Args:
+            lazy_df: Input LazyFrame to aggregate
+            group_by: Optional list of columns to group by
+            aggregations: Dictionary mapping column names to aggregation functions
+                         Supported: 'mean', 'sum', 'min', 'max', 'std', 'count', 'first', 'last'
+
+        Returns:
+            LazyFrame with aggregations applied (not yet executed)
+
+        Example:
+            aggregations = {
+                'open': ['mean', 'std'],
+                'volume': ['sum', 'mean']
+            }
+        """
+        if aggregations is None:
+            aggregations = {}
+
+        # Build aggregation expressions
+        agg_exprs = []
+        for column, funcs in aggregations.items():
+            for func in funcs:
+                if func == "mean":
+                    agg_exprs.append(pl.col(column).mean().alias(f"{column}_{func}"))
+                elif func == "sum":
+                    agg_exprs.append(pl.col(column).sum().alias(f"{column}_{func}"))
+                elif func == "min":
+                    agg_exprs.append(pl.col(column).min().alias(f"{column}_{func}"))
+                elif func == "max":
+                    agg_exprs.append(pl.col(column).max().alias(f"{column}_{func}"))
+                elif func == "std":
+                    agg_exprs.append(pl.col(column).std().alias(f"{column}_{func}"))
+                elif func == "count":
+                    agg_exprs.append(pl.col(column).count().alias(f"{column}_{func}"))
+                elif func == "first":
+                    agg_exprs.append(pl.col(column).first().alias(f"{column}_{func}"))
+                elif func == "last":
+                    agg_exprs.append(pl.col(column).last().alias(f"{column}_{func}"))
+                else:
+                    raise ValueError(f"Unsupported aggregation function: {func}")
+
+        if not agg_exprs:
+            logger.warning("No aggregation expressions provided")
+            return lazy_df
+
+        # Apply aggregations with or without grouping
+        if group_by:
+            result = lazy_df.group_by(group_by).agg(agg_exprs)
+            logger.debug(f"Applied grouped aggregations by: {group_by}")
+        else:
+            # For non-grouped aggregations, use select
+            result = lazy_df.select(agg_exprs)
+            logger.debug("Applied non-grouped aggregations")
+
+        return result

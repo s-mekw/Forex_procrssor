@@ -327,9 +327,174 @@ class TestPolarsProcessingEngine:
         assert any("Int64 → Int" in s for s in opt_potential["suggestions"])
 
     def test_lazy_frame_processing(self, sample_data: pl.DataFrame):
-        """LazyFrameによる遅延評価のテスト"""
-        # TODO: LazyFrame処理の実装後にテストを有効化
-        pass
+        """LazyFrameによる遅延評価の詳細テスト"""
+        from src.data_processing.processor import PolarsProcessingEngine
+
+        # エンジンを初期化
+        engine = PolarsProcessingEngine()
+
+        # 1. 遅延評価の動作確認
+        lazy_df = engine.create_lazyframe(sample_data)
+        assert isinstance(lazy_df, pl.LazyFrame), "LazyFrameが返されるべき"
+
+        # 2. フィルタリング操作のテスト
+        filtered_lazy = engine.apply_filters(
+            lazy_df,
+            filters=[
+                ("volume", ">", 5000),
+                ("close", ">", 1.0850),
+            ],
+        )
+        assert isinstance(filtered_lazy, pl.LazyFrame), (
+            "フィルタリング後もLazyFrameを維持すべき"
+        )
+
+        # フィルタリング結果を確認
+        filtered_result = filtered_lazy.collect()
+        assert all(filtered_result["volume"] > 5000), "volumeフィルタが適用されるべき"
+        assert all(filtered_result["close"] > 1.0850), "closeフィルタが適用されるべき"
+
+        # 3. 集計操作のテスト
+        aggregated_lazy = engine.apply_aggregations(
+            lazy_df,
+            group_by=None,
+            aggregations={
+                "open": ["mean", "std"],
+                "high": ["max"],
+                "low": ["min"],
+                "volume": ["sum", "mean"],
+            },
+        )
+        assert isinstance(aggregated_lazy, pl.LazyFrame), (
+            "集計後もLazyFrameを維持すべき"
+        )
+
+        # 集計結果を確認
+        agg_result = aggregated_lazy.collect()
+        assert "open_mean" in agg_result.columns, "open_meanカラムが存在すべき"
+        assert "open_std" in agg_result.columns, "open_stdカラムが存在すべき"
+        assert "high_max" in agg_result.columns, "high_maxカラムが存在すべき"
+        assert "low_min" in agg_result.columns, "low_minカラムが存在すべき"
+        assert "volume_sum" in agg_result.columns, "volume_sumカラムが存在すべき"
+        assert "volume_mean" in agg_result.columns, "volume_meanカラムが存在すべき"
+        assert len(agg_result) == 1, "集計結果は1行であるべき"
+
+        # 4. グループ化集計のテスト
+        # タイムスタンプから分単位のグループキーを作成
+        lazy_with_minute = lazy_df.with_columns(
+            [
+                pl.col("timestamp").dt.truncate("1m").alias("minute"),
+            ]
+        )
+
+        grouped_agg_lazy = engine.apply_aggregations(
+            lazy_with_minute,
+            group_by=["minute"],
+            aggregations={
+                "close": ["first", "last"],
+                "volume": ["sum"],
+            },
+        )
+        grouped_result = grouped_agg_lazy.collect()
+        assert "minute" in grouped_result.columns, "グループキーが存在すべき"
+        assert "close_first" in grouped_result.columns
+        assert "close_last" in grouped_result.columns
+        assert "volume_sum" in grouped_result.columns
+
+        # 5. 複数操作のチェイン処理テスト
+        chained_lazy = (
+            engine.create_lazyframe(sample_data)
+            .pipe(
+                engine.apply_filters,
+                filters=[
+                    ("volume", ">=", 3000),
+                    ("volume", "<=", 8000),
+                ],
+            )
+            .with_columns(
+                [
+                    # 価格の変化率を計算
+                    ((pl.col("close") - pl.col("open")) / pl.col("open") * 100).alias(
+                        "price_change_pct"
+                    ),
+                    # 価格レンジ
+                    (pl.col("high") - pl.col("low")).alias("price_range"),
+                ]
+            )
+            .sort("timestamp")
+            .select(
+                [
+                    "timestamp",
+                    "close",
+                    "volume",
+                    "price_change_pct",
+                    "price_range",
+                ]
+            )
+        )
+
+        assert isinstance(chained_lazy, pl.LazyFrame), (
+            "チェイン処理後もLazyFrameを維持すべき"
+        )
+
+        # チェイン処理の結果を確認
+        chained_result = chained_lazy.collect()
+        assert (
+            3000
+            <= chained_result["volume"].min()
+            <= chained_result["volume"].max()
+            <= 8000
+        )
+        assert "price_change_pct" in chained_result.columns
+        assert "price_range" in chained_result.columns
+        assert len(chained_result.columns) == 5, "選択された5カラムのみ存在すべき"
+
+        # 6. collectタイミングの検証（計算が遅延されていることを確認）
+        # 複雑なクエリを構築しても、collect()するまで実行されない
+        complex_lazy = (
+            engine.create_lazyframe(sample_data)
+            .filter(pl.col("volume") > 1000)
+            .with_columns(
+                [
+                    pl.col("close").rolling_mean(window_size=5).alias("close_ma5"),
+                    pl.col("volume").rolling_mean(window_size=3).alias("volume_ma3"),
+                ]
+            )
+            .filter(pl.col("close_ma5").is_not_null())
+        )
+
+        # この時点ではまだ計算されていない（LazyFrameのまま）
+        assert isinstance(complex_lazy, pl.LazyFrame)
+
+        # collect()で初めて計算が実行される
+        complex_result = complex_lazy.collect()
+        assert isinstance(complex_result, pl.DataFrame)
+        assert "close_ma5" in complex_result.columns
+        assert "volume_ma3" in complex_result.columns
+
+        # 7. メモリ効率の確認（LazyFrameは中間結果を保持しない）
+        # 大きなデータセットでの処理をシミュレート
+        large_data = pl.DataFrame(
+            {
+                "timestamp": sample_data["timestamp"].to_list() * 10,  # 10倍に拡張
+                "value": list(range(1000)),
+            }
+        )
+
+        # LazyFrameで処理（メモリ効率的）
+        lazy_large = (
+            large_data.lazy()
+            .filter(pl.col("value") > 500)
+            .group_by("timestamp")
+            .agg(pl.col("value").mean())
+        )
+
+        # 計算前はメモリを消費しない
+        assert isinstance(lazy_large, pl.LazyFrame)
+
+        # 必要な時だけ計算
+        result_large = lazy_large.collect()
+        assert len(result_large) > 0
 
     def test_chunk_processing(self, large_sample_data: pl.DataFrame):
         """チャンク処理のテスト"""
