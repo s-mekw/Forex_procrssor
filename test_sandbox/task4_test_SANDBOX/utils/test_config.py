@@ -10,10 +10,11 @@ load_dotenv()
 
 # MT5デモアカウント設定
 MT5_CONFIG = {
-    "login": int(os.getenv("MT5_DEMO_LOGIN", "5025869601")),  # デモアカウント
-    "password": os.getenv("MT5_DEMO_PASSWORD", ""),
-    "server": os.getenv("MT5_DEMO_SERVER", "MetaQuotes-Demo"),
-    "timeout": 60000,
+    "login": int(os.getenv("FOREX_MT5_LOGIN", "20046505")),  # デモアカウント
+    "password": os.getenv("FOREX_MT5_PASSWORD", ""),
+    "server": os.getenv("FOREX_MT5_SERVER", "Axiory-Demo"),
+    "timeout": int(os.getenv("FOREX_MT5_TIMEOUT", "60000")),
+    "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe",  # MT5パス
 }
 
 # テスト用シンボル設定
