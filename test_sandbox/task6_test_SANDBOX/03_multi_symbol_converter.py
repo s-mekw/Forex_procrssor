@@ -339,7 +339,7 @@ async def main():
             # 各シンボル用にTickDataStreamerを作成
             streamers[symbol] = TickDataStreamer(
                 symbol=symbol,
-                buffer_size=2000,
+                buffer_size=10000,  # バッファオーバーフロー対策で2000から10000に増加
                 spike_threshold_percent=0.1,
                 backpressure_threshold=0.8,
                 mt5_client=connection_manager
