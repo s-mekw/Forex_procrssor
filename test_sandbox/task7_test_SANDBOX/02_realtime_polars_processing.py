@@ -146,10 +146,13 @@ class RealtimeProcessingDemo:
         """ティック収集ワーカー（バックグラウンド）"""
         await self.tick_streamer.subscribe_to_ticks()
         
+        # ストリーミングタスクを開始（重要：これがないとティックを受信しない）
+        await self.tick_streamer.start_streaming()
+        
         while self.is_running:
             try:
                 # 新しいティックを取得
-                new_ticks = self.tick_streamer.get_new_ticks()
+                new_ticks = await self.tick_streamer.get_new_ticks()
                 
                 for tick in new_ticks:
                     if not self.tick_buffer.full():
@@ -170,6 +173,8 @@ class RealtimeProcessingDemo:
                 self.stats['errors'].append(f"ティック収集エラー: {str(e)[:100]}")
                 await asyncio.sleep(1)
         
+        # ストリーミングを停止
+        await self.tick_streamer.stop_streaming()
         await self.tick_streamer.unsubscribe()
     
     def processing_worker(self):
@@ -401,6 +406,12 @@ class RealtimeProcessingDemo:
             self.is_running = False
             if self.processing_thread and self.processing_thread.is_alive():
                 self.processing_thread.join(timeout=5)
+            # tick_streamerのクリーンアップ
+            if self.tick_streamer:
+                if self.tick_streamer.is_streaming:
+                    await self.tick_streamer.stop_streaming()
+                if self.tick_streamer.is_subscribed:
+                    await self.tick_streamer.unsubscribe()
             if self.connection_manager and self.connection_manager.is_connected():
                 self.connection_manager.disconnect()
     

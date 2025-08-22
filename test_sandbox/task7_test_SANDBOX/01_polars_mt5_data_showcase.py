@@ -211,6 +211,9 @@ class PolarsDataShowcase:
         # ティックストリーマーを開始
         await self.tick_streamer.subscribe_to_ticks()
         
+        # ストリーミングタスクを開始（重要：これがないとティックを受信しない）
+        await self.tick_streamer.start_streaming()
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -232,6 +235,8 @@ class PolarsDataShowcase:
                 progress.update(task, advance=1, 
                               description=f"収集済み: {len(self.collected_ticks)}ティック")
         
+        # ストリーミングを停止
+        await self.tick_streamer.stop_streaming()
         await self.tick_streamer.unsubscribe()
         console.print(f"[green]✅ 収集完了: {len(self.collected_ticks)}ティック[/green]")
     
@@ -303,8 +308,13 @@ class PolarsDataShowcase:
             
         finally:
             # クリーンアップ
-            if self.tick_streamer and self.tick_streamer.is_subscribed:
-                await self.tick_streamer.unsubscribe()
+            if self.tick_streamer:
+                # ストリーミングが動作中の場合は停止
+                if self.tick_streamer.is_streaming:
+                    await self.tick_streamer.stop_streaming()
+                # 購読中の場合は購読解除
+                if self.tick_streamer.is_subscribed:
+                    await self.tick_streamer.unsubscribe()
             if self.connection_manager and self.connection_manager.is_connected():
                 self.connection_manager.disconnect()
                 

@@ -145,6 +145,9 @@ class DataAggregationPipeline:
         
         await self.tick_streamer.subscribe_to_ticks()
         
+        # ストリーミングタスクを開始（重要：これがないとティックを受信しない）
+        await self.tick_streamer.start_streaming()
+        
         # 60秒間データを収集
         collection_duration = 60
         with Progress(
@@ -159,12 +162,14 @@ class DataAggregationPipeline:
                 await asyncio.sleep(1)
                 
                 # 新しいティックを取得
-                new_ticks = self.tick_streamer.get_new_ticks()
+                new_ticks = await self.tick_streamer.get_new_ticks()
                 self.raw_ticks.extend(new_ticks)
                 
                 progress.update(task, advance=1, 
                               description=f"収集済み: {len(self.raw_ticks)}ティック")
         
+        # ストリーミングを停止
+        await self.tick_streamer.stop_streaming()
         await self.tick_streamer.unsubscribe()
         
         # 段階完了
@@ -752,6 +757,12 @@ class DataAggregationPipeline:
             
         finally:
             # クリーンアップ
+            # tick_streamerのクリーンアップ
+            if self.tick_streamer:
+                if self.tick_streamer.is_streaming:
+                    await self.tick_streamer.stop_streaming()
+                if self.tick_streamer.is_subscribed:
+                    await self.tick_streamer.unsubscribe()
             if self.connection_manager and self.connection_manager.is_connected():
                 self.connection_manager.disconnect()
             
