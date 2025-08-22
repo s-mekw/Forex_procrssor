@@ -33,7 +33,7 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "Explanatory",
+  "outputStyle": "default",
   "comment": "Claude Code Settings - Simplified Configuration",
   "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }

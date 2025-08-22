@@ -1,38 +1,79 @@
-## 汎用実装計画（リンク集・導線テンプレート）
+## タスク7: Polarsデータ処理基盤の構築 - 実装計画
 
-このファイルは、../.kiro/specs/Forex_procrssor/tasks.md に定義された任意のタスクを実装するための最小限の導線です。具体的な設計・仕様は各ドキュメントへ直接リンクし、本ファイルには詳細を書きません。
+### 概要
+要件2.1に基づき、Polarsを使用した高速データ処理基盤を構築します。TDD（テスト駆動開発）アプローチで、テストを先に書いてから実装を進めます。
 
-### タスク選択
-- 対象タスクは `../.kiro/specs/Forex_procrssor/tasks.md` を参照し、対応するチェックリスト/説明/要件番号を確認してください。
-- 現在の対象タスク: 
-  - [ ] 7. Polarsデータ処理基盤の構築
-    - tests/unit/test_data_processor.pyにPolars処理とメモリ最適化のテストを作成
-    - src/data_processing/processor.pyにPolarsProcessingEngineクラスを実装
-    - LazyFrameによる遅延評価とFloat32統一のスキーマを定義
-    - チャンク処理とストリーミング処理の切り替えロジックを実装
-    - _要件: 2.1_ of `../.kiro/specs/Forex_procrssor/requirements.md`
-- 
-### 参照ドキュメント（必読）
-- 実装タスク一覧: `../.kiro/specs/Forex_procrssor/tasks.md`
-- 要件定義: `../.kiro/specs/Forex_procrssor/requirements.md`
-- 詳細設計: `../.kiro/specs/Forex_procrssor/design.md`
-- スペック概要: `../.kiro/specs/Forex_procrssor/spec.json`
-- 技術方針: `../.kiro/steering/tech.md`
-- 構造/モジュール方針: `../.kiro/steering/structure.md`
-- Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
-- プロダクト方針: `../.kiro/steering/product.md`
+### 実装ステップ
 
-### 実装の置き場所（指針のみ）
-- 実装するディレクトリ/モジュールは `../.kiro/steering/structure.md` の方針に従い選定してください。
-- 例: `src/common/`、`src/mt5_data_acquisition/`、`src/data_processing/`、`src/storage/`、`src/patchTST_model/`、`src/app/`、`src/production/` など（詳細は設計参照）。
-  
-### テストの置き場所（指針のみ）
-- `tests/unit/`（ユニット）、`tests/integration/`（統合）、`tests/e2e/`（E2E）配下に配置。
-- テスト観点・項目は各タスクの記述に従い、詳細は `../.kiro/specs/Forex_procrssor/design.md` および `requirements.md` を参照。
+#### Step 1: テストファイルの作成
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: 基本的なテスト構造とインポートを設定
 
-### 完了条件（DoD の参照）
-- 当該タスクのチェック項目が満たされ、関連する要件の受け入れ条件に適合していること。
-- ビルド/テストがグリーンであること（`pyproject.toml` の設定に準拠）。
-- 
-### 作業メモ欄（自由記述）
-- ここには「選択タスク」「対象ファイル」「追加の参照リンク」「決定事項」などを簡潔に記録してください。
+#### Step 2: 基本的なデータ型定義テスト
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: Float32統一のスキーマ定義テストを追加
+
+#### Step 3: 実装ファイルの作成
+- ファイル: `src/data_processing/processor.py`
+- 作業: PolarsProcessingEngineクラスの骨組みを作成
+
+#### Step 4: データ型最適化の実装
+- ファイル: `src/data_processing/processor.py`
+- 作業: Float32変換とメモリ最適化メソッドを実装
+
+#### Step 5: LazyFrame処理のテスト追加
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: 遅延評価のテストケースを追加
+
+#### Step 6: LazyFrame処理の実装
+- ファイル: `src/data_processing/processor.py`
+- 作業: LazyFrameを使った遅延評価処理を実装
+
+#### Step 7: チャンク処理のテスト追加
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: 大規模データのチャンク処理テストを追加
+
+#### Step 8: チャンク処理の実装
+- ファイル: `src/data_processing/processor.py`
+- 作業: チャンク処理とストリーミング処理を実装
+
+#### Step 9: エラーハンドリングのテスト追加
+- ファイル: `tests/unit/test_data_processor.py`
+- 作業: 異常系のテストケースを追加
+
+#### Step 10: エラーハンドリングの実装
+- ファイル: `src/data_processing/processor.py`
+- 作業: 例外処理とロギングを実装
+
+#### Step 11: 統合テストとドキュメント更新
+- ファイル: `tests/unit/test_data_processor.py`, `docs/context.md`
+- 作業: 全体のテスト実行と最終確認、ドキュメント更新
+
+### 成果物
+1. **src/data_processing/processor.py**
+   - PolarsProcessingEngineクラス
+   - メモリ最適化メソッド
+   - チャンク処理/ストリーミング処理
+
+2. **tests/unit/test_data_processor.py**
+   - データ型変換テスト
+   - LazyFrame処理テスト
+   - チャンク処理テスト
+   - エラーハンドリングテスト
+
+### 技術仕様
+- **データ型**: Float32統一（メモリ効率50%改善）
+- **処理方式**: LazyFrameによる遅延評価
+- **メモリ管理**: チャンク処理（デフォルト: 100,000行）
+- **並列処理**: CPUコア数に応じた自動最適化
+
+### 検証項目
+- [ ] 全テストがグリーン
+- [ ] カバレッジ80%以上
+- [ ] メモリ使用量がFloat64比で50%削減
+- [ ] 処理速度がPandas比で2倍以上
+
+### 参照ドキュメント
+- 要件定義: `.kiro/specs/Forex_procrssor/requirements.md` (要件2.1)
+- 詳細設計: `.kiro/specs/Forex_procrssor/design.md` (セクション2.1, 2.3)
+- Python開発ガイドライン: `.kiro/steering/Python_Development_Guidelines.md`
