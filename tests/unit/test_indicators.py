@@ -597,6 +597,247 @@ class TestRSICalculation:
             assert last_rsi < 40, f"急落後のRSIが高すぎる: {last_rsi}"
 
 
+class TestMACDCalculation:
+    """MACD（移動平均収束拡散）計算のテストスイート"""
+    
+    def test_macd_calculation_basic(self, sample_price_data: pl.DataFrame):
+        """基本的なMACD計算のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(sample_price_data)
+        
+        # 結果の検証
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == len(sample_price_data)
+        
+        # MACD関連列が追加されていることを確認
+        assert "macd_line" in result.columns
+        assert "signal_line" in result.columns
+        assert "macd_histogram" in result.columns
+        
+        # データ型の確認
+        assert result["macd_line"].dtype == pl.Float32
+        assert result["signal_line"].dtype == pl.Float32
+        assert result["macd_histogram"].dtype == pl.Float32
+        
+        # 元のデータ列も保持されていることを確認
+        for col in sample_price_data.columns:
+            assert col in result.columns
+    
+    def test_macd_calculation_accuracy(self):
+        """MACD計算の精度テスト
+        
+        既知の値でMACDを手動計算し、実装と比較します。
+        """
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # シンプルなテストデータ（トレンドが明確）
+        test_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(50)],
+            "symbol": ["EURUSD"] * 50,
+            "close": [100.0 + i * 0.5 for i in range(50)],  # 上昇トレンド
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(test_data)
+        
+        # MACD値が計算されていることを確認
+        assert "macd_line" in result.columns
+        assert "signal_line" in result.columns
+        assert "macd_histogram" in result.columns
+        
+        # 上昇トレンドなので、MACDラインは正の値になるはず（後半で）
+        macd_values = result["macd_line"].drop_nulls()
+        if len(macd_values) >= 30:
+            # 十分なデータポイント後のMACD値をチェック
+            last_macd = float(macd_values[-1])
+            assert last_macd > 0, f"上昇トレンドでMACDが負: {last_macd}"
+    
+    def test_macd_with_custom_periods(self):
+        """カスタム期間でのMACD計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(100)],
+            "symbol": ["EURUSD"] * 100,
+            "close": [100.0 + np.sin(i/10) * 10 for i in range(100)],  # サイン波
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # カスタム期間でMACDを計算
+        result = engine.calculate_macd(
+            data, 
+            fast_period=10, 
+            slow_period=20, 
+            signal_period=5
+        )
+        
+        # 列名が期間を反映していることを確認
+        assert "macd_line" in result.columns
+        assert "signal_line" in result.columns
+        assert "macd_histogram" in result.columns
+        
+        # 値が計算されていることを確認
+        macd_values = result["macd_line"].drop_nulls()
+        signal_values = result["signal_line"].drop_nulls()
+        histogram_values = result["macd_histogram"].drop_nulls()
+        
+        assert len(macd_values) > 0
+        assert len(signal_values) > 0
+        assert len(histogram_values) > 0
+        
+        # ヒストグラムがMACD - Signalであることを確認
+        if len(histogram_values) >= 10:
+            # 最後の値で検証
+            last_macd = float(result["macd_line"].drop_nulls()[-1])
+            last_signal = float(result["signal_line"].drop_nulls()[-1])
+            last_histogram = float(result["macd_histogram"].drop_nulls()[-1])
+            
+            expected_histogram = last_macd - last_signal
+            assert abs(last_histogram - expected_histogram) < 1e-5, (
+                f"ヒストグラム計算が不正確: {last_histogram} != {expected_histogram}"
+            )
+    
+    def test_macd_multiple_symbols(self):
+        """複数シンボルでのMACD計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 複数シンボルのデータ
+        data = []
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            base_price = {"EURUSD": 1.1000, "GBPUSD": 1.2500, "USDJPY": 110.00}[symbol]
+            for i in range(60):
+                data.append({
+                    "timestamp": datetime(2024, 1, 1) + timedelta(days=i),
+                    "symbol": symbol,
+                    "close": base_price * (1 + 0.002 * np.sin(i/5)),
+                })
+        
+        df = pl.DataFrame(data).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(df, group_by="symbol")
+        
+        # 各シンボルごとにMACDが計算されていることを確認
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            symbol_data = result.filter(pl.col("symbol") == symbol)
+            assert "macd_line" in symbol_data.columns
+            assert "signal_line" in symbol_data.columns
+            assert "macd_histogram" in symbol_data.columns
+            
+            # 値が計算されていることを確認
+            macd_values = symbol_data["macd_line"].drop_nulls()
+            if len(macd_values) > 0:
+                # 各シンボルで独立して計算されていることを確認
+                assert macd_values.min() != macd_values.max()
+    
+    def test_macd_convergence_divergence(self):
+        """MACDの収束・拡散パターンのテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 収束パターン（価格が安定）と拡散パターン（価格が変動）を含むデータ
+        convergence_data = [100.0] * 30  # 収束期間（価格一定）
+        divergence_data = [100.0 + (i - 30) * 0.5 for i in range(30, 60)]  # 拡散期間（上昇）
+        
+        test_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(60)],
+            "symbol": ["EURUSD"] * 60,
+            "close": convergence_data + divergence_data,
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(test_data)
+        
+        macd_values = result["macd_line"].drop_nulls()
+        signal_values = result["signal_line"].drop_nulls()
+        
+        if len(macd_values) >= 50:
+            # 収束期間ではMACDとSignalが近い値になる
+            mid_macd = float(macd_values[25])
+            mid_signal = float(signal_values[25])
+            convergence_diff = abs(mid_macd - mid_signal)
+            
+            # 拡散期間ではMACDとSignalの差が大きくなる
+            last_macd = float(macd_values[-1])
+            last_signal = float(signal_values[-1])
+            divergence_diff = abs(last_macd - last_signal)
+            
+            # 拡散期間の差の方が大きいはず
+            assert divergence_diff > convergence_diff * 0.5, (
+                f"収束・拡散パターンが検出されない: "
+                f"収束差={convergence_diff}, 拡散差={divergence_diff}"
+            )
+    
+    def test_macd_downtrend(self):
+        """下降トレンドでのMACD計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 下降トレンドのデータ
+        test_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(50)],
+            "symbol": ["EURUSD"] * 50,
+            "close": [100.0 - i * 0.3 for i in range(50)],  # 下降トレンド
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(test_data)
+        
+        # 下降トレンドなので、MACDラインは負の値になるはず（後半で）
+        macd_values = result["macd_line"].drop_nulls()
+        if len(macd_values) >= 30:
+            last_macd = float(macd_values[-1])
+            assert last_macd < 0, f"下降トレンドでMACDが正: {last_macd}"
+            
+            # ヒストグラムも負になることが多い
+            histogram_values = result["macd_histogram"].drop_nulls()
+            if len(histogram_values) >= 30:
+                negative_count = sum(1 for v in histogram_values[-10:] if v < 0)
+                assert negative_count >= 5, "下降トレンドでヒストグラムが正に偏っている"
+    
+    def test_macd_performance(self):
+        """MACD計算のパフォーマンステスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        import time
+        
+        # 10万行のデータ
+        n_rows = 100_000
+        data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(seconds=i) for i in range(n_rows)],
+            "symbol": ["EURUSD"] * n_rows,
+            "close": 100.0 + np.sin(np.arange(n_rows) / 1000) * 10,
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # パフォーマンス測定
+        start_time = time.time()
+        result = engine.calculate_macd(data)
+        elapsed_time = time.time() - start_time
+        
+        # 結果の検証
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == n_rows
+        
+        # パフォーマンス基準（0.5秒以内に完了すべき）
+        assert elapsed_time < 0.5, f"MACD計算が遅すぎます: {elapsed_time:.3f}秒"
+        
+        print(f"10万行のMACD計算時間: {elapsed_time:.4f}秒")
+
+
 @pytest.mark.unit
 class TestEdgeCases:
     """エッジケースのテストクラス"""

@@ -324,6 +324,139 @@ class TechnicalIndicatorEngine:
         logger.debug(f"Calculated RSI with period {period}")
         return result
 
+    def calculate_macd(
+        self,
+        df: pl.DataFrame,
+        fast_period: int = 12,
+        slow_period: int = 26,
+        signal_period: int = 9,
+        price_column: str = "close",
+        group_by: str | None = None,
+    ) -> pl.DataFrame:
+        """
+        MACD（移動平均収束拡散）を計算します。
+        
+        MACDは2つのEMAの差を使用してトレンドの方向と強さを測る指標です。
+        - MACD Line: 短期EMA - 長期EMA
+        - Signal Line: MACD LineのEMA
+        - MACD Histogram: MACD Line - Signal Line
+        
+        計算式:
+        1. MACD Line = EMA(fast_period) - EMA(slow_period)
+        2. Signal Line = EMA(MACD Line, signal_period)
+        3. MACD Histogram = MACD Line - Signal Line
+        
+        Args:
+            df: 入力データフレーム
+            fast_period: 短期EMA期間（デフォルト: 12）
+            slow_period: 長期EMA期間（デフォルト: 26）
+            signal_period: シグナルラインのEMA期間（デフォルト: 9）
+            price_column: 価格列の名前（デフォルト: "close"）
+            group_by: グループ化する列名（複数シンボル対応）
+        
+        Returns:
+            MACD関連列が追加されたDataFrame
+        
+        Raises:
+            ValueError: 無効なデータが渡された場合
+        """
+        # データ検証
+        if df.is_empty():
+            raise ValueError("空のDataFrameが渡されました")
+        
+        if price_column not in df.columns:
+            raise ValueError(f"{price_column}列が必要です")
+        
+        if fast_period <= 0 or slow_period <= 0 or signal_period <= 0:
+            raise ValueError("期間は正の整数である必要があります")
+        
+        if fast_period >= slow_period:
+            raise ValueError("短期期間は長期期間より小さい必要があります")
+        
+        # Float32への変換
+        if df[price_column].dtype != pl.Float32:
+            df = df.with_columns(pl.col(price_column).cast(pl.Float32))
+        
+        result = df
+        
+        if group_by:
+            # グループごとにMACDを計算
+            # 短期EMAと長期EMAを計算
+            result = result.with_columns([
+                pl.col(price_column)
+                .ewm_mean(span=fast_period, adjust=False)
+                .over(group_by)
+                .cast(pl.Float32)
+                .alias("ema_fast"),
+                
+                pl.col(price_column)
+                .ewm_mean(span=slow_period, adjust=False)
+                .over(group_by)
+                .cast(pl.Float32)
+                .alias("ema_slow"),
+            ])
+            
+            # MACD Lineを計算
+            result = result.with_columns(
+                (pl.col("ema_fast") - pl.col("ema_slow"))
+                .cast(pl.Float32)
+                .alias("macd_line")
+            )
+            
+            # Signal Line（MACD LineのEMA）を計算
+            result = result.with_columns(
+                pl.col("macd_line")
+                .ewm_mean(span=signal_period, adjust=False)
+                .over(group_by)
+                .cast(pl.Float32)
+                .alias("signal_line")
+            )
+        else:
+            # 全体でMACDを計算
+            # 短期EMAと長期EMAを計算
+            result = result.with_columns([
+                pl.col(price_column)
+                .ewm_mean(span=fast_period, adjust=False)
+                .cast(pl.Float32)
+                .alias("ema_fast"),
+                
+                pl.col(price_column)
+                .ewm_mean(span=slow_period, adjust=False)
+                .cast(pl.Float32)
+                .alias("ema_slow"),
+            ])
+            
+            # MACD Lineを計算
+            result = result.with_columns(
+                (pl.col("ema_fast") - pl.col("ema_slow"))
+                .cast(pl.Float32)
+                .alias("macd_line")
+            )
+            
+            # Signal Line（MACD LineのEMA）を計算
+            result = result.with_columns(
+                pl.col("macd_line")
+                .ewm_mean(span=signal_period, adjust=False)
+                .cast(pl.Float32)
+                .alias("signal_line")
+            )
+        
+        # MACD Histogramを計算
+        result = result.with_columns(
+            (pl.col("macd_line") - pl.col("signal_line"))
+            .cast(pl.Float32)
+            .alias("macd_histogram")
+        )
+        
+        # 一時列を削除
+        result = result.drop(["ema_fast", "ema_slow"])
+        
+        logger.debug(
+            f"Calculated MACD with periods: fast={fast_period}, "
+            f"slow={slow_period}, signal={signal_period}"
+        )
+        return result
+
     def calculate_multiple_indicators(
         self, df: pl.DataFrame, indicators: list[str] | None = None
     ) -> pl.DataFrame:
@@ -347,9 +480,11 @@ class TechnicalIndicatorEngine:
                 result = self.calculate_ema(result)
             elif indicator.lower() == "rsi":
                 result = self.calculate_rsi(result)
+            elif indicator.lower() == "macd":
+                result = self.calculate_macd(result)
             # 将来的に他の指標を追加
-            # elif indicator.lower() == "macd":
-            #     result = self.calculate_macd(result)
+            # elif indicator.lower() == "bollinger":
+            #     result = self.calculate_bollinger_bands(result)
             else:
                 logger.warning(f"Unknown indicator: {indicator}")
 
