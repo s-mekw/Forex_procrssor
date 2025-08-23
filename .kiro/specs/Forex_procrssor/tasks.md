@@ -54,7 +54,7 @@
 
 ## フェーズ3: 高速データ処理パイプライン
 
-- [ ] 7. Polarsデータ処理基盤の構築
+- [X] 7. Polarsデータ処理基盤の構築
   - tests/unit/test_data_processor.pyにPolars処理とメモリ最適化のテストを作成
   - src/data_processing/processor.pyにPolarsProcessingEngineクラスを実装
   - LazyFrameによる遅延評価とFloat32統一のスキーマを定義
@@ -65,6 +65,7 @@
   - tests/unit/test_indicators.pyに各指標の計算精度テストを作成
   - src/data_processing/indicators.pyにTechnicalIndicatorEngineクラスを実装
   - polars-ta-extensionを使用したEMA（5、20、50、100、200期間）計算を実装
+    - polars-ta-extensionは"https://github.com/Yvictor/polars_ta_extension"
   - 増分計算による効率的な更新メカニズムを追加
   - _要件: 2.2_
 

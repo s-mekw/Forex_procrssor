@@ -69,6 +69,7 @@ class BaseConfig(BaseSettings):
     mt5_password: Optional[SecretStr] = Field(default=None, description="MT5パスワード")
     mt5_server: str = Field(default="MetaQuotes-Demo", description="MT5サーバー名")
     mt5_timeout: int = Field(default=60000, gt=0, le=300000, description="MT5タイムアウト（ミリ秒）")
+    mt5_path: Optional[str] = Field(default=None, description="MT5実行ファイルのパス")
     
     # データベース設定
     db_host: str = Field(default="localhost", description="データベースホスト")
