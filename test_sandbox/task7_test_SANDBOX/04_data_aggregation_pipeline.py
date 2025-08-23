@@ -473,7 +473,7 @@ class DataAggregationPipeline:
         console.print(f"[green]✅ 統計分析完了[/green]")
     
     def stage_6_anomaly_detection(self) -> None:
-        """段階6: 異常値検出"""
+        """段階6: 異常値検出（変化率ベース）"""
         stage = self.pipeline_stages[5]
         stage_start = time.time()
         
@@ -486,25 +486,63 @@ class DataAggregationPipeline:
         
         console.print("[yellow]🔍 段階6: 異常値検出を実行中...[/yellow]")
         
-        # 異常値検出
+        # 設定から閾値を取得（aggregation用の設定があればそれを使用）
+        if "anomaly_detection" in self.demo_config and "aggregation" in self.demo_config["anomaly_detection"]:
+            thresholds = self.demo_config["anomaly_detection"]["aggregation"]
+        elif "anomaly_detection" in self.demo_config:
+            thresholds = self.demo_config["anomaly_detection"]
+        else:
+            # デフォルト値
+            thresholds = {
+                "price_change_threshold": 2.0,
+                "spread_ratio_threshold": 0.5,
+                "volume_multiplier": 5.0,
+                "volatility_threshold": 3.0,
+                "volume_ma_window": 10
+            }
+        
+        # 閾値を取得
+        price_threshold = thresholds.get("price_change_threshold", 2.0)
+        spread_threshold = thresholds.get("spread_ratio_threshold", 0.5)
+        volume_mult = thresholds.get("volume_multiplier", 5.0)
+        volatility_thresh = thresholds.get("volatility_threshold", 3.0)
+        ma_window = thresholds.get("volume_ma_window", 10)
+        
+        console.print(f"[dim]異常検出閾値: 価格変化 {price_threshold}%, スプレッド {spread_threshold}%, ボリューム x{volume_mult}, ボラティリティ {volatility_thresh}%[/dim]")
+        
+        # 変化率ベースの異常値検出
         df_with_anomalies = df.with_columns([
-            # Z-score based anomaly detection
-            ((pl.col("close") - pl.col("close").mean()) / pl.col("close").std()).abs().alias("close_zscore"),
-            ((pl.col("volume") - pl.col("volume").mean()) / pl.col("volume").std()).abs().alias("volume_zscore"),
-            ((pl.col("avg_spread") - pl.col("avg_spread").mean()) / pl.col("avg_spread").std()).abs().alias("spread_zscore"),
-        ]).with_columns([
-            # 異常値フラグ
-            (pl.col("close_zscore") > 3).alias("price_anomaly"),
-            (pl.col("volume_zscore") > 3).alias("volume_anomaly"),
-            (pl.col("spread_zscore") > 3).alias("spread_anomaly"),
+            # 価格変化率（前期比）
+            ((pl.col("close") - pl.col("close").shift(1)) / pl.col("close").shift(1) * 100)
+            .abs()
+            .fill_null(0)
+            .alias("price_change_pct"),
             
-            # IQR based anomaly detection for volatility
-            (pl.col("volatility_10") > pl.col("volatility_10").quantile(0.75) + 1.5 * 
-             (pl.col("volatility_10").quantile(0.75) - pl.col("volatility_10").quantile(0.25))).alias("volatility_anomaly"),
+            # スプレッドの価格に対する比率
+            (pl.col("avg_spread") / pl.col("close") * 100)
+            .alias("spread_ratio_pct"),
+            
+            # ボリュームの移動平均
+            pl.col("volume").rolling_mean(window_size=ma_window).alias("volume_ma"),
         ]).with_columns([
-            # 複合異常値
-            (pl.col("price_anomaly") | pl.col("volume_anomaly") | 
-             pl.col("spread_anomaly") | pl.col("volatility_anomaly")).alias("any_anomaly")
+            # 価格異常: 設定された閾値以上の急変動
+            (pl.col("price_change_pct") > price_threshold).alias("price_anomaly"),
+            
+            # スプレッド異常: 価格の設定された割合以上
+            (pl.col("spread_ratio_pct") > spread_threshold).alias("spread_anomaly"),
+            
+            # ボリューム異常: 移動平均の設定倍数以上（移動平均が0より大きい場合のみ）
+            pl.when(pl.col("volume_ma") > 0)
+            .then(pl.col("volume") > pl.col("volume_ma") * volume_mult)
+            .otherwise(False)
+            .alias("volume_anomaly"),
+            
+            # ボラティリティ異常: 設定された閾値以上
+            (pl.col("volatility_10") > volatility_thresh).alias("volatility_anomaly"),
+        ]).with_columns([
+            # 複合異常値（いずれかの異常が発生）
+            (pl.col("price_anomaly") | pl.col("spread_anomaly") | 
+             pl.col("volume_anomaly") | pl.col("volatility_anomaly")).alias("any_anomaly")
         ])
         
         # 異常値サマリー
@@ -518,6 +556,13 @@ class DataAggregationPipeline:
             (pl.col("any_anomaly").sum() / pl.len() * 100).alias("anomaly_rate_percent")
         ])
         
+        # デバッグ情報を出力（変化率ベースの統計）
+        if df_with_anomalies.height > 0:
+            avg_price_change = df_with_anomalies.select(pl.col("price_change_pct").mean()).item()
+            avg_spread_ratio = df_with_anomalies.select(pl.col("spread_ratio_pct").mean()).item()
+            max_price_change = df_with_anomalies.select(pl.col("price_change_pct").max()).item()
+            console.print(f"[dim]価格変化: 平均 {avg_price_change:.2f}%, 最大 {max_price_change:.2f}%, スプレッド比率: 平均 {avg_spread_ratio:.3f}%[/dim]")
+        
         self.processed_data["anomalies"] = df_with_anomalies
         self.processed_data["anomaly_summary"] = anomaly_summary
         
@@ -527,7 +572,8 @@ class DataAggregationPipeline:
         stage.completed = True
         
         total_anomalies = anomaly_summary.select("total_anomalies").item()
-        console.print(f"[green]✅ 異常値検出完了: {total_anomalies}件の異常値を検出[/green]")
+        anomaly_rate = anomaly_summary.select("anomaly_rate_percent").item()
+        console.print(f"[green]✅ 異常値検出完了: {total_anomalies}件の異常値を検出 (異常率: {anomaly_rate:.1f}%)[/green]")
     
     def stage_7_final_aggregation(self) -> None:
         """段階7: 最終集約・出力"""

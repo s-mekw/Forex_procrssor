@@ -13,7 +13,7 @@ enable_rich_display = true     # Richライブラリによるリッチ表示
 showcase = "BTCUSD#"           # 01_polars_mt5_data_showcase.py用
 realtime = "BTCUSD#"            # 02_realtime_polars_processing.py用
 streaming = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]  # 03_large_dataset_streaming.py用
-aggregation = "EURUSD"         # 04_data_aggregation_pipeline.py用
+aggregation = "BTCUSD#"         # 04_data_aggregation_pipeline.py用
 
 [tick_streamer]
 # TickDataStreamerのデフォルト設定
@@ -43,7 +43,7 @@ backpressure_threshold = 0.85
 
 [tick_streamer.aggregation]
 # 04_data_aggregation_pipeline.py用の設定（オーバーライド）
-buffer_size = 1000
+buffer_size = 5000
 spike_threshold_percent = 0.5
 backpressure_threshold = 0.8
 
@@ -83,6 +83,21 @@ progress_bar = true
 show_memory_stats = true
 show_performance_metrics = true
 max_display_rows = 10
+
+[anomaly_detection]
+# 異常値検出の閾値設定（変化率ベース）
+price_change_threshold = 2.0      # 価格変化率の閾値（%）
+spread_ratio_threshold = 0.5      # スプレッド/価格の閾値（%）
+volume_multiplier = 5.0            # ボリューム異常の倍率（移動平均に対する倍率）
+volatility_threshold = 3.0         # ボラティリティの閾値（%）
+volume_ma_window = 10              # ボリューム移動平均の窓サイズ
+
+[anomaly_detection.aggregation]
+# 04_data_aggregation_pipeline.py用の設定（オーバーライド）
+price_change_threshold = 2.0      # BTCは変動が大きいので2%
+spread_ratio_threshold = 0.5      # スプレッドは0.5%まで許容
+volume_multiplier = 5.0            # ボリュームスパイクは5倍まで
+volatility_threshold = 3.0         # ボラティリティは3%まで
 
 [performance]
 # パフォーマンス設定
