@@ -36,6 +36,7 @@ from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
 from src.common.config import get_config, ConfigManager
+from demo_config import get_demo_config
 
 console = Console()
 
@@ -68,6 +69,8 @@ class DataAggregationPipeline:
         self.connection_manager = None
         self.tick_streamer = None
         self.polars_engine = None
+        # デモ設定を読み込み
+        self.demo_config = get_demo_config()
         
         # パイプライン段階
         self.pipeline_stages = [
@@ -110,21 +113,31 @@ class DataAggregationPipeline:
                 console.print("[red]❌ MT5への接続に失敗[/red]")
                 return False
                 
+            # デモ設定から通貨ペアとパラメータを取得
+            symbol = self.demo_config.get_symbol('aggregation')
+            tick_config = self.demo_config.get_tick_streamer_config('aggregation')
+            
             # ティックストリーマー設定
             self.tick_streamer = TickDataStreamer(
-                symbol="EURUSD",
-                buffer_size=2000,
-                spike_threshold_percent=0.2,
-                backpressure_threshold=0.7,
+                symbol=symbol,
+                buffer_size=tick_config.buffer_size,
+                spike_threshold_percent=tick_config.spike_threshold_percent,
+                backpressure_threshold=tick_config.backpressure_threshold,
                 mt5_client=self.connection_manager
             )
             
-            # Polarsエンジン
+            # Polarsエンジン（設定から取得）
+            polars_config = self.demo_config.get_polars_engine_config('aggregation')
             self.polars_engine = PolarsProcessingEngine(
-                chunk_size=200
+                chunk_size=polars_config.chunk_size
             )
             
+            # 集約ウィンドウを保存
+            self.aggregation_window = polars_config.aggregation_window
+            
             console.print("[green]✅ データ集約パイプライン初期化完了[/green]")
+            console.print(f"[cyan]📊 通貨ペア: {symbol}[/cyan]")
+            console.print(f"[cyan]⚙️ 集約ウィンドウ: {self.aggregation_window}秒[/cyan]")
             return True
             
         except Exception as e:

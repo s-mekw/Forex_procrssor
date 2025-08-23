@@ -1,0 +1,91 @@
+# Task7 Test Sandbox デモ設定ファイル
+# このファイルはtest_sandbox/task7_test_SANDBOX内のデモスクリプト専用の設定です
+
+[demo]
+# デモ全般設定
+default_symbol = "BTCUSD#"
+data_collection_duration = 30  # データ収集時間（秒）
+show_sample_data = true        # サンプルデータの表示
+enable_rich_display = true     # Richライブラリによるリッチ表示
+
+[symbols]
+# 各デモファイルで使用する通貨ペア設定
+showcase = "BTCUSD#"           # 01_polars_mt5_data_showcase.py用
+realtime = "EURUSD"            # 02_realtime_polars_processing.py用
+streaming = ["EURUSD", "GBPUSD", "USDJPY"]  # 03_large_dataset_streaming.py用
+aggregation = "EURUSD"         # 04_data_aggregation_pipeline.py用
+
+[tick_streamer]
+# TickDataStreamerのデフォルト設定
+buffer_size = 5000
+spike_threshold_percent = 0.5
+backpressure_threshold = 0.8
+max_retries = 3
+retry_delay = 1.0  # 秒
+
+[tick_streamer.showcase]
+# 01_polars_mt5_data_showcase.py用の設定（オーバーライド）
+buffer_size = 5000
+spike_threshold_percent = 0.5
+backpressure_threshold = 0.8
+
+[tick_streamer.realtime]
+# 02_realtime_polars_processing.py用の設定（オーバーライド）
+buffer_size = 500
+spike_threshold_percent = 0.3
+backpressure_threshold = 0.75
+
+[tick_streamer.streaming]
+# 03_large_dataset_streaming.py用の設定（オーバーライド）
+buffer_size = 2000
+spike_threshold_percent = 0.4
+backpressure_threshold = 0.85
+
+[tick_streamer.aggregation]
+# 04_data_aggregation_pipeline.py用の設定（オーバーライド）
+buffer_size = 1000
+spike_threshold_percent = 0.5
+backpressure_threshold = 0.8
+
+[polars_engine]
+# Polars処理エンジンのデフォルト設定
+chunk_size = 50
+memory_optimization = true
+enable_lazy_evaluation = true
+max_memory_gb = 8.0
+
+[polars_engine.showcase]
+# 01_polars_mt5_data_showcase.py用の設定
+chunk_size = 50
+
+[polars_engine.realtime]
+# 02_realtime_polars_processing.py用の設定
+chunk_size = 100
+adaptive_chunk_size = true
+min_chunk_size = 50
+max_chunk_size = 500
+
+[polars_engine.streaming]
+# 03_large_dataset_streaming.py用の設定
+chunk_size = 1000
+streaming_batch_size = 5000
+
+[polars_engine.aggregation]
+# 04_data_aggregation_pipeline.py用の設定
+chunk_size = 200
+aggregation_window = 60  # 秒
+
+[display]
+# 表示設定
+refresh_rate = 2.0  # 秒
+progress_bar = true
+show_memory_stats = true
+show_performance_metrics = true
+max_display_rows = 10
+
+[performance]
+# パフォーマンス設定
+max_workers = 4
+queue_size = 1000
+batch_timeout = 5.0  # 秒
+memory_check_interval = 10.0  # 秒

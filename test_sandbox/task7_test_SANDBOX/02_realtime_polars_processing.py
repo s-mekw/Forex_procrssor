@@ -99,9 +99,15 @@ class RealtimeProcessingDemo:
             )
             
             # Polarsエンジン（動的チャンクサイズ調整用）
+            polars_config = self.demo_config.get_polars_engine_config('realtime')
             self.polars_engine = PolarsProcessingEngine(
-                chunk_size=25      # 小さな初期チャンクサイズ
+                chunk_size=polars_config.chunk_size
             )
+            
+            # アダプティブチャンクサイズの設定を保存
+            self.adaptive_chunk_size = polars_config.adaptive_chunk_size
+            self.min_chunk_size = polars_config.min_chunk_size
+            self.max_chunk_size = polars_config.max_chunk_size
             
             console.print("[green]✅ リアルタイム処理システム初期化完了[/green]")
             return True

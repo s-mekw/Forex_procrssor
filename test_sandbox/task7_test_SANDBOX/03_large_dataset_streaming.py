@@ -36,6 +36,7 @@ from src.mt5_data_acquisition.ohlc_fetcher import OHLCFetcher
 from src.data_processing.processor import PolarsProcessingEngine, MemoryLimitError
 from src.common.models import OHLC
 from src.common.config import get_config, ConfigManager
+from demo_config import get_demo_config
 
 console = Console()
 
@@ -66,9 +67,11 @@ class LargeDatasetStreaming:
         self.ohlc_fetcher = None
         self.polars_engine = None
         self.stats = StreamingStats()
+        # デモ設定を読み込み
+        self.demo_config = get_demo_config()
         
-        # 処理設定
-        self.symbols = ["EURUSD", "GBPUSD", "USDJPY"]
+        # 処理設定（設定ファイルから取得）
+        self.symbols = self.demo_config.get_symbols_list('streaming')
         self.timeframe = "H1"  # 1時間足
         self.days_back = 30    # 30日分のデータ
         
@@ -101,12 +104,18 @@ class LargeDatasetStreaming:
                 
             self.ohlc_fetcher = OHLCFetcher(self.connection_manager)
             
-            # ストリーミング用Polarsエンジン
+            # ストリーミング用Polarsエンジン（設定から取得）
+            polars_config = self.demo_config.get_polars_engine_config('streaming')
             self.polars_engine = PolarsProcessingEngine(
-                chunk_size=100     # 初期チャンクサイズ
+                chunk_size=polars_config.chunk_size
             )
             
+            # ストリーミングバッチサイズを保存
+            self.streaming_batch_size = polars_config.streaming_batch_size
+            
             console.print("[green]✅ 大容量データ処理システム初期化完了[/green]")
+            console.print(f"[cyan]📊 通貨ペア: {', '.join(self.symbols)}[/cyan]")
+            console.print(f"[cyan]⚙️ ストリーミングバッチサイズ: {self.streaming_batch_size}[/cyan]")
             return True
             
         except Exception as e:

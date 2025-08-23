@@ -33,6 +33,7 @@ from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
 from src.common.config import get_config, ConfigManager
+from demo_config import get_demo_config
 
 console = Console()
 
@@ -45,6 +46,8 @@ class PolarsDataShowcase:
         self.tick_streamer = None
         self.polars_engine = None
         self.collected_ticks: List[Tick] = []
+        # デモ設定を読み込み
+        self.demo_config = get_demo_config()
         
     def setup_connections(self) -> bool:
         """MT5接続とPolarsエンジンを初期化"""
@@ -68,18 +71,26 @@ class PolarsDataShowcase:
                 console.print("[red]❌ MT5への接続に失敗しました[/red]")
                 return False
                 
+            # デモ設定から通貨ペアとパラメータを取得
+            symbol = self.demo_config.get_symbol('showcase')
+            tick_config = self.demo_config.get_tick_streamer_config('showcase')
+            
             # TickStreamerの設定
             self.tick_streamer = TickDataStreamer(
-                symbol="EURUSD",
-                buffer_size=1000,
-                spike_threshold_percent=0.5,
-                backpressure_threshold=0.8,
+                symbol=symbol,
+                buffer_size=tick_config.buffer_size,
+                spike_threshold_percent=tick_config.spike_threshold_percent,
+                backpressure_threshold=tick_config.backpressure_threshold,
                 mt5_client=self.connection_manager
             )
             
-            # Polarsエンジンの初期化
+            console.print(f"[cyan]📊 通貨ペア: {symbol}[/cyan]")
+            console.print(f"[cyan]⚙️ バッファサイズ: {tick_config.buffer_size}[/cyan]")
+            
+            # Polarsエンジンの初期化（設定から取得）
+            polars_config = self.demo_config.get_polars_engine_config('showcase')
             self.polars_engine = PolarsProcessingEngine(
-                chunk_size=50  # テスト用に小さく設定
+                chunk_size=polars_config.chunk_size
             )
             
             console.print("[green]✅ 接続とエンジン初期化完了[/green]")
@@ -167,7 +178,7 @@ class PolarsDataShowcase:
         mt5_status = "✅ 接続中" if self.connection_manager and self.connection_manager.is_connected() else "❌ 未接続"
         connection_table.add_row("MT5接続", mt5_status)
         connection_table.add_row("収集ティック数", str(len(self.collected_ticks)))
-        connection_table.add_row("シンボル", "EURUSD")
+        connection_table.add_row("シンボル", self.demo_config.get_symbol('showcase'))
         
         layout["left"].update(Panel(connection_table, title="システム状態", box=box.ROUNDED))
         
@@ -204,8 +215,12 @@ class PolarsDataShowcase:
         
         return layout
     
-    async def collect_ticks_with_progress(self, duration_seconds: int = 30) -> None:
+    async def collect_ticks_with_progress(self, duration_seconds: Optional[int] = None) -> None:
         """プログレスバー付きでティックデータを収集"""
+        # 設定から収集時間を取得（引数で上書き可能）
+        if duration_seconds is None:
+            duration_seconds = self.demo_config.get_collection_duration()
+        
         console.print(f"[yellow]📊 {duration_seconds}秒間ティックデータを収集します...[/yellow]")
         
         # ティックストリーマーを開始
@@ -260,7 +275,7 @@ class PolarsDataShowcase:
                 await asyncio.sleep(2)  # 初期表示の時間
                 
                 # ティックデータ収集（バックグラウンド）
-                await self.collect_ticks_with_progress(30)
+                await self.collect_ticks_with_progress()  # 設定ファイルから時間を取得
                 
                 # データフレーム作成と最適化
                 console.print("[yellow]🔄 Polarsデータフレーム作成中...[/yellow]")
