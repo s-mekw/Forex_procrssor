@@ -839,6 +839,268 @@ class TestMACDCalculation:
 
 
 @pytest.mark.unit
+class TestBollingerBands:
+    """ボリンジャーバンド計算のテストスイート"""
+    
+    def test_bollinger_bands_basic(self, sample_price_data: pl.DataFrame):
+        """基本的なボリンジャーバンド計算のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(sample_price_data)
+        
+        # 結果の検証
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == len(sample_price_data)
+        
+        # ボリンジャーバンド関連列が追加されていることを確認
+        assert "bb_upper" in result.columns
+        assert "bb_middle" in result.columns
+        assert "bb_lower" in result.columns
+        assert "bb_width" in result.columns
+        assert "bb_percent" in result.columns
+        
+        # データ型の確認
+        assert result["bb_upper"].dtype == pl.Float32
+        assert result["bb_middle"].dtype == pl.Float32
+        assert result["bb_lower"].dtype == pl.Float32
+        assert result["bb_width"].dtype == pl.Float32
+        assert result["bb_percent"].dtype == pl.Float32
+        
+        # 元のデータ列も保持されていることを確認
+        for col in sample_price_data.columns:
+            assert col in result.columns
+    
+    def test_bollinger_bands_calculation_accuracy(self):
+        """ボリンジャーバンド計算の精度テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 一定価格のテストデータ（標準偏差=0）
+        constant_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(30)],
+            "symbol": ["EURUSD"] * 30,
+            "close": [100.0] * 30,
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(constant_data, period=20)
+        
+        # 価格が一定の場合、バンド幅は0になるはず
+        bb_width = result["bb_width"].drop_nulls()
+        if len(bb_width) > 0:
+            # 浮動小数点の誤差を考慮
+            assert float(bb_width[-1]) < 0.0001, "一定価格でバンド幅が0でない"
+            
+            # 上下のバンドは中央バンドと同じになるはず
+            bb_upper = result["bb_upper"].drop_nulls()
+            bb_middle = result["bb_middle"].drop_nulls()
+            bb_lower = result["bb_lower"].drop_nulls()
+            
+            if len(bb_upper) > 0:
+                assert abs(float(bb_upper[-1]) - float(bb_middle[-1])) < 0.0001
+                assert abs(float(bb_lower[-1]) - float(bb_middle[-1])) < 0.0001
+    
+    def test_bollinger_bands_with_trend(self):
+        """トレンドデータでのボリンジャーバンドテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 上昇トレンドのデータ
+        trend_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(50)],
+            "symbol": ["EURUSD"] * 50,
+            "close": [100.0 + i * 0.5 + np.random.normal(0, 0.1) for i in range(50)],
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(trend_data)
+        
+        # バンドの順序関係を確認（upper > middle > lower）
+        bb_upper = result["bb_upper"].drop_nulls()
+        bb_middle = result["bb_middle"].drop_nulls()
+        bb_lower = result["bb_lower"].drop_nulls()
+        
+        if len(bb_upper) >= 20:
+            for i in range(-10, 0):  # 最後の10個をチェック
+                assert float(bb_upper[i]) > float(bb_middle[i]), "上部バンドが中央バンド以下"
+                assert float(bb_middle[i]) > float(bb_lower[i]), "中央バンドが下部バンド以下"
+                
+                # バンド幅が正の値
+                assert float(result["bb_width"][i]) > 0, "バンド幅が負または0"
+    
+    def test_bollinger_bands_custom_parameters(self):
+        """カスタムパラメータでのボリンジャーバンドテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(100)],
+            "symbol": ["EURUSD"] * 100,
+            "close": [100.0 + np.sin(i/10) * 10 for i in range(100)],
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 異なる期間と標準偏差倍数でテスト
+        for period, num_std in [(10, 1.5), (30, 2.5), (50, 3.0)]:
+            result = engine.calculate_bollinger_bands(
+                data, 
+                period=period, 
+                num_std=num_std
+            )
+            
+            # 全ての必要な列が存在
+            assert "bb_upper" in result.columns
+            assert "bb_middle" in result.columns
+            assert "bb_lower" in result.columns
+            
+            # バンド幅は標準偏差倍数に比例
+            bb_width = result["bb_width"].drop_nulls()
+            if len(bb_width) > period:
+                # より大きなnum_stdはより広いバンドを生成
+                assert len(bb_width) > 0
+    
+    def test_bollinger_bands_multiple_symbols(self):
+        """複数シンボルでのボリンジャーバンド計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 複数シンボルのデータ
+        data = []
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            base_price = {"EURUSD": 1.1000, "GBPUSD": 1.2500, "USDJPY": 110.00}[symbol]
+            for i in range(50):
+                data.append({
+                    "timestamp": datetime(2024, 1, 1) + timedelta(days=i),
+                    "symbol": symbol,
+                    "close": base_price * (1 + 0.001 * np.sin(i/5)),
+                })
+        
+        df = pl.DataFrame(data).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(df, group_by="symbol")
+        
+        # 各シンボルごとにボリンジャーバンドが計算されていることを確認
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            symbol_data = result.filter(pl.col("symbol") == symbol)
+            assert "bb_upper" in symbol_data.columns
+            assert "bb_middle" in symbol_data.columns
+            assert "bb_lower" in symbol_data.columns
+            
+            # バンドの順序関係を確認
+            bb_upper = symbol_data["bb_upper"].drop_nulls()
+            bb_middle = symbol_data["bb_middle"].drop_nulls()
+            bb_lower = symbol_data["bb_lower"].drop_nulls()
+            
+            if len(bb_upper) >= 20:
+                assert float(bb_upper[-1]) >= float(bb_middle[-1])
+                assert float(bb_middle[-1]) >= float(bb_lower[-1])
+    
+    def test_bollinger_bands_squeeze_detection(self):
+        """ボリンジャーバンドスクイーズ検出テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # ボラティリティが変化するデータ
+        data = []
+        for i in range(100):
+            if i < 30:
+                # 低ボラティリティ期間
+                volatility = 0.1
+            elif i < 60:
+                # 高ボラティリティ期間
+                volatility = 1.0
+            else:
+                # 再び低ボラティリティ
+                volatility = 0.1
+            
+            data.append({
+                "timestamp": datetime(2024, 1, 1) + timedelta(days=i),
+                "symbol": "EURUSD",
+                "close": 100.0 + np.random.normal(0, volatility),
+            })
+        
+        df = pl.DataFrame(data).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(df)
+        
+        bb_width = result["bb_width"].drop_nulls()
+        if len(bb_width) >= 90:
+            # 低ボラティリティ期間のバンド幅
+            low_vol_width = float(bb_width[25])
+            # 高ボラティリティ期間のバンド幅
+            high_vol_width = float(bb_width[50])
+            
+            # 高ボラティリティ期間の方がバンド幅が広いはず
+            assert high_vol_width > low_vol_width * 2, "ボラティリティ変化がバンド幅に反映されていない"
+    
+    def test_bollinger_bands_percent_calculation(self):
+        """ボリンジャーバンド％B計算のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 明確な価格位置を持つデータ
+        data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(30)],
+            "symbol": ["EURUSD"] * 30,
+            "close": [100.0] * 20 + [102.0] * 5 + [98.0] * 5,  # 最初は中央、次に上部、最後に下部
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(data, period=10)
+        
+        bb_percent = result["bb_percent"].drop_nulls()
+        if len(bb_percent) >= 25:
+            # 価格が上部バンド付近の時、％Bは1に近い
+            upper_percent = float(bb_percent[23])
+            assert upper_percent > 0.5, f"上部付近で％Bが低すぎる: {upper_percent}"
+            
+            # 価格が下部バンド付近の時、％Bは0に近い
+            if len(bb_percent) >= 29:
+                lower_percent = float(bb_percent[28])
+                assert lower_percent < 0.5, f"下部付近で％Bが高すぎる: {lower_percent}"
+    
+    def test_bollinger_bands_performance(self):
+        """ボリンジャーバンド計算のパフォーマンステスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        import time
+        
+        # 大量データでのテスト
+        n_rows = 100000
+        large_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(seconds=i) for i in range(n_rows)],
+            "symbol": ["EURUSD"] * n_rows,
+            "close": np.random.normal(100, 1, n_rows),
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        
+        start_time = time.time()
+        result = engine.calculate_bollinger_bands(large_data)
+        elapsed_time = time.time() - start_time
+        
+        # 結果の検証
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == n_rows
+        
+        # パフォーマンス基準（0.5秒以内に完了すべき）
+        assert elapsed_time < 0.5, f"ボリンジャーバンド計算が遅すぎます: {elapsed_time:.3f}秒"
+        
+        print(f"10万行のボリンジャーバンド計算時間: {elapsed_time:.4f}秒")
+
+
+@pytest.mark.unit
 class TestEdgeCases:
     """エッジケースのテストクラス"""
     

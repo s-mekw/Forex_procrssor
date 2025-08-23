@@ -457,6 +457,132 @@ class TechnicalIndicatorEngine:
         )
         return result
 
+    def calculate_bollinger_bands(
+        self,
+        df: pl.DataFrame,
+        period: int = 20,
+        num_std: float = 2.0,
+        price_column: str = "close",
+        group_by: str | None = None,
+    ) -> pl.DataFrame:
+        """
+        ボリンジャーバンドを計算します。
+        
+        ボリンジャーバンドは価格のボラティリティを視覚化し、
+        サポート・レジスタンスレベルの特定に使用されます。
+        
+        計算式:
+        - Middle Band = SMA(period)
+        - Upper Band = Middle Band + (num_std × 標準偏差)
+        - Lower Band = Middle Band - (num_std × 標準偏差)
+        - Band Width = Upper Band - Lower Band
+        - %B = (Close - Lower Band) / (Upper Band - Lower Band)
+        
+        Args:
+            df: 価格データを含むDataFrame
+            period: 移動平均の期間（デフォルト: 20）
+            num_std: 標準偏差の倍数（デフォルト: 2.0）
+            price_column: 価格列名（デフォルト: "close"）
+            group_by: グループ化する列名（複数シンボル対応）
+        
+        Returns:
+            ボリンジャーバンド列が追加されたDataFrame
+            - bb_upper: 上部バンド
+            - bb_middle: 中央バンド（SMA）
+            - bb_lower: 下部バンド
+            - bb_width: バンド幅
+            - bb_percent: %B（バンド内での価格位置）
+        
+        Raises:
+            ValueError: 無効なパラメータが指定された場合
+        """
+        # パラメータの検証
+        if period <= 0:
+            raise ValueError(f"期間は正の値である必要があります: {period}")
+        if num_std <= 0:
+            raise ValueError(f"標準偏差倍数は正の値である必要があります: {num_std}")
+        if price_column not in df.columns:
+            raise ValueError(f"価格列が見つかりません: {price_column}")
+        
+        # Float32への変換
+        if df[price_column].dtype != pl.Float32:
+            df = df.with_columns(pl.col(price_column).cast(pl.Float32))
+        
+        # グループ化が必要な場合
+        if group_by and group_by in df.columns:
+            # グループごとに計算
+            result = df.with_columns([
+                # 中央バンド（SMA）
+                pl.col(price_column)
+                .rolling_mean(window_size=period)
+                .over(group_by)
+                .alias("bb_middle")
+                .cast(pl.Float32),
+                
+                # 標準偏差
+                pl.col(price_column)
+                .rolling_std(window_size=period)
+                .over(group_by)
+                .alias("bb_std")
+                .cast(pl.Float32),
+            ])
+        else:
+            # 全体で計算
+            result = df.with_columns([
+                # 中央バンド（SMA）
+                pl.col(price_column)
+                .rolling_mean(window_size=period)
+                .alias("bb_middle")
+                .cast(pl.Float32),
+                
+                # 標準偏差
+                pl.col(price_column)
+                .rolling_std(window_size=period)
+                .alias("bb_std")
+                .cast(pl.Float32),
+            ])
+        
+        # 上部バンドと下部バンドを計算
+        result = result.with_columns([
+            # 上部バンド
+            (pl.col("bb_middle") + (pl.col("bb_std") * num_std))
+            .alias("bb_upper")
+            .cast(pl.Float32),
+            
+            # 下部バンド
+            (pl.col("bb_middle") - (pl.col("bb_std") * num_std))
+            .alias("bb_lower")
+            .cast(pl.Float32),
+        ])
+        
+        # バンド幅と%Bを計算
+        result = result.with_columns([
+            # バンド幅
+            (pl.col("bb_upper") - pl.col("bb_lower"))
+            .alias("bb_width")
+            .cast(pl.Float32),
+            
+            # %B（バンド内での価格位置）
+            # 0 = 下部バンド、0.5 = 中央バンド、1 = 上部バンド
+            pl.when(pl.col("bb_upper") != pl.col("bb_lower"))
+            .then(
+                (pl.col(price_column) - pl.col("bb_lower")) / 
+                (pl.col("bb_upper") - pl.col("bb_lower"))
+            )
+            .otherwise(0.5)  # バンド幅が0の場合は中央
+            .alias("bb_percent")
+            .cast(pl.Float32),
+        ])
+        
+        # 一時列を削除
+        result = result.drop("bb_std")
+        
+        logger.debug(
+            f"Calculated Bollinger Bands with period={period}, "
+            f"num_std={num_std}, group_by={group_by}"
+        )
+        return result
+
     def calculate_multiple_indicators(
         self, df: pl.DataFrame, indicators: list[str] | None = None
     ) -> pl.DataFrame:
@@ -482,9 +608,8 @@ class TechnicalIndicatorEngine:
                 result = self.calculate_rsi(result)
             elif indicator.lower() == "macd":
                 result = self.calculate_macd(result)
-            # 将来的に他の指標を追加
-            # elif indicator.lower() == "bollinger":
-            #     result = self.calculate_bollinger_bands(result)
+            elif indicator.lower() == "bollinger":
+                result = self.calculate_bollinger_bands(result)
             else:
                 logger.warning(f"Unknown indicator: {indicator}")
 
