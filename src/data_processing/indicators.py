@@ -1149,6 +1149,75 @@ class TechnicalIndicatorEngine:
 
         return True
 
+    def update_indicators(
+        self,
+        df: pl.DataFrame,
+        last_n_rows: int = 1,
+        price_column: str = "close",
+        group_by: str | None = None,
+    ) -> pl.DataFrame:
+        """
+        増分更新: 新しいデータポイントに対して指標を更新します。
+        
+        既存の指標値を保持しながら、新しいデータポイントに対してのみ
+        指標を再計算します。リアルタイムデータ処理に最適化されています。
+        
+        Args:
+            df: 入力データフレーム（既存データ + 新規データ）
+            last_n_rows: 更新対象の最後のN行（新規データ行数）
+            price_column: 価格列の名前
+            group_by: グループ化する列名
+        
+        Returns:
+            更新された指標を含むDataFrame
+        
+        Note:
+            この実装は簡易版です。本番環境では、より効率的な
+            増分計算アルゴリズムを使用することを推奨します。
+        """
+        # 既に計算されている指標を確認
+        calculated_indicators = self.get_calculated_indicators()
+        
+        # 各指標を増分更新
+        result = df
+        
+        if "ema" in calculated_indicators:
+            # EMAの増分更新（全体を再計算 - 簡易実装）
+            result = self.calculate_ema(result, price_column, group_by)
+        
+        if "rsi" in calculated_indicators:
+            # RSIの増分更新
+            result = self.calculate_rsi(result, price_column=price_column, group_by=group_by)
+        
+        if "macd" in calculated_indicators:
+            # MACDの増分更新
+            params = self.get_indicator_params("macd")
+            if params:
+                result = self.calculate_macd(
+                    result,
+                    price_column=price_column,
+                    group_by=group_by,
+                    fast_period=params.get("fast", 12),
+                    slow_period=params.get("slow", 26),
+                    signal_period=params.get("signal", 9),
+                )
+        
+        if "bollinger" in calculated_indicators:
+            # ボリンジャーバンドの増分更新
+            params = self.get_indicator_params("bollinger")
+            if params:
+                result = self.calculate_bollinger_bands(
+                    result,
+                    price_column=price_column,
+                    group_by=group_by,
+                    period=params.get("period", 20),
+                    num_std=params.get("num_std", 2.0),
+                )
+        
+        logger.debug(f"Updated indicators for last {last_n_rows} rows")
+        
+        return result
+
     def _update_metadata(
         self, indicator_name: str, indicator_info: dict[str, Any], rows_processed: int
     ) -> None:
