@@ -36,6 +36,7 @@ from src.mt5_data_acquisition.tick_fetcher import TickDataStreamer
 from src.data_processing.processor import PolarsProcessingEngine
 from src.common.models import Tick
 from src.common.config import get_config, ConfigManager
+from demo_config import get_demo_config
 
 console = Console()
 
@@ -44,6 +45,7 @@ class RealtimeProcessingDemo:
     
     def __init__(self):
         self.console = Console()
+        self.demo_config = get_demo_config()
         self.connection_manager = None
         self.tick_streamer = None
         self.polars_engine = None
@@ -321,7 +323,7 @@ class RealtimeProcessingDemo:
         system_table.add_column("傾向", style="yellow")
         
         system_table.add_row("メモリ使用量", f"{system_metrics['memory_mb']:.2f}MB", 
-                           self._get_trend_indicator(self.stats['memory_usage_history']))
+                           self._get_trend_indicator(list(self.stats['memory_usage_history'])))
         system_table.add_row("CPU使用率", f"{system_metrics['cpu_percent']:.1f}%", "")
         system_table.add_row("バッファサイズ", str(system_metrics['tick_buffer_size']), "")
         
@@ -344,6 +346,10 @@ class RealtimeProcessingDemo:
         """値のリストから傾向インジケーターを取得"""
         if len(values) < 2:
             return "➡️"
+        
+        # dequeが渡された場合はlistに変換
+        if not isinstance(values, list):
+            values = list(values)
         
         recent_avg = sum(values[-3:]) / len(values[-3:]) if len(values) >= 3 else values[-1]
         older_avg = sum(values[:3]) / len(values[:3]) if len(values) >= 6 else values[0]

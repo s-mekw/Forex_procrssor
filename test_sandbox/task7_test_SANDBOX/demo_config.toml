@@ -11,7 +11,7 @@ enable_rich_display = true     # Richライブラリによるリッチ表示
 [symbols]
 # 各デモファイルで使用する通貨ペア設定
 showcase = "BTCUSD#"           # 01_polars_mt5_data_showcase.py用
-realtime = "EURUSD"            # 02_realtime_polars_processing.py用
+realtime = "BTCUSD#"            # 02_realtime_polars_processing.py用
 streaming = ["EURUSD", "GBPUSD", "USDJPY"]  # 03_large_dataset_streaming.py用
 aggregation = "EURUSD"         # 04_data_aggregation_pipeline.py用
 
