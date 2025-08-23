@@ -36,6 +36,7 @@ class PolarsEngineConfig(BaseModel):
     max_chunk_size: int = Field(default=500, gt=0)
     streaming_batch_size: int = Field(default=5000, gt=0)
     aggregation_window: int = Field(default=60, gt=0)
+    initial_batch_size: int = Field(default=20, gt=0, le=1000)
 
 
 class DisplayConfig(BaseModel):

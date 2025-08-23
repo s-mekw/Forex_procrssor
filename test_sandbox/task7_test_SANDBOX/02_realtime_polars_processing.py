@@ -91,12 +91,15 @@ class RealtimeProcessingDemo:
                 console.print("[red]❌ MT5への接続に失敗[/red]")
                 return False
                 
-            # TickStreamer設定
+            # TickStreamer設定（TOML設定から取得）
+            symbol = self.demo_config.get_symbol('realtime')
+            tick_config = self.demo_config.get_tick_streamer_config('realtime')
+            
             self.tick_streamer = TickDataStreamer(
-                symbol="EURUSD",
-                buffer_size=500,
-                spike_threshold_percent=0.3,
-                backpressure_threshold=0.75,
+                symbol=symbol,
+                buffer_size=tick_config.buffer_size,
+                spike_threshold_percent=tick_config.spike_threshold_percent,
+                backpressure_threshold=tick_config.backpressure_threshold,
                 mt5_client=self.connection_manager
             )
             
@@ -187,7 +190,9 @@ class RealtimeProcessingDemo:
     
     def processing_worker(self):
         """データ処理ワーカー（別スレッド）"""
-        batch_size = 20  # 初期バッチサイズ
+        # 初期バッチサイズをTOML設定から取得
+        polars_config = self.demo_config.get_polars_engine_config('realtime')
+        batch_size = polars_config.initial_batch_size
         
         while self.is_running:
             try:
@@ -462,7 +467,9 @@ class RealtimeProcessingDemo:
 async def main():
     """メイン実行関数"""
     demo = RealtimeProcessingDemo()
-    await demo.run_realtime_demo(duration_seconds=90)  # 90秒間実行
+    # デモ実行時間をTOML設定から取得
+    duration = demo.demo_config.get_collection_duration()
+    await demo.run_realtime_demo(duration_seconds=duration)
 
 if __name__ == "__main__":
     try:

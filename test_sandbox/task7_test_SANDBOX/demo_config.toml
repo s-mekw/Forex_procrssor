@@ -31,7 +31,7 @@ backpressure_threshold = 0.8
 
 [tick_streamer.realtime]
 # 02_realtime_polars_processing.py用の設定（オーバーライド）
-buffer_size = 500
+buffer_size = 5000
 spike_threshold_percent = 0.3
 backpressure_threshold = 0.75
 
@@ -64,6 +64,7 @@ chunk_size = 100
 adaptive_chunk_size = true
 min_chunk_size = 50
 max_chunk_size = 500
+initial_batch_size = 20
 
 [polars_engine.streaming]
 # 03_large_dataset_streaming.py用の設定
