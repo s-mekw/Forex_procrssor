@@ -32,7 +32,7 @@ from dataclasses import dataclass
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
-from src.mt5_data_acquisition.ohlc_fetcher import OHLCFetcher
+from src.mt5_data_acquisition.ohlc_fetcher import HistoricalDataFetcher
 from src.data_processing.processor import PolarsProcessingEngine, MemoryLimitError
 from src.common.models import OHLC
 from src.common.config import get_config, ConfigManager
@@ -102,7 +102,11 @@ class LargeDatasetStreaming:
                 console.print("[red]❌ MT5への接続に失敗[/red]")
                 return False
                 
-            self.ohlc_fetcher = OHLCFetcher(self.connection_manager)
+            self.ohlc_fetcher = HistoricalDataFetcher(self.connection_manager)
+            # HistoricalDataFetcherもMT5に接続
+            if not self.ohlc_fetcher.connect():
+                console.print("[red]❌ HistoricalDataFetcherの接続に失敗[/red]")
+                return False
             
             # ストリーミング用Polarsエンジン（設定から取得）
             polars_config = self.demo_config.get_polars_engine_config('streaming')
@@ -147,15 +151,34 @@ class LargeDatasetStreaming:
                 # シンボルごとにデータを取得
                 console.print(f"[cyan]取得中: {symbol} ({self.timeframe})[/cyan]")
                 
-                ohlc_data = await asyncio.to_thread(
-                    self.ohlc_fetcher.fetch_ohlc_range,
+                # LazyFrameを取得してDataFrameに変換
+                lazy_frame = await asyncio.to_thread(
+                    self.ohlc_fetcher.fetch_ohlc_data,
                     symbol=symbol,
                     timeframe=self.timeframe,
-                    start_time=start_date,
-                    end_time=end_date
+                    start_date=start_date,
+                    end_date=end_date
                 )
                 
-                if ohlc_data:
+                # LazyFrameをDataFrameに変換（実際のデータを取得）
+                ohlc_df = lazy_frame.collect()
+                
+                if not ohlc_df.is_empty():
+                    # DataFrameからOHLCオブジェクトのリストに変換
+                    ohlc_data = []
+                    for row in ohlc_df.iter_rows(named=True):
+                        ohlc = OHLC(
+                            timestamp=row['timestamp'],
+                            symbol=symbol,
+                            timeframe=self.timeframe,  # timeframeフィールドを追加
+                            open=row['open'],
+                            high=row['high'],
+                            low=row['low'],
+                            close=row['close'],
+                            volume=row['volume']
+                        )
+                        ohlc_data.append(ohlc)
+                    
                     # データを小さなチャンクに分割してストリーミング
                     chunk_size = 50  # チャンクサイズ
                     for i in range(0, len(ohlc_data), chunk_size):
@@ -480,6 +503,8 @@ class LargeDatasetStreaming:
             
         finally:
             # クリーンアップ
+            if self.ohlc_fetcher and self.ohlc_fetcher.is_connected():
+                self.ohlc_fetcher.disconnect()
             if self.connection_manager and self.connection_manager.is_connected():
                 self.connection_manager.disconnect()
             

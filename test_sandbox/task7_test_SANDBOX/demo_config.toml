@@ -12,7 +12,7 @@ enable_rich_display = true     # Richライブラリによるリッチ表示
 # 各デモファイルで使用する通貨ペア設定
 showcase = "BTCUSD#"           # 01_polars_mt5_data_showcase.py用
 realtime = "BTCUSD#"            # 02_realtime_polars_processing.py用
-streaming = ["EURUSD", "GBPUSD", "USDJPY"]  # 03_large_dataset_streaming.py用
+streaming = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]  # 03_large_dataset_streaming.py用
 aggregation = "EURUSD"         # 04_data_aggregation_pipeline.py用
 
 [tick_streamer]
@@ -37,7 +37,7 @@ backpressure_threshold = 0.75
 
 [tick_streamer.streaming]
 # 03_large_dataset_streaming.py用の設定（オーバーライド）
-buffer_size = 2000
+buffer_size = 5000
 spike_threshold_percent = 0.4
 backpressure_threshold = 0.85
 
