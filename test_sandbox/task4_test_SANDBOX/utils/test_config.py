@@ -14,7 +14,7 @@ MT5_CONFIG = {
     "password": os.getenv("FOREX_MT5_PASSWORD", ""),
     "server": os.getenv("FOREX_MT5_SERVER", "Axiory-Demo"),
     "timeout": int(os.getenv("FOREX_MT5_TIMEOUT", "60000")),
-    "path": r"C:\Program Files\Axiory MetaTrader 5\terminal64.exe",  # MT5パス
+    "path": os.getenv("FOREX_MT5_PATH"),  # 環境変数からMT5パスを取得
 }
 
 # テスト用シンボル設定
@@ -73,7 +73,7 @@ def get_mt5_credentials() -> dict:
         "password": MT5_CONFIG["password"],
         "server": MT5_CONFIG["server"],
         "timeout": MT5_CONFIG["timeout"],
-        "path": MT5_CONFIG["path"],  # Axiory MT5のパスを追加
+        "path": MT5_CONFIG["path"],  # 環境変数からMT5パスを取得
     }
 
 def get_mt5_config() -> dict:
@@ -83,7 +83,7 @@ def get_mt5_config() -> dict:
         "password": MT5_CONFIG["password"],
         "server": MT5_CONFIG["server"],
         "timeout": MT5_CONFIG["timeout"],
-        "path": MT5_CONFIG["path"],  # Axiory MT5のパスを追加
+        "path": MT5_CONFIG["path"],  # 環境変数からMT5パスを取得
     }
 
 def get_test_symbol(category: str = "default") -> str:
