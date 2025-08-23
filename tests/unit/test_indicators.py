@@ -99,6 +99,55 @@ def incremental_data() -> tuple[pl.DataFrame, pl.DataFrame]:
     return existing, new
 
 
+@pytest.fixture
+def sample_multi_symbol_data() -> pl.DataFrame:
+    """複数シンボルのテスト用データ"""
+    np.random.seed(42)
+    n_rows = 300  # 各シンボル100行
+    base_time = datetime(2024, 1, 1, 0, 0, 0)
+    
+    data = []
+    for symbol, base_price in [("EURUSD", 1.1000), ("GBPUSD", 1.2500), ("USDJPY", 110.00)]:
+        returns = np.random.normal(0, 0.0001, n_rows // 3)
+        prices = base_price * np.exp(np.cumsum(returns))
+        
+        for i, price in enumerate(prices):
+            data.append({
+                "timestamp": base_time + timedelta(minutes=i),
+                "symbol": symbol,
+                "close": price,
+                "volume": np.random.uniform(1000, 10000),
+            })
+    
+    return pl.DataFrame(data).with_columns([
+        pl.col("close").cast(pl.Float32),
+        pl.col("volume").cast(pl.Float32),
+    ])
+
+
+@pytest.fixture
+def large_price_data() -> pl.DataFrame:
+    """大規模データセット（パフォーマンステスト用）"""
+    np.random.seed(42)
+    n_rows = 100000  # 10万行
+    base_time = datetime(2024, 1, 1, 0, 0, 0)
+    
+    # リアリスティックな価格変動を生成
+    base_price = 1.1000
+    returns = np.random.normal(0, 0.0001, n_rows)
+    prices = base_price * np.exp(np.cumsum(returns))
+    
+    return pl.DataFrame({
+        "timestamp": [base_time + timedelta(minutes=i) for i in range(n_rows)],
+        "symbol": ["EURUSD"] * n_rows,
+        "close": prices,
+        "volume": np.random.uniform(1000, 10000, n_rows),
+    }).with_columns([
+        pl.col("close").cast(pl.Float32),
+        pl.col("volume").cast(pl.Float32),
+    ])
+
+
 class TestTechnicalIndicatorEngine:
     """TechnicalIndicatorEngineクラスのテストスイート"""
     
@@ -613,12 +662,12 @@ class TestMACDCalculation:
         
         # MACD関連列が追加されていることを確認
         assert "macd_line" in result.columns
-        assert "signal_line" in result.columns
+        assert "macd_signal" in result.columns
         assert "macd_histogram" in result.columns
         
         # データ型の確認
         assert result["macd_line"].dtype == pl.Float32
-        assert result["signal_line"].dtype == pl.Float32
+        assert result["macd_signal"].dtype == pl.Float32
         assert result["macd_histogram"].dtype == pl.Float32
         
         # 元のデータ列も保持されていることを確認
@@ -646,7 +695,7 @@ class TestMACDCalculation:
         
         # MACD値が計算されていることを確認
         assert "macd_line" in result.columns
-        assert "signal_line" in result.columns
+        assert "macd_signal" in result.columns
         assert "macd_histogram" in result.columns
         
         # 上昇トレンドなので、MACDラインは正の値になるはず（後半で）
@@ -680,12 +729,12 @@ class TestMACDCalculation:
         
         # 列名が期間を反映していることを確認
         assert "macd_line" in result.columns
-        assert "signal_line" in result.columns
+        assert "macd_signal" in result.columns
         assert "macd_histogram" in result.columns
         
         # 値が計算されていることを確認
         macd_values = result["macd_line"].drop_nulls()
-        signal_values = result["signal_line"].drop_nulls()
+        signal_values = result["macd_signal"].drop_nulls()
         histogram_values = result["macd_histogram"].drop_nulls()
         
         assert len(macd_values) > 0
@@ -696,7 +745,7 @@ class TestMACDCalculation:
         if len(histogram_values) >= 10:
             # 最後の値で検証
             last_macd = float(result["macd_line"].drop_nulls()[-1])
-            last_signal = float(result["signal_line"].drop_nulls()[-1])
+            last_signal = float(result["macd_signal"].drop_nulls()[-1])
             last_histogram = float(result["macd_histogram"].drop_nulls()[-1])
             
             expected_histogram = last_macd - last_signal
@@ -730,7 +779,7 @@ class TestMACDCalculation:
         for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
             symbol_data = result.filter(pl.col("symbol") == symbol)
             assert "macd_line" in symbol_data.columns
-            assert "signal_line" in symbol_data.columns
+            assert "macd_signal" in symbol_data.columns
             assert "macd_histogram" in symbol_data.columns
             
             # 値が計算されていることを確認
@@ -759,7 +808,7 @@ class TestMACDCalculation:
         result = engine.calculate_macd(test_data)
         
         macd_values = result["macd_line"].drop_nulls()
-        signal_values = result["signal_line"].drop_nulls()
+        signal_values = result["macd_signal"].drop_nulls()
         
         if len(macd_values) >= 50:
             # 収束期間ではMACDとSignalが近い値になる
@@ -1383,3 +1432,295 @@ class TestMetadataManagement:
         from datetime import datetime
         last_update = datetime.fromisoformat(stats["last_update"])
         assert isinstance(last_update, datetime)
+
+
+class TestBatchProcessingOptimization:
+    """バッチ処理最適化のテストクラス"""
+    
+    def test_calculate_all_indicators_basic(self, sample_price_data):
+        """calculate_all_indicators基本動作のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 全指標を一括計算
+        result = engine.calculate_all_indicators(sample_price_data)
+        
+        # EMA列の確認
+        for period in [5, 20, 50, 100, 200]:
+            assert f"ema_{period}" in result.columns
+        
+        # RSI列の確認
+        assert "rsi_14" in result.columns
+        
+        # MACD列の確認
+        assert "macd_line" in result.columns
+        assert "macd_signal" in result.columns
+        assert "macd_histogram" in result.columns
+        
+        # ボリンジャーバンド列の確認
+        assert "bb_upper" in result.columns
+        assert "bb_middle" in result.columns
+        assert "bb_lower" in result.columns
+        assert "bb_width" in result.columns
+        assert "bb_percent" in result.columns
+        
+        # データサイズが変わっていないことを確認
+        assert len(result) == len(sample_price_data)
+    
+    def test_calculate_all_indicators_selective(self, sample_price_data):
+        """選択的な指標計算のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # EMAとRSIのみを計算
+        result = engine.calculate_all_indicators(
+            sample_price_data,
+            include_indicators=["ema", "rsi"]
+        )
+        
+        # EMA列の確認
+        for period in [5, 20, 50, 100, 200]:
+            assert f"ema_{period}" in result.columns
+        
+        # RSI列の確認
+        assert "rsi_14" in result.columns
+        
+        # MACD列が存在しないことを確認
+        assert "macd_line" not in result.columns
+        
+        # ボリンジャーバンド列が存在しないことを確認
+        assert "bb_upper" not in result.columns
+    
+    def test_calculate_all_indicators_custom_params(self, sample_price_data):
+        """カスタムパラメータでの計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # カスタムパラメータで計算
+        result = engine.calculate_all_indicators(
+            sample_price_data,
+            ema_periods=[10, 30],
+            rsi_period=21,
+            macd_params={"fast": 10, "slow": 20, "signal": 5},
+            bollinger_params={"period": 15, "num_std": 1.5}
+        )
+        
+        # カスタムEMA期間の確認
+        assert "ema_10" in result.columns
+        assert "ema_30" in result.columns
+        assert "ema_5" not in result.columns  # デフォルト期間は計算されない
+        
+        # カスタムRSI期間の確認
+        assert "rsi_21" in result.columns
+        assert "rsi_14" not in result.columns
+        
+        # 結果の値が適切な範囲にあることを確認
+        rsi_values = result["rsi_21"].drop_nulls()
+        assert (rsi_values >= 0).all()
+        assert (rsi_values <= 100).all()
+    
+    def test_batch_vs_individual_calculation(self, sample_price_data):
+        """バッチ計算と個別計算の結果一致テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        import time
+        
+        engine1 = TechnicalIndicatorEngine()
+        engine2 = TechnicalIndicatorEngine()
+        
+        # 個別計算
+        start_individual = time.time()
+        result_individual = sample_price_data.clone()
+        result_individual = engine1.calculate_ema(result_individual)
+        result_individual = engine1.calculate_rsi(result_individual)
+        result_individual = engine1.calculate_macd(result_individual)
+        result_individual = engine1.calculate_bollinger_bands(result_individual)
+        time_individual = time.time() - start_individual
+        
+        # バッチ計算
+        start_batch = time.time()
+        result_batch = engine2.calculate_all_indicators(sample_price_data)
+        time_batch = time.time() - start_batch
+        
+        # 結果の一致を確認（EMA）
+        for period in [5, 20, 50, 100, 200]:
+            col_name = f"ema_{period}"
+            individual_values = result_individual[col_name].drop_nulls()
+            batch_values = result_batch[col_name].drop_nulls()
+            assert np.allclose(individual_values, batch_values, rtol=1e-5)
+        
+        # 結果の一致を確認（RSI）
+        individual_rsi = result_individual["rsi_14"].drop_nulls()
+        batch_rsi = result_batch["rsi_14"].drop_nulls()
+        assert np.allclose(individual_rsi, batch_rsi, rtol=1e-5)
+        
+        # 結果の一致を確認（MACD）
+        for col in ["macd_line", "macd_signal", "macd_histogram"]:
+            individual_values = result_individual[col].drop_nulls()
+            batch_values = result_batch[col].drop_nulls()
+            assert np.allclose(individual_values, batch_values, rtol=1e-5)
+        
+        # 結果の一致を確認（ボリンジャーバンド）
+        for col in ["bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_percent"]:
+            individual_values = result_individual[col].drop_nulls()
+            batch_values = result_batch[col].drop_nulls()
+            assert np.allclose(individual_values, batch_values, rtol=1e-5)
+        
+        # バッチ計算の方が高速であることを期待（ただし必須ではない）
+        print(f"個別計算時間: {time_individual:.4f}秒")
+        print(f"バッチ計算時間: {time_batch:.4f}秒")
+    
+    def test_calculate_all_indicators_with_groups(self, sample_multi_symbol_data):
+        """複数シンボルでのバッチ計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # グループ別に全指標を計算
+        result = engine.calculate_all_indicators(
+            sample_multi_symbol_data,
+            group_by="symbol"
+        )
+        
+        # 各シンボルで指標が計算されていることを確認
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            symbol_data = result.filter(pl.col("symbol") == symbol)
+            
+            # EMA列の確認
+            for period in [5, 20, 50, 100, 200]:
+                col_name = f"ema_{period}"
+                assert col_name in symbol_data.columns
+                values = symbol_data[col_name].drop_nulls()
+                assert len(values) > 0
+            
+            # RSI列の確認
+            assert "rsi_14" in symbol_data.columns
+            rsi_values = symbol_data["rsi_14"].drop_nulls()
+            assert len(rsi_values) > 0
+            assert (rsi_values >= 0).all()
+            assert (rsi_values <= 100).all()
+    
+    def test_memory_optimization(self, large_price_data):
+        """メモリ最適化のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        import gc
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # メモリ使用量の測定前にガベージコレクション
+        gc.collect()
+        
+        # 大量データでバッチ計算
+        result = engine.calculate_all_indicators(large_price_data)
+        
+        # 一時列が削除されていることを確認
+        temp_columns = [col for col in result.columns if col.startswith("_")]
+        assert len(temp_columns) == 0, f"一時列が残っています: {temp_columns}"
+        
+        # Float32型が維持されていることを確認
+        numeric_columns = [
+            col for col in result.columns 
+            if col.startswith(("ema_", "rsi_", "macd_", "bb_"))
+        ]
+        for col in numeric_columns:
+            assert result[col].dtype == pl.Float32, f"{col}がFloat32型ではありません"
+    
+    def test_calculate_all_indicators_performance(self, large_price_data):
+        """バッチ計算のパフォーマンステスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        import time
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 100,000行のデータで全指標を計算
+        start_time = time.time()
+        result = engine.calculate_all_indicators(large_price_data)
+        elapsed_time = time.time() - start_time
+        
+        # 1秒以内に完了することを確認
+        assert elapsed_time < 1.0, f"計算時間が1秒を超えています: {elapsed_time:.4f}秒"
+        
+        # 全ての指標が計算されていることを確認
+        expected_columns = (
+            [f"ema_{p}" for p in [5, 20, 50, 100, 200]] +
+            ["rsi_14", "macd_line", "macd_signal", "macd_histogram"] +
+            ["bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_percent"]
+        )
+        for col in expected_columns:
+            assert col in result.columns
+        
+        print(f"100,000行の全指標計算時間: {elapsed_time:.4f}秒")
+    
+    def test_calculate_all_indicators_metadata(self, sample_price_data):
+        """バッチ計算時のメタデータ更新テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 全指標を計算
+        result = engine.calculate_all_indicators(sample_price_data)
+        
+        # メタデータが正しく更新されていることを確認
+        metadata = engine.get_metadata()
+        
+        # 各指標のメタデータを確認
+        assert "ema" in metadata["indicators"]
+        assert metadata["indicators"]["ema"]["calculated"] is True
+        assert metadata["indicators"]["ema"]["periods"] == [5, 20, 50, 100, 200]
+        
+        assert "rsi" in metadata["indicators"]
+        assert metadata["indicators"]["rsi"]["calculated"] is True
+        assert metadata["indicators"]["rsi"]["period"] == 14
+        
+        assert "macd" in metadata["indicators"]
+        assert metadata["indicators"]["macd"]["calculated"] is True
+        assert metadata["indicators"]["macd"]["params"]["fast"] == 12
+        assert metadata["indicators"]["macd"]["params"]["slow"] == 26
+        assert metadata["indicators"]["macd"]["params"]["signal"] == 9
+        
+        assert "bollinger" in metadata["indicators"]
+        assert metadata["indicators"]["bollinger"]["calculated"] is True
+        assert metadata["indicators"]["bollinger"]["params"]["period"] == 20
+        assert metadata["indicators"]["bollinger"]["params"]["num_std"] == 2.0
+        
+        # 処理統計情報を確認
+        stats = metadata["statistics"]
+        assert stats["total_rows_processed"] == len(sample_price_data) * 4  # 4指標分
+        assert stats["total_processing_time"] > 0
+        assert stats["last_update"] is not None
+    
+    def test_calculate_all_indicators_empty_data(self):
+        """空データでのバッチ計算エラーハンドリングテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 空のDataFrame
+        empty_df = pl.DataFrame({"close": []})
+        
+        # 例外が発生することを確認
+        with pytest.raises(ValueError, match="空のDataFrame"):
+            engine.calculate_all_indicators(empty_df)
+    
+    def test_calculate_all_indicators_missing_column(self, sample_price_data):
+        """必須列が欠けている場合のエラーハンドリングテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # close列を削除
+        df_no_close = sample_price_data.drop("close")
+        
+        # 例外が発生することを確認
+        with pytest.raises(ValueError, match="close列が必要です"):
+            engine.calculate_all_indicators(df_no_close)
+        
+        # カスタム価格列を指定した場合
+        df_with_high = sample_price_data.drop("close")
+        result = engine.calculate_all_indicators(df_with_high, price_column="high")
+        
+        # high列を使って計算されていることを確認
+        assert "ema_5" in result.columns
+        assert "rsi_14" in result.columns
