@@ -27,7 +27,8 @@
       "Bash(timeout 15 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
       "Bash(timeout 30 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
       "Bash(git commit:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(git log:*)"
     ],
     "additionalDirectories": [
       "C:\\c\\Users\\shota\\repos"

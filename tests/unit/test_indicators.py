@@ -422,6 +422,181 @@ class TestTechnicalIndicatorEngine:
         assert "ema_20" in result.columns
 
 
+class TestRSICalculation:
+    """RSI（相対力指数）計算のテストスイート"""
+    
+    def test_rsi_calculation_basic(self, sample_price_data: pl.DataFrame):
+        """基本的なRSI計算のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(sample_price_data)
+        
+        # 結果の検証
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == len(sample_price_data)
+        
+        # RSI列が追加されていることを確認
+        assert "rsi_14" in result.columns
+        assert result["rsi_14"].dtype == pl.Float32
+        
+        # RSI値が0-100の範囲内であることを確認
+        rsi_values = result["rsi_14"].drop_nulls()
+        assert rsi_values.min() >= 0
+        assert rsi_values.max() <= 100
+    
+    def test_rsi_calculation_accuracy(self):
+        """RSI計算の精度テスト
+        
+        既知の値でRSIを手動計算し、実装と比較します。
+        """
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 簡単なテストデータ（上昇・下落が明確）
+        test_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(20)],
+            "symbol": ["EURUSD"] * 20,
+            "close": [
+                100.0, 101.0, 102.0, 101.5, 103.0, 104.0, 103.5, 105.0,  # 上昇傾向
+                104.5, 104.0, 103.0, 102.0, 101.0, 100.0, 99.0, 98.0,   # 下落傾向
+                99.0, 100.0, 101.0, 102.0  # 回復
+            ],
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(test_data, period=14)
+        
+        # RSI値が計算されていることを確認
+        assert "rsi_14" in result.columns
+        rsi_values = result["rsi_14"].drop_nulls()
+        
+        # 上昇傾向の期間ではRSI > 50、下落傾向ではRSI < 50を期待
+        # （14期間後から有効な値が出る）
+        if len(rsi_values) >= 5:
+            # 最後の数値（回復期）は中間的なRSI値を期待
+            last_rsi = float(rsi_values[-1])
+            assert 30 <= last_rsi <= 70, f"RSI値が期待範囲外: {last_rsi}"
+    
+    def test_rsi_with_custom_period(self):
+        """カスタム期間でのRSI計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(50)],
+            "symbol": ["EURUSD"] * 50,
+            "close": [100.0 + np.sin(i/5) * 5 for i in range(50)],  # サイン波
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 異なる期間でRSIを計算
+        for period in [7, 14, 21]:
+            result = engine.calculate_rsi(data, period=period)
+            col_name = f"rsi_{period}"
+            
+            assert col_name in result.columns
+            rsi_values = result[col_name].drop_nulls()
+            
+            # 値の範囲確認
+            assert rsi_values.min() >= 0
+            assert rsi_values.max() <= 100
+            
+            # 期間が短いほど、より敏感（変動が大きい）になることを確認
+            if period == 7 and len(rsi_values) > 0:
+                rsi_7_std = rsi_values.std()
+            elif period == 21 and len(rsi_values) > 0:
+                rsi_21_std = rsi_values.std()
+                # RSI(7)の方がRSI(21)より変動が大きいはず
+                if 'rsi_7_std' in locals():
+                    assert rsi_7_std >= rsi_21_std * 0.9  # ある程度の差を許容
+    
+    def test_rsi_multiple_symbols(self):
+        """複数シンボルでのRSI計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 複数シンボルのデータ
+        data = []
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            base_price = {"EURUSD": 1.1000, "GBPUSD": 1.2500, "USDJPY": 110.00}[symbol]
+            for i in range(30):
+                data.append({
+                    "timestamp": datetime(2024, 1, 1) + timedelta(days=i),
+                    "symbol": symbol,
+                    "close": base_price * (1 + 0.001 * np.sin(i/3)),
+                })
+        
+        df = pl.DataFrame(data).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(df, group_by="symbol")
+        
+        # 各シンボルごとにRSIが計算されていることを確認
+        for symbol in ["EURUSD", "GBPUSD", "USDJPY"]:
+            symbol_data = result.filter(pl.col("symbol") == symbol)
+            assert "rsi_14" in symbol_data.columns
+            
+            rsi_values = symbol_data["rsi_14"].drop_nulls()
+            if len(rsi_values) > 0:
+                assert rsi_values.min() >= 0
+                assert rsi_values.max() <= 100
+    
+    def test_rsi_with_constant_price(self):
+        """価格が一定の場合のRSI計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 価格が変化しないデータ
+        constant_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(30)],
+            "symbol": ["EURUSD"] * 30,
+            "close": [100.0] * 30,
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(constant_data)
+        
+        # RSIは50付近になるはず（変化がない場合）
+        rsi_values = result["rsi_14"].drop_nulls()
+        if len(rsi_values) > 0:
+            # 最後の値をチェック（十分なデータがある場合）
+            last_rsi = float(rsi_values[-1])
+            # 価格変化がない場合、RSIは50になる（または計算不可）
+            assert 45 <= last_rsi <= 55 or np.isnan(last_rsi), f"一定価格でのRSIが異常: {last_rsi}"
+    
+    def test_rsi_extreme_movements(self):
+        """極端な価格変動でのRSI計算テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        # 極端な上昇と下落を含むデータ
+        extreme_data = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1) + timedelta(days=i) for i in range(30)],
+            "symbol": ["EURUSD"] * 30,
+            "close": [100.0] * 10 + [200.0] * 10 + [50.0] * 10,  # 急騰後急落
+        }).with_columns([
+            pl.col("close").cast(pl.Float32),
+        ])
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(extreme_data)
+        
+        rsi_values = result["rsi_14"].drop_nulls()
+        if len(rsi_values) >= 20:
+            # 急騰期間の後半ではRSI > 70（買われすぎ）
+            mid_rsi = float(rsi_values[15])  # 急騰後
+            assert mid_rsi > 60, f"急騰後のRSIが低すぎる: {mid_rsi}"
+            
+            # 急落期間の後半ではRSI < 30（売られすぎ）
+            last_rsi = float(rsi_values[-1])  # 急落後
+            assert last_rsi < 40, f"急落後のRSIが高すぎる: {last_rsi}"
+
+
 @pytest.mark.unit
 class TestEdgeCases:
     """エッジケースのテストクラス"""

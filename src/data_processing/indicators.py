@@ -177,6 +177,153 @@ class TechnicalIndicatorEngine:
         logger.info(f"Incrementally updated EMA for {len(new_data)} new rows")
         return combined
 
+    def calculate_rsi(
+        self,
+        df: pl.DataFrame,
+        period: int = 14,
+        price_column: str = "close",
+        group_by: str | None = None,
+    ) -> pl.DataFrame:
+        """
+        RSI（相対力指数）を計算します。
+        
+        RSIは0〜100の範囲で、価格の上昇・下落の勢いを測る指標です。
+        - RSI > 70: 買われすぎ
+        - RSI < 30: 売られすぎ
+        
+        計算式:
+        1. 価格変化 = 現在価格 - 前回価格
+        2. 上昇幅 = 価格変化 (価格変化 > 0の場合)、0 (それ以外)
+        3. 下落幅 = |価格変化| (価格変化 < 0の場合)、0 (それ以外)
+        4. 平均上昇幅 = 上昇幅のEMA(period)
+        5. 平均下落幅 = 下落幅のEMA(period)
+        6. RS = 平均上昇幅 / 平均下落幅
+        7. RSI = 100 - (100 / (1 + RS))
+        
+        Args:
+            df: 入力データフレーム
+            period: RSI計算期間（デフォルト: 14）
+            price_column: 価格列の名前（デフォルト: "close"）
+            group_by: グループ化する列名（複数シンボル対応）
+        
+        Returns:
+            RSI列が追加されたDataFrame
+        
+        Raises:
+            ValueError: 無効なデータが渡された場合
+        """
+        # データ検証
+        if df.is_empty():
+            raise ValueError("空のDataFrameが渡されました")
+        
+        if price_column not in df.columns:
+            raise ValueError(f"{price_column}列が必要です")
+        
+        if period <= 0:
+            raise ValueError("期間は正の整数である必要があります")
+        
+        # Float32への変換
+        if df[price_column].dtype != pl.Float32:
+            df = df.with_columns(pl.col(price_column).cast(pl.Float32))
+        
+        result = df
+        col_name = f"rsi_{period}"
+        
+        if group_by:
+            # グループごとにRSIを計算
+            # 価格変化を計算
+            result = result.with_columns(
+                pl.col(price_column)
+                .diff()
+                .over(group_by)
+                .alias("price_change")
+            )
+            
+            # 上昇幅と下落幅を分離
+            result = result.with_columns([
+                pl.when(pl.col("price_change") > 0)
+                .then(pl.col("price_change"))
+                .otherwise(0.0)
+                .alias("gain"),
+                
+                pl.when(pl.col("price_change") < 0)
+                .then(-pl.col("price_change"))  # 絶対値
+                .otherwise(0.0)
+                .alias("loss"),
+            ])
+            
+            # EMA（指数移動平均）で平均上昇幅と平均下落幅を計算
+            # alpha = 1 / period （RSIの標準的な計算方法）
+            alpha = 1.0 / period
+            
+            result = result.with_columns([
+                pl.col("gain")
+                .ewm_mean(alpha=alpha, adjust=False)
+                .over(group_by)
+                .alias("avg_gain"),
+                
+                pl.col("loss")
+                .ewm_mean(alpha=alpha, adjust=False)
+                .over(group_by)
+                .alias("avg_loss"),
+            ])
+        else:
+            # 全体でRSIを計算
+            # 価格変化を計算
+            result = result.with_columns(
+                pl.col(price_column).diff().alias("price_change")
+            )
+            
+            # 上昇幅と下落幅を分離
+            result = result.with_columns([
+                pl.when(pl.col("price_change") > 0)
+                .then(pl.col("price_change"))
+                .otherwise(0.0)
+                .alias("gain"),
+                
+                pl.when(pl.col("price_change") < 0)
+                .then(-pl.col("price_change"))  # 絶対値
+                .otherwise(0.0)
+                .alias("loss"),
+            ])
+            
+            # EMA（指数移動平均）で平均上昇幅と平均下落幅を計算
+            alpha = 1.0 / period
+            
+            result = result.with_columns([
+                pl.col("gain")
+                .ewm_mean(alpha=alpha, adjust=False)
+                .alias("avg_gain"),
+                
+                pl.col("loss")
+                .ewm_mean(alpha=alpha, adjust=False)
+                .alias("avg_loss"),
+            ])
+        
+        # RSIを計算
+        # RS = avg_gain / avg_loss
+        # RSI = 100 - (100 / (1 + RS))
+        # avg_lossが0の場合の処理も含める
+        result = result.with_columns(
+            pl.when((pl.col("avg_loss") == 0) & (pl.col("avg_gain") == 0))
+            .then(50.0)  # 価格変化がない場合はRSI=50（中立）
+            .when(pl.col("avg_loss") == 0)
+            .then(100.0)  # 下落がない場合はRSI=100
+            .when(pl.col("avg_gain") == 0)
+            .then(0.0)  # 上昇がない場合はRSI=0
+            .otherwise(
+                100.0 - (100.0 / (1.0 + (pl.col("avg_gain") / pl.col("avg_loss"))))
+            )
+            .cast(pl.Float32)
+            .alias(col_name)
+        )
+        
+        # 一時列を削除
+        result = result.drop(["price_change", "gain", "loss", "avg_gain", "avg_loss"])
+        
+        logger.debug(f"Calculated RSI with period {period}")
+        return result
+
     def calculate_multiple_indicators(
         self, df: pl.DataFrame, indicators: list[str] | None = None
     ) -> pl.DataFrame:
@@ -198,9 +345,9 @@ class TechnicalIndicatorEngine:
         for indicator in indicators:
             if indicator.lower() == "ema":
                 result = self.calculate_ema(result)
+            elif indicator.lower() == "rsi":
+                result = self.calculate_rsi(result)
             # 将来的に他の指標を追加
-            # elif indicator.lower() == "rsi":
-            #     result = self.calculate_rsi(result)
             # elif indicator.lower() == "macd":
             #     result = self.calculate_macd(result)
             else:
