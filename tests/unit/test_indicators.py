@@ -1150,3 +1150,236 @@ class TestEdgeCases:
         ema_values = result["ema_5"].drop_nulls()
         assert ema_values.max() < 10000.0  # 極端な値より小さい
         assert ema_values.min() > 0.0001   # 極端な値より大きい
+
+
+@pytest.mark.unit
+class TestMetadataManagement:
+    """メタデータ管理機能のテスト"""
+    
+    def test_metadata_initialization(self):
+        """メタデータの初期化テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        metadata = engine.get_metadata()
+        
+        # 初期状態の確認
+        assert "indicators" in metadata
+        assert "statistics" in metadata
+        assert len(metadata["indicators"]) == 0
+        assert metadata["statistics"]["total_rows_processed"] == 0
+        assert metadata["statistics"]["total_processing_time"] == 0.0
+        assert metadata["statistics"]["last_update"] is None
+    
+    def test_metadata_after_ema_calculation(self, sample_price_data):
+        """EMA計算後のメタデータ更新テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_ema(sample_price_data)
+        metadata = engine.get_metadata()
+        
+        # EMAメタデータの確認
+        assert "ema" in metadata["indicators"]
+        ema_info = metadata["indicators"]["ema"]
+        assert ema_info["calculated"] is True
+        assert ema_info["periods"] == [5, 20, 50, 100, 200]
+        assert "timestamp" in ema_info
+        
+        # 統計情報の確認
+        stats = metadata["statistics"]
+        assert stats["total_rows_processed"] == len(sample_price_data)
+        assert stats["last_update"] is not None
+    
+    def test_metadata_after_rsi_calculation(self, sample_price_data):
+        """RSI計算後のメタデータ更新テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_rsi(sample_price_data, period=14)
+        metadata = engine.get_metadata()
+        
+        # RSIメタデータの確認
+        assert "rsi" in metadata["indicators"]
+        rsi_info = metadata["indicators"]["rsi"]
+        assert rsi_info["calculated"] is True
+        assert rsi_info["period"] == 14
+        assert "timestamp" in rsi_info
+        
+        # 統計情報の確認
+        stats = metadata["statistics"]
+        assert stats["total_rows_processed"] == len(sample_price_data)
+    
+    def test_metadata_after_macd_calculation(self, sample_price_data):
+        """MACD計算後のメタデータ更新テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_macd(sample_price_data)
+        metadata = engine.get_metadata()
+        
+        # MACDメタデータの確認
+        assert "macd" in metadata["indicators"]
+        macd_info = metadata["indicators"]["macd"]
+        assert macd_info["calculated"] is True
+        assert macd_info["params"]["fast"] == 12
+        assert macd_info["params"]["slow"] == 26
+        assert macd_info["params"]["signal"] == 9
+        assert "timestamp" in macd_info
+    
+    def test_metadata_after_bollinger_calculation(self, sample_price_data):
+        """ボリンジャーバンド計算後のメタデータ更新テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        result = engine.calculate_bollinger_bands(sample_price_data)
+        metadata = engine.get_metadata()
+        
+        # ボリンジャーバンドメタデータの確認
+        assert "bollinger" in metadata["indicators"]
+        bb_info = metadata["indicators"]["bollinger"]
+        assert bb_info["calculated"] is True
+        assert bb_info["params"]["period"] == 20
+        assert bb_info["params"]["num_std"] == 2.0
+        assert "timestamp" in bb_info
+    
+    def test_metadata_accumulation(self, sample_price_data):
+        """複数指標計算時のメタデータ累積テスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 複数の指標を順番に計算
+        engine.calculate_ema(sample_price_data)
+        engine.calculate_rsi(sample_price_data)
+        engine.calculate_macd(sample_price_data)
+        engine.calculate_bollinger_bands(sample_price_data)
+        
+        metadata = engine.get_metadata()
+        
+        # 全ての指標が記録されている
+        assert len(metadata["indicators"]) == 4
+        assert "ema" in metadata["indicators"]
+        assert "rsi" in metadata["indicators"]
+        assert "macd" in metadata["indicators"]
+        assert "bollinger" in metadata["indicators"]
+        
+        # 統計情報が累積されている
+        stats = metadata["statistics"]
+        assert stats["total_rows_processed"] == len(sample_price_data) * 4
+    
+    def test_clear_metadata(self, sample_price_data):
+        """メタデータクリア機能のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 指標を計算してメタデータを生成
+        engine.calculate_ema(sample_price_data)
+        engine.calculate_rsi(sample_price_data)
+        
+        # メタデータが存在することを確認
+        metadata = engine.get_metadata()
+        assert len(metadata["indicators"]) == 2
+        assert metadata["statistics"]["total_rows_processed"] > 0
+        
+        # メタデータをクリア
+        engine.clear_metadata()
+        
+        # クリア後の確認
+        metadata = engine.get_metadata()
+        assert len(metadata["indicators"]) == 0
+        assert metadata["statistics"]["total_rows_processed"] == 0
+        assert metadata["statistics"]["total_processing_time"] == 0.0
+        assert metadata["statistics"]["last_update"] is None
+    
+    def test_get_calculated_indicators(self, sample_price_data):
+        """計算済み指標リスト取得のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 初期状態
+        assert engine.get_calculated_indicators() == []
+        
+        # EMA計算後
+        engine.calculate_ema(sample_price_data)
+        assert engine.get_calculated_indicators() == ["ema"]
+        
+        # RSI計算後
+        engine.calculate_rsi(sample_price_data)
+        assert set(engine.get_calculated_indicators()) == {"ema", "rsi"}
+    
+    def test_is_indicator_calculated(self, sample_price_data):
+        """指標計算済みチェック機能のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 初期状態
+        assert engine.is_indicator_calculated("ema") is False
+        assert engine.is_indicator_calculated("rsi") is False
+        
+        # EMA計算後
+        engine.calculate_ema(sample_price_data)
+        assert engine.is_indicator_calculated("ema") is True
+        assert engine.is_indicator_calculated("rsi") is False
+        
+        # RSI計算後
+        engine.calculate_rsi(sample_price_data)
+        assert engine.is_indicator_calculated("ema") is True
+        assert engine.is_indicator_calculated("rsi") is True
+    
+    def test_get_indicator_params(self, sample_price_data):
+        """指標パラメータ取得機能のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 計算前はNone
+        assert engine.get_indicator_params("ema") is None
+        
+        # EMA計算後
+        engine.calculate_ema(sample_price_data)
+        ema_params = engine.get_indicator_params("ema")
+        assert ema_params is not None
+        assert ema_params["periods"] == [5, 20, 50, 100, 200]
+        
+        # RSI計算後（カスタム期間）
+        engine.calculate_rsi(sample_price_data, period=21)
+        rsi_params = engine.get_indicator_params("rsi")
+        assert rsi_params is not None
+        assert rsi_params["period"] == 21
+        
+        # MACD計算後
+        engine.calculate_macd(sample_price_data, fast_period=10, slow_period=20, signal_period=5)
+        macd_params = engine.get_indicator_params("macd")
+        assert macd_params is not None
+        assert macd_params["fast"] == 10
+        assert macd_params["slow"] == 20
+        assert macd_params["signal"] == 5
+    
+    def test_get_processing_statistics(self, sample_price_data):
+        """処理統計情報取得のテスト"""
+        from src.data_processing.indicators import TechnicalIndicatorEngine
+        
+        engine = TechnicalIndicatorEngine()
+        
+        # 初期状態
+        stats = engine.get_processing_statistics()
+        assert stats["total_rows_processed"] == 0
+        assert stats["total_processing_time"] == 0.0
+        assert stats["last_update"] is None
+        
+        # 複数指標計算後
+        engine.calculate_ema(sample_price_data)
+        engine.calculate_rsi(sample_price_data)
+        
+        stats = engine.get_processing_statistics()
+        assert stats["total_rows_processed"] == len(sample_price_data) * 2
+        assert stats["last_update"] is not None
+        
+        # last_updateが更新されることを確認
+        from datetime import datetime
+        last_update = datetime.fromisoformat(stats["last_update"])
+        assert isinstance(last_update, datetime)

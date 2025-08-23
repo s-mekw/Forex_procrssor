@@ -8,6 +8,9 @@ Float32型での処理によりメモリ効率を最適化します。
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
+from typing import Any
 
 import polars as pl
 
@@ -39,6 +42,16 @@ class TechnicalIndicatorEngine:
             if not all(isinstance(p, int) and p > 0 for p in ema_periods):
                 raise ValueError("期間は正の整数である必要があります")
             self.ema_periods = ema_periods
+
+        # メタデータの初期化
+        self._metadata: dict[str, Any] = {
+            "indicators": {},
+            "statistics": {
+                "total_rows_processed": 0,
+                "total_processing_time": 0.0,
+                "last_update": None,
+            },
+        }
 
         logger.info(
             f"TechnicalIndicatorEngine initialized with periods: {self.ema_periods}"
@@ -97,6 +110,17 @@ class TechnicalIndicatorEngine:
                 )
 
             logger.debug(f"Calculated EMA with period {period}")
+
+        # メタデータの更新
+        self._update_metadata(
+            "ema",
+            {
+                "calculated": True,
+                "periods": self.ema_periods,
+                "timestamp": datetime.now().isoformat(),
+            },
+            len(df),
+        )
 
         return result
 
@@ -322,6 +346,18 @@ class TechnicalIndicatorEngine:
         result = result.drop(["price_change", "gain", "loss", "avg_gain", "avg_loss"])
         
         logger.debug(f"Calculated RSI with period {period}")
+        
+        # メタデータの更新
+        self._update_metadata(
+            "rsi",
+            {
+                "calculated": True,
+                "period": period,
+                "timestamp": datetime.now().isoformat(),
+            },
+            len(df),
+        )
+        
         return result
 
     def calculate_macd(
@@ -455,6 +491,22 @@ class TechnicalIndicatorEngine:
             f"Calculated MACD with periods: fast={fast_period}, "
             f"slow={slow_period}, signal={signal_period}"
         )
+        
+        # メタデータの更新
+        self._update_metadata(
+            "macd",
+            {
+                "calculated": True,
+                "params": {
+                    "fast": fast_period,
+                    "slow": slow_period,
+                    "signal": signal_period,
+                },
+                "timestamp": datetime.now().isoformat(),
+            },
+            len(df),
+        )
+        
         return result
 
     def calculate_bollinger_bands(
@@ -581,6 +633,21 @@ class TechnicalIndicatorEngine:
             f"Calculated Bollinger Bands with period={period}, "
             f"num_std={num_std}, group_by={group_by}"
         )
+        
+        # メタデータの更新
+        self._update_metadata(
+            "bollinger",
+            {
+                "calculated": True,
+                "params": {
+                    "period": period,
+                    "num_std": num_std,
+                },
+                "timestamp": datetime.now().isoformat(),
+            },
+            len(df),
+        )
+        
         return result
 
     def calculate_multiple_indicators(
@@ -653,3 +720,102 @@ class TechnicalIndicatorEngine:
                         )
 
         return True
+
+    def _update_metadata(
+        self, indicator_name: str, indicator_info: dict[str, Any], rows_processed: int
+    ) -> None:
+        """
+        メタデータを更新します（内部使用）。
+
+        Args:
+            indicator_name: 指標名
+            indicator_info: 指標情報
+            rows_processed: 処理した行数
+        """
+        # 処理時間の計測（簡易的な実装）
+        if not hasattr(self, "_last_process_time"):
+            self._last_process_time = 0.0
+
+        # 指標メタデータの更新
+        self._metadata["indicators"][indicator_name] = indicator_info
+
+        # 統計情報の更新
+        stats = self._metadata["statistics"]
+        stats["total_rows_processed"] += rows_processed
+        stats["total_processing_time"] += self._last_process_time
+        stats["last_update"] = datetime.now().isoformat()
+
+    def get_metadata(self) -> dict[str, Any]:
+        """
+        現在のメタデータを取得します。
+
+        Returns:
+            メタデータのディクショナリ
+            - indicators: 計算済み指標の情報
+            - statistics: 処理統計情報
+        """
+        return self._metadata.copy()
+
+    def clear_metadata(self) -> None:
+        """
+        メタデータをクリアします。
+        """
+        self._metadata = {
+            "indicators": {},
+            "statistics": {
+                "total_rows_processed": 0,
+                "total_processing_time": 0.0,
+                "last_update": None,
+            },
+        }
+        logger.info("Metadata cleared")
+
+    def get_calculated_indicators(self) -> list[str]:
+        """
+        計算済みの指標名のリストを取得します。
+
+        Returns:
+            計算済み指標名のリスト
+        """
+        return list(self._metadata["indicators"].keys())
+
+    def is_indicator_calculated(self, indicator_name: str) -> bool:
+        """
+        特定の指標が計算済みかどうかを確認します。
+
+        Args:
+            indicator_name: 確認する指標名
+
+        Returns:
+            計算済みの場合True
+        """
+        return indicator_name in self._metadata["indicators"]
+
+    def get_indicator_params(self, indicator_name: str) -> dict[str, Any] | None:
+        """
+        特定の指標で使用されたパラメータを取得します。
+
+        Args:
+            indicator_name: 指標名
+
+        Returns:
+            パラメータの辞書、または指標が計算されていない場合None
+        """
+        if indicator_name in self._metadata["indicators"]:
+            indicator_info = self._metadata["indicators"][indicator_name]
+            if "params" in indicator_info:
+                return indicator_info["params"]
+            elif "periods" in indicator_info:
+                return {"periods": indicator_info["periods"]}
+            elif "period" in indicator_info:
+                return {"period": indicator_info["period"]}
+        return None
+
+    def get_processing_statistics(self) -> dict[str, Any]:
+        """
+        処理統計情報を取得します。
+
+        Returns:
+            統計情報の辞書
+        """
+        return self._metadata["statistics"].copy()
