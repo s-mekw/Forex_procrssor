@@ -436,8 +436,18 @@ def serve_layout():
                             html.Span(id="tick-count", className="badge bg-info fs-5"),
                         ], width=2),
                         dbc.Col([
-                            dbc.Button("Start Real-time", id="start-button", color="success", className="me-2"),
-                            dbc.Button("Stop", id="stop-button", color="danger"),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Button("Start Real-time", id="start-button", color="success", className="me-2"),
+                                    dbc.Button("Stop", id="stop-button", color="danger"),
+                                ], width=8),
+                                dbc.Col([
+                                    html.Div([
+                                        html.Span("🟢 LIVE", id="status-indicator", 
+                                                className="badge bg-success fs-6 ms-2"),
+                                    ], className="d-flex align-items-center justify-content-center h-100")
+                                ], width=4),
+                            ])
                         ], width=3),
                     ])
                 ])
@@ -469,40 +479,56 @@ def serve_layout():
         n_intervals=0
     ),
     
-    # データストア
-    dcc.Store(id='realtime-status', data={'is_running': False})
+    # データストア（初期状態をリアルタイム実行中に設定）
+    dcc.Store(id='realtime-status', data={'is_running': True})
     
 ], fluid=True)
 
 # レイアウトを関数として設定（毎回新しいレイアウトを生成）
 app.layout = serve_layout
 
-# コールバック: スタートボタン
+# コールバック: スタートボタンとステータス表示
 @app.callback(
-    Output('realtime-status', 'data'),
+    [Output('realtime-status', 'data'),
+     Output('status-indicator', 'children'),
+     Output('status-indicator', 'className')],
     [Input('start-button', 'n_clicks'),
-     Input('stop-button', 'n_clicks')],
+     Input('stop-button', 'n_clicks'),
+     Input('realtime-status', 'data')],
     [State('realtime-status', 'data')],
-    prevent_initial_call=True
+    prevent_initial_call=False
 )
-def toggle_realtime(start_clicks, stop_clicks, status):
-    """リアルタイム更新の開始/停止"""
+def toggle_realtime(start_clicks, stop_clicks, status_input, status_state):
+    """リアルタイム更新の開始/停止とステータス表示更新"""
     global chart_manager
+    
+    # 現在のステータスを取得
+    current_status = status_state if status_state else {'is_running': True}
     
     ctx = callback_context
     if not ctx.triggered:
-        return status
+        # 初期表示（リアルタイム実行中）
+        is_running = current_status.get('is_running', True)
+        if is_running:
+            return current_status, "🟢 LIVE", "badge bg-success fs-6 ms-2"
+        else:
+            return current_status, "🔴 STOPPED", "badge bg-danger fs-6 ms-2"
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'start-button' and chart_manager:
         chart_manager.start_realtime()
-        return {'is_running': True}
+        return {'is_running': True}, "🟢 LIVE", "badge bg-success fs-6 ms-2"
     elif button_id == 'stop-button' and chart_manager:
         chart_manager.stop_realtime()
-        return {'is_running': False}
+        return {'is_running': False}, "🔴 STOPPED", "badge bg-danger fs-6 ms-2"
     
-    return status
+    # フォールバック
+    is_running = current_status.get('is_running', True)
+    if is_running:
+        return current_status, "🟢 LIVE", "badge bg-success fs-6 ms-2"
+    else:
+        return current_status, "🔴 STOPPED", "badge bg-danger fs-6 ms-2"
 
 # コールバック: チャート更新
 @app.callback(
@@ -597,6 +623,11 @@ def main():
     print(f"Symbol: {config.chart.symbol}")
     print(f"Timeframe: {config.chart.timeframe}")
     print(f"EMA periods: {config.chart.ema_periods}")
+    
+    # リアルタイム更新を自動開始
+    print("\n🚀 Starting real-time data feed automatically...")
+    chart_manager.start_realtime()
+    print("✅ Real-time data feed started")
     
     # Dash設定を取得
     dash_config = getattr(config, 'dash', None)
