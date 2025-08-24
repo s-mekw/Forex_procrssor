@@ -1,113 +1,144 @@
-# Task 8 Test Configuration File
-# This file contains all configuration settings for Task 8 E2E tests
+# タスク8 テスト設定ファイル
+# このファイルはタスク8のE2Eテスト全体の設定を管理します
+# ========================================================================
 
 [general]
-# Test mode settings
-test_mode = "full"  # Options: "quick", "full", "performance"
-use_mock_data = false
-save_results = true
-verbose = true
+# 一般設定
+# 使用ファイル: すべてのテストファイルで共通使用
+# ----------------------------------------
+test_mode = "full"  # テストモード: "quick"(簡易), "full"(完全), "performance"(性能測定)
+use_mock_data = false  # モックデータ使用フラグ (true: ダミーデータ, false: 実データ)
+save_results = true  # テスト結果の保存フラグ
+verbose = true  # 詳細ログ出力フラグ
 
 [mt5]
-# MT5 Connection Settings
-# These are default/fallback values. Actual credentials should be set in .env file:
-# FOREX_MT5_LOGIN=your_login_id
-# FOREX_MT5_PASSWORD=your_password
-# FOREX_MT5_SERVER=your_server
-login = 12345678  # Placeholder - use .env for actual login
-password = "placeholder"  # Placeholder - use .env for actual password
-server = "Demo-Server"  # Placeholder - use .env for actual server
-timeout = 60000
-max_retries = 3
-retry_delay = 1.0
+# MT5接続設定
+# 使用ファイル: 01_basic_ema_calculation.py, 02_realtime_chart_display.py, 04_dash_realtime_chart.py
+# 注意: 実際の認証情報は.envファイルに設定してください：
+#   FOREX_MT5_LOGIN=あなたのログインID
+#   FOREX_MT5_PASSWORD=あなたのパスワード
+#   FOREX_MT5_SERVER=あなたのサーバー名
+# ----------------------------------------
+login = 12345678  # プレースホルダー - 実際のログインIDは.envに設定
+password = "placeholder"  # プレースホルダー - 実際のパスワードは.envに設定
+server = "Demo-Server"  # プレースホルダー - 実際のサーバー名は.envに設定
+timeout = 60000  # 接続タイムアウト時間（ミリ秒）
+max_retries = 3  # 最大リトライ回数
+retry_delay = 1.0  # リトライ間隔（秒）
 
 [chart]
-# Chart Display Settings
-symbol = "BTCUSD#"  # Use BTCUSD# for crypto, or EURUSD for forex
-timeframe = "M1"  # Options: M1, M5, M15, H1, H4, D1
-initial_bars = 500
-update_interval = 1.0  # seconds
-realtime_enabled = true
-max_tick_buffer = 1000
+# チャート表示設定
+# 使用ファイル: すべてのチャート表示ファイル（01〜04の全ファイル）
+# ----------------------------------------
+symbol = "BTCUSD#"  # 取引シンボル（暗号通貨: BTCUSD#, 外国為替: EURUSD など）
+timeframe = "M1"  # 時間枠（M1: 1分, M5: 5分, M15: 15分, H1: 1時間, H4: 4時間, D1: 日足）
+initial_bars = 100  # 初期表示バー数
+update_interval = 1.0  # 更新間隔（秒）
+realtime_enabled = true  # リアルタイム更新の有効化
+max_tick_buffer = 1000  # ティックバッファの最大サイズ
 
-# Chart dimensions
-chart_height = 800
-chart_width = 1200
-show_volume = true
-show_grid = true
+# チャートサイズ設定
+chart_height = 800  # チャートの高さ（ピクセル）
+chart_width = 1200  # チャートの幅（ピクセル）
+show_volume = true  # 出来高表示フラグ
+show_grid = true  # グリッド表示フラグ
 
 [ema]
-# EMA Indicator Settings
-periods = [20, 50, 200]
+# EMA（指数移動平均）インジケーター設定
+# 使用ファイル: 01_basic_ema_calculation.py, 02_realtime_chart_display.py, 04_dash_realtime_chart.py
+# ----------------------------------------
+periods = [20, 50, 200]  # EMA計算期間（短期: 20, 中期: 50, 長期: 200）
 
 [ema.colors]
-# EMA Line Colors (hex or named colors)
-20 = "blue"
-50 = "green"
-200 = "red"
+# EMAライン色設定（16進数またはカラー名）
+# 使用ファイル: 02_realtime_chart_display.py, 04_dash_realtime_chart.py
+# ----------------------------------------
+20 = "blue"  # 短期EMA（20期間）- 青
+50 = "green"  # 中期EMA（50期間）- 緑
+200 = "red"  # 長期EMA（200期間）- 赤
 
 [theme]
-# Chart Theme Settings
-background = "#1e1e1e"
-grid = "#333333"
-text = "#ffffff"
+# チャートテーマ設定
+# 使用ファイル: 02_realtime_chart_display.py, 04_dash_realtime_chart.py
+# ----------------------------------------
+background = "#1e1e1e"  # 背景色（ダークグレー）
+grid = "#333333"  # グリッド線色（グレー）
+text = "#ffffff"  # テキスト色（白）
 
 [theme.candlestick]
-bullish = "#26a69a"  # Green
-bearish = "#ef5350"  # Red
+# ローソク足の色設定
+bullish = "#26a69a"  # 陽線（上昇）- 緑
+bearish = "#ef5350"  # 陰線（下降）- 赤
 
 [theme.volume]
-bullish = "#26a69a80"  # Semi-transparent green
-bearish = "#ef535080"  # Semi-transparent red
+# 出来高バーの色設定
+bullish = "#26a69a80"  # 買い出来高 - 半透明緑
+bearish = "#ef535080"  # 売り出来高 - 半透明赤
 
 [performance]
-# Performance Settings
-use_float32 = true
-cache_size = 10000
-update_batch_size = 100
+# パフォーマンス設定
+# 使用ファイル: 現在未使用（将来の最適化実装用に予約）
+# ----------------------------------------
+use_float32 = true  # 32ビット浮動小数点使用フラグ（メモリ節約）
+cache_size = 10000  # キャッシュサイズ（バー数）
+update_batch_size = 100  # バッチ更新サイズ
 
 [alerts]
-# Alert Settings (for future implementation)
-enabled = false
-ema_crossover = true
-price_alerts = false
-pattern_detection = false
+# アラート設定
+# 使用ファイル: 現在未使用（将来の実装予定）
+# ----------------------------------------
+enabled = false  # アラート機能の有効化
+ema_crossover = true  # EMAクロスオーバーアラート
+price_alerts = false  # 価格アラート
+pattern_detection = false  # パターン検出アラート
 
 [symbols]
-# Available symbols for testing
-crypto = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]
-forex = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
-default = "BTCUSD#"
+# テスト用シンボルリスト
+# 使用ファイル: utils/test_config.py（シンボル検証用）
+# ----------------------------------------
+crypto = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]  # 暗号通貨シンボル
+forex = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]  # 外国為替シンボル
+default = "BTCUSD#"  # デフォルトシンボル
 
 [presets.quick]
-# Quick test configuration
+# クイックテスト用プリセット設定
+# 使用方法: test_mode = "quick" で自動適用
+# ----------------------------------------
 initial_bars = 100
 update_interval = 2.0
 realtime_enabled = false
 
 [presets.full]
-# Full test configuration
+# フルテスト用プリセット設定
+# 使用方法: test_mode = "full" で自動適用
+# ----------------------------------------
 initial_bars = 100
 update_interval = 1.0
 realtime_enabled = true
 
 [presets.performance]
-# Performance test configuration
+# パフォーマンステスト用プリセット設定
+# 使用方法: test_mode = "performance" で自動適用
+# ----------------------------------------
 initial_bars = 1000
 update_interval = 0.5
 ema_periods = [10, 20, 50, 100, 200]
 
 [dash]
-# Dash Web Server Settings
-host = "0.0.0.0"  # Listen on all interfaces
-port = 8050  # Default port for Dash applications
-debug = false  # Production mode (set true for development)
-auto_refresh_interval = 1000  # Chart refresh interval in milliseconds
+# Dashウェブサーバー設定
+# 使用ファイル: 04_dash_realtime_chart.py専用
+# ----------------------------------------
+host = "0.0.0.0"  # リッスンホスト（0.0.0.0: すべてのインターフェース）
+port = 8050  # ポート番号（Dashアプリケーションのデフォルト）
+debug = false  # デバッグモード（本番: false, 開発: true）
+auto_refresh_interval = 1000  # チャート自動更新間隔（ミリ秒）
 
 [dash.ui]
-# UI Components Settings
-show_start_button = true
-show_stop_button = true
-show_ema_badges = true
-show_statistics = true
-chart_height = 700  # Height of the main chart in pixels
+# DashのUIコンポーネント設定
+# 使用ファイル: 04_dash_realtime_chart.py専用
+# ----------------------------------------
+show_start_button = true  # 開始ボタン表示フラグ
+show_stop_button = true  # 停止ボタン表示フラグ
+show_ema_badges = true  # EMAバッジ表示フラグ
+show_statistics = true  # 統計情報表示フラグ
+chart_height = 700  # メインチャートの高さ（ピクセル）
