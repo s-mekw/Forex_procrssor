@@ -22,6 +22,10 @@ import threading
 import queue
 import json
 import time
+import socket
+import signal
+import atexit
+import os
 
 # プロジェクトのインポート
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
@@ -319,11 +323,18 @@ class DashRealtimeChart:
 # グローバルインスタンス
 chart_manager = None
 
-# Dashアプリケーションの初期化
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# Dashアプリケーションの初期化（キャッシュ無効化）
+app = dash.Dash(
+    __name__, 
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+    suppress_callback_exceptions=True,
+    update_title=None  # タイトルの自動更新を無効化
+)
 
 # レイアウト定義
-app.layout = dbc.Container([
+def serve_layout():
+    """動的レイアウト生成（キャッシュ回避）"""
+    return dbc.Container([
     dbc.Row([
         dbc.Col([
             html.H1("📈 Real-time Forex Chart Dashboard", className="text-center mb-4"),
@@ -342,11 +353,15 @@ app.layout = dbc.Container([
                         dbc.Col([
                             html.H5("Current Price:", className="d-inline me-2"),
                             html.Span(id="current-price", className="badge bg-success fs-5"),
-                        ], width=3),
+                        ], width=2),
+                        dbc.Col([
+                            html.H5("Last Update:", className="d-inline me-2"),
+                            html.Span(id="last-update", className="badge bg-warning fs-6"),
+                        ], width=2),
                         dbc.Col([
                             html.H5("Ticks:", className="d-inline me-2"),
                             html.Span(id="tick-count", className="badge bg-info fs-5"),
-                        ], width=3),
+                        ], width=2),
                         dbc.Col([
                             dbc.Button("Start Real-time", id="start-button", color="success", className="me-2"),
                             dbc.Button("Stop", id="stop-button", color="danger"),
@@ -386,6 +401,9 @@ app.layout = dbc.Container([
     
 ], fluid=True)
 
+# レイアウトを関数として設定（毎回新しいレイアウトを生成）
+app.layout = serve_layout
+
 # コールバック: スタートボタン
 @app.callback(
     Output('realtime-status', 'data'),
@@ -419,7 +437,8 @@ def toggle_realtime(start_clicks, stop_clicks, status):
      Output('symbol-display', 'children'),
      Output('current-price', 'children'),
      Output('tick-count', 'children'),
-     Output('ema-values', 'children')],
+     Output('ema-values', 'children'),
+     Output('last-update', 'children')],
     [Input('interval-component', 'n_intervals')],
     [State('realtime-status', 'data')]
 )
@@ -428,7 +447,7 @@ def update_chart(n, status):
     global chart_manager
     
     if chart_manager is None:
-        return go.Figure(), "", "$0.00", "0", ""
+        return go.Figure(), "", "$0.00", "0", "", "N/A"
     
     # チャート作成
     fig = chart_manager.create_chart()
@@ -446,13 +465,55 @@ def update_chart(n, status):
                      className="badge bg-secondary me-2 fs-6")
         )
     
-    return fig, symbol, current_price, tick_count, ema_badges
+    # 最終更新時刻
+    last_update = chart_manager.stats.get('last_update', None)
+    if last_update:
+        last_update_str = last_update.strftime("%H:%M:%S")
+    else:
+        last_update_str = "Waiting..."
+    
+    return fig, symbol, current_price, tick_count, ema_badges, last_update_str
+
+def find_available_port(start_port=8050, max_attempts=10):
+    """利用可能なポートを見つける"""
+    for i in range(max_attempts):
+        port = start_port + i
+        try:
+            # ポートが使用可能かテスト
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"No available ports found in range {start_port}-{start_port+max_attempts}")
+
+def cleanup():
+    """終了時のクリーンアップ処理"""
+    global chart_manager
+    if chart_manager:
+        print("\nCleaning up...")
+        chart_manager.stop_realtime()
+        if mt5.initialize():
+            mt5.shutdown()
+        print("Cleanup complete")
+
+def signal_handler(sig, frame):
+    """シグナルハンドラー"""
+    print("\nReceived interrupt signal")
+    cleanup()
+    sys.exit(0)
 
 def main():
     """メイン関数"""
     global chart_manager
     
+    # シグナルハンドラーとクリーンアップの登録
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    atexit.register(cleanup)
+    
     print("Initializing Dash Real-time Chart...")
+    print(f"Process ID: {os.getpid()}")
     
     # TOMLファイルから設定読み込み
     config = load_config(preset="full")
@@ -464,17 +525,38 @@ def main():
     print(f"Timeframe: {config.chart.timeframe}")
     print(f"EMA periods: {config.chart.ema_periods}")
     
-    # Dash設定を取得（存在しない場合はデフォルト値を使用）
+    # Dash設定を取得
     dash_config = getattr(config, 'dash', None)
     host = getattr(dash_config, 'host', '0.0.0.0') if dash_config else '0.0.0.0'
-    port = getattr(dash_config, 'port', 8050) if dash_config else 8050
+    default_port = getattr(dash_config, 'port', 8050) if dash_config else 8050
     debug = getattr(dash_config, 'debug', False) if dash_config else False
     
-    print(f"\nStarting Dash server on http://{host}:{port}")
+    # 環境変数からポート取得またはポート自動検出
+    port = int(os.environ.get('DASH_PORT', default_port))
+    
+    try:
+        # ポートが使用中の場合は別のポートを探す
+        available_port = find_available_port(port)
+        if available_port != port:
+            print(f"⚠️  Port {port} is in use, using port {available_port} instead")
+            port = available_port
+    except RuntimeError as e:
+        print(f"❌ Error: {e}")
+        print("Please close other Dash applications or specify a different port")
+        sys.exit(1)
+    
+    print(f"\n✅ Starting Dash server on http://{host}:{port}")
+    print("📊 Open your browser to view the real-time chart")
     print("Press Ctrl+C to stop")
     
-    # Dashサーバー起動（設定値を使用）
-    app.run(debug=debug, host=host, port=port)
+    # Dashサーバー起動（use_reloader=Falseで自動リロードを無効化）
+    app.run(
+        debug=debug, 
+        host=host, 
+        port=port,
+        use_reloader=False,  # 自動リロードを無効化（重要）
+        dev_tools_hot_reload=False  # ホットリロードも無効化
+    )
 
 if __name__ == "__main__":
     main()
