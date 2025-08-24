@@ -1,0 +1,98 @@
+# Task 8 Test Configuration File
+# This file contains all configuration settings for Task 8 E2E tests
+
+[general]
+# Test mode settings
+test_mode = "full"  # Options: "quick", "full", "performance"
+use_mock_data = false
+save_results = true
+verbose = true
+
+[mt5]
+# MT5 Connection Settings
+# These are default/fallback values. Actual credentials should be set in .env file:
+# FOREX_MT5_LOGIN=your_login_id
+# FOREX_MT5_PASSWORD=your_password
+# FOREX_MT5_SERVER=your_server
+login = 12345678  # Placeholder - use .env for actual login
+password = "placeholder"  # Placeholder - use .env for actual password
+server = "Demo-Server"  # Placeholder - use .env for actual server
+timeout = 60000
+max_retries = 3
+retry_delay = 1.0
+
+[chart]
+# Chart Display Settings
+symbol = "BTCUSD#"  # Use BTCUSD# for crypto, or EURUSD for forex
+timeframe = "M1"  # Options: M1, M5, M15, H1, H4, D1
+initial_bars = 500
+update_interval = 1.0  # seconds
+realtime_enabled = true
+max_tick_buffer = 1000
+
+# Chart dimensions
+chart_height = 800
+chart_width = 1200
+show_volume = true
+show_grid = true
+
+[ema]
+# EMA Indicator Settings
+periods = [20, 50, 200]
+
+[ema.colors]
+# EMA Line Colors (hex or named colors)
+20 = "blue"
+50 = "green"
+200 = "red"
+
+[theme]
+# Chart Theme Settings
+background = "#1e1e1e"
+grid = "#333333"
+text = "#ffffff"
+
+[theme.candlestick]
+bullish = "#26a69a"  # Green
+bearish = "#ef5350"  # Red
+
+[theme.volume]
+bullish = "#26a69a80"  # Semi-transparent green
+bearish = "#ef535080"  # Semi-transparent red
+
+[performance]
+# Performance Settings
+use_float32 = true
+cache_size = 10000
+update_batch_size = 100
+
+[alerts]
+# Alert Settings (for future implementation)
+enabled = false
+ema_crossover = true
+price_alerts = false
+pattern_detection = false
+
+[symbols]
+# Available symbols for testing
+crypto = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]
+forex = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+default = "BTCUSD#"
+
+[presets.quick]
+# Quick test configuration
+initial_bars = 100
+update_interval = 2.0
+realtime_enabled = false
+
+[presets.full]
+# Full test configuration
+initial_bars = 500
+update_interval = 1.0
+realtime_enabled = true
+
+[presets.performance]
+# Performance test configuration
+initial_bars = 1000
+update_interval = 0.5
+ema_periods = [10, 20, 50, 100, 200]
