@@ -80,6 +80,7 @@ class DashRealtimeChart:
         self.data_lock = Lock()  # データ更新用ロック
         self.ohlc_data = None
         self.ema_data = {}
+        self.temp_ema_values = {}  # 未完成バー用の一時EMA値
         self.current_bar = None
         self.tick_queue = queue.Queue()
         
@@ -142,9 +143,12 @@ class DashRealtimeChart:
         self.calculate_ema()
         
     def calculate_ema(self):
-        """EMAを計算"""
+        """EMAを計算（完成バーのみ対象）"""
         if self.ohlc_data is None or self.ohlc_data.is_empty():
             return
+        
+        # 一時EMA値をクリア
+        self.temp_ema_values.clear()
         
         df_with_ema = self.indicator_engine.calculate_ema(
             self.ohlc_data,
@@ -198,10 +202,10 @@ class DashRealtimeChart:
                         if self.current_bar:
                             self.stats["current_price"] = float(self.current_bar.close)
                             
-                            # 未完成バーをOHLCデータに反映
+                            # 未完成バーをOHLCデータに反映（簡素化版）
                             self.update_current_bar_in_ohlc()
                             
-                            # EMAを更新
+                            # 未完成バー用のEMA一時値を更新
                             self.update_ema_incremental(float(self.current_bar.close))
                         
                         self.stats["ticks_received"] += 1
@@ -216,7 +220,7 @@ class DashRealtimeChart:
                 time.sleep(1)
     
     def add_new_bar(self, bar: Bar):
-        """新しいバーを追加"""
+        """新しいバーを追加（完成バー用）"""
         new_row = pl.DataFrame({
             "time": [bar.time],
             "open": [np.float32(bar.open)],
@@ -232,50 +236,58 @@ class DashRealtimeChart:
         max_bars = self.config.chart.initial_bars * 2
         if len(self.ohlc_data) > max_bars:
             self.ohlc_data = self.ohlc_data.tail(max_bars)
+            # EMAデータも同じ長さに調整
+            for period in self.config.chart.ema_periods:
+                if period in self.ema_data and len(self.ema_data[period]) > max_bars:
+                    self.ema_data[period] = self.ema_data[period][-max_bars:]
         
         # EMA再計算
         self.calculate_ema()
+        
+        # データ同期を確認・修復
+        self.sync_data_integrity()
     
     def update_current_bar_in_ohlc(self):
-        """未完成バーをOHLCデータの最後のロウに反映"""
-        if self.current_bar is None or self.ohlc_data is None:
+        """未完成バーをOHLCデータの最後のロウに反映（簡素化版）"""
+        if self.current_bar is None or self.ohlc_data is None or self.ohlc_data.is_empty():
             return
         
         try:
-            # 最後のロウを未完成バーのデータで更新
-            last_idx = len(self.ohlc_data) - 1
-            if last_idx >= 0:
-                # 最後のバーの時刻が現在のバーと同じかチェック
-                last_time = self.ohlc_data["time"][last_idx]
-                current_bar_time = self.current_bar.time
+            current_bar_time = self.current_bar.time
+            data_length = len(self.ohlc_data)
+            
+            if data_length > 0:
+                # 最後のバーの時刻を取得
+                last_time = self.ohlc_data["time"][-1]
                 
                 if last_time == current_bar_time:
-                    # 既存のバーを更新
-                    self.ohlc_data = self.ohlc_data.with_columns([
-                        pl.when(pl.col("time") == current_bar_time)
-                        .then(pl.lit(np.float32(self.current_bar.high)))
-                        .otherwise(pl.col("high"))
-                        .alias("high"),
-                        
-                        pl.when(pl.col("time") == current_bar_time)
-                        .then(pl.lit(np.float32(self.current_bar.low)))
-                        .otherwise(pl.col("low"))
-                        .alias("low"),
-                        
-                        pl.when(pl.col("time") == current_bar_time)
-                        .then(pl.lit(np.float32(self.current_bar.close)))
-                        .otherwise(pl.col("close"))
-                        .alias("close"),
-                        
-                        pl.when(pl.col("time") == current_bar_time)
-                        .then(pl.lit(np.float32(self.current_bar.volume)))
-                        .otherwise(pl.col("volume"))
-                        .alias("volume")
-                    ])
+                    # 既存の未完成バーを更新 - 直接置換
+                    # 最後の行以外を保持
+                    if data_length > 1:
+                        preceding_data = self.ohlc_data[:-1]
+                        updated_row = pl.DataFrame({
+                            "time": [current_bar_time],
+                            "open": [np.float32(self.current_bar.open)],
+                            "high": [np.float32(self.current_bar.high)],
+                            "low": [np.float32(self.current_bar.low)],
+                            "close": [np.float32(self.current_bar.close)],
+                            "volume": [np.float32(self.current_bar.volume)]
+                        })
+                        self.ohlc_data = pl.concat([preceding_data, updated_row])
+                    else:
+                        # 最初のバーの場合
+                        self.ohlc_data = pl.DataFrame({
+                            "time": [current_bar_time],
+                            "open": [np.float32(self.current_bar.open)],
+                            "high": [np.float32(self.current_bar.high)],
+                            "low": [np.float32(self.current_bar.low)],
+                            "close": [np.float32(self.current_bar.close)],
+                            "volume": [np.float32(self.current_bar.volume)]
+                        })
                 else:
                     # 新しい未完成バーを追加
                     new_row = pl.DataFrame({
-                        "time": [self.current_bar.time],
+                        "time": [current_bar_time],
                         "open": [np.float32(self.current_bar.open)],
                         "high": [np.float32(self.current_bar.high)],
                         "low": [np.float32(self.current_bar.low)],
@@ -283,26 +295,72 @@ class DashRealtimeChart:
                         "volume": [np.float32(self.current_bar.volume)]
                     })
                     self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+            else:
+                # OHLCデータが空の場合
+                self.ohlc_data = pl.DataFrame({
+                    "time": [current_bar_time],
+                    "open": [np.float32(self.current_bar.open)],
+                    "high": [np.float32(self.current_bar.high)],
+                    "low": [np.float32(self.current_bar.low)],
+                    "close": [np.float32(self.current_bar.close)],
+                    "volume": [np.float32(self.current_bar.volume)]
+                })
             
         except Exception as e:
             print(f"Error updating current bar in OHLC: {e}")
+            # エラー時は新しいバーとして追加を試行
+            try:
+                new_row = pl.DataFrame({
+                    "time": [self.current_bar.time],
+                    "open": [np.float32(self.current_bar.open)],
+                    "high": [np.float32(self.current_bar.high)],
+                    "low": [np.float32(self.current_bar.low)],
+                    "close": [np.float32(self.current_bar.close)],
+                    "volume": [np.float32(self.current_bar.volume)]
+                })
+                self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+            except:
+                print(f"Failed to recover from OHLC update error")
+    
+    def sync_data_integrity(self):
+        """データの整合性をチェックし、必要に応じて修復"""
+        if self.ohlc_data is None or self.ohlc_data.is_empty():
+            return
+        
+        try:
+            ohlc_length = len(self.ohlc_data)
+            
+            # 各EMA期間のデータ長をチェック
+            for period in self.config.chart.ema_periods:
+                if period in self.ema_data:
+                    ema_length = len(self.ema_data[period])
+                    
+                    if ema_length > ohlc_length:
+                        # EMAデータが長すぎる場合はトリム
+                        self.ema_data[period] = self.ema_data[period][:ohlc_length]
+                        print(f"Trimmed EMA{period} data to match OHLC length: {ohlc_length}")
+                    elif ema_length < ohlc_length - 1:  # -1は未完成バーを考慮
+                        # EMAデータが短すぎる場合はEMAを再計算
+                        print(f"EMA{period} data length mismatch detected. Recalculating EMA...")
+                        self.calculate_ema()
+                        break  # 再計算後はループを抜ける
+                        
+        except Exception as e:
+            print(f"Error in data sync: {e}")
+            # エラー時はEMAを再計算
+            self.calculate_ema()
     
     def update_ema_incremental(self, new_price: float):
-        """EMAを増分更新し、OHLCデータに同期"""
-        # EMAの増分更新
+        """EMAを増分更新（未完成バー用の一時値を計算）"""
+        # 未完成バー用の一時EMA値を計算
         for period in self.config.chart.ema_periods:
             if period in self.ema_data and len(self.ema_data[period]) > 0:
                 alpha = 2.0 / (period + 1)
                 prev_ema = self.ema_data[period][-1]
                 new_ema = alpha * new_price + (1 - alpha) * prev_ema
-                self.ema_data[period][-1] = new_ema
+                # 既存のEMAデータは変更せず、一時値として保存
+                self.temp_ema_values[period] = new_ema
                 self.stats["ema_values"][period] = new_ema
-        
-        # 未完成バーの場合、EMAを新しいエントリとして追加
-        if self.current_bar and len(self.ohlc_data) > len(self.ema_data.get(self.config.chart.ema_periods[0], [])):
-            for period in self.config.chart.ema_periods:
-                if period in self.ema_data and period in self.stats["ema_values"]:
-                    self.ema_data[period].append(self.stats["ema_values"][period])
     
     def start_realtime(self):
         """リアルタイム受信を開始"""
@@ -320,14 +378,23 @@ class DashRealtimeChart:
             self.tick_thread.join(timeout=2)
     
     def create_chart(self):
-        """Plotlyチャートを作成（スレッドセーフ）"""
+        """Plotlyチャートを作成（スレッドセーフ・データ検証強化）"""
         with self.data_lock:
             if self.ohlc_data is None or self.ohlc_data.is_empty():
-                return go.Figure()
+                return self._create_empty_chart()
             
-            # データのコピーを作成してロックを早めに解放
-            ohlc_copy = self.ohlc_data.clone()
-            ema_copy = {k: v.copy() for k, v in self.ema_data.items()}
+            try:
+                # データのコピーを作成してロックを早めに解放
+                ohlc_copy = self.ohlc_data.clone()
+                ema_copy = {k: v.copy() for k, v in self.ema_data.items()}
+                temp_ema_copy = self.temp_ema_values.copy()
+                
+                # データ検証と整合性チェック
+                ohlc_copy, ema_copy = self._validate_and_sync_data(ohlc_copy, ema_copy, temp_ema_copy)
+                
+            except Exception as e:
+                print(f"Error preparing chart data: {e}")
+                return self._create_empty_chart()
         
         # ロック外でチャートを作成
         # サブプロットの作成
@@ -352,14 +419,19 @@ class DashRealtimeChart:
             row=1, col=1
         )
         
-        # EMAライン（コピーしたデータを使用）
+        # EMAライン（一時値を含む結合データを使用）
         colors = ['orange', 'blue', 'green', 'red', 'purple']
         for idx, period in enumerate(self.config.chart.ema_periods):
             if period in ema_copy and len(ema_copy[period]) > 0:
+                # 検証済みのEMAデータを使用
+                ema_length = min(len(ema_copy[period]), len(ohlc_copy))
+                time_data = ohlc_copy["time"].to_list()[:ema_length]
+                ema_data_values = ema_copy[period][:ema_length]
+                
                 fig.add_trace(
                     go.Scatter(
-                        x=ohlc_copy["time"].to_list()[:len(ema_copy[period])],
-                        y=ema_copy[period],
+                        x=time_data,
+                        y=ema_data_values,
                         mode='lines',
                         name=f'EMA {period}',
                         line=dict(color=colors[idx % len(colors)], width=1)
@@ -390,6 +462,80 @@ class DashRealtimeChart:
         fig.update_xaxes(title_text="Time", row=2, col=1)
         fig.update_yaxes(title_text="Price", row=1, col=1)
         fig.update_yaxes(title_text="Volume", row=2, col=1)
+        
+        return fig
+    
+    def _validate_and_sync_data(self, ohlc_data, ema_data, temp_ema_values):
+        """チャート用データの検証と同期"""
+        try:
+            # OHLCデータの基本検証
+            if ohlc_data.is_empty():
+                return ohlc_data, ema_data
+            
+            # 数値データのNaN・Infチェック
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            for col in numeric_columns:
+                if col in ohlc_data.columns:
+                    # NaNやInfを除去
+                    ohlc_data = ohlc_data.filter(pl.col(col).is_finite())
+            
+            if ohlc_data.is_empty():
+                return ohlc_data, ema_data
+            
+            ohlc_length = len(ohlc_data)
+            
+            # EMAデータと一時EMA値を結合・検証
+            for period in self.config.chart.ema_periods:
+                if period in ema_data:
+                    # 現在のEMAデータの長さをチェック
+                    ema_length = len(ema_data[period])
+                    
+                    # 一時EMA値を追加（未完成バー用）
+                    if period in temp_ema_values and ohlc_length > ema_length:
+                        ema_data[period] = ema_data[period] + [temp_ema_values[period]]
+                    
+                    # EMAデータの長さをOHLCに合わせる
+                    if len(ema_data[period]) > ohlc_length:
+                        ema_data[period] = ema_data[period][:ohlc_length]
+                    elif len(ema_data[period]) < ohlc_length:
+                        # EMAデータが不足の場合は最後の値で埋める
+                        if len(ema_data[period]) > 0:
+                            last_ema = ema_data[period][-1]
+                            missing_count = ohlc_length - len(ema_data[period])
+                            ema_data[period].extend([last_ema] * missing_count)
+                        else:
+                            # EMAデータが空の場合は除去
+                            del ema_data[period]
+                    
+                    # NaNやInfのチェックと除去
+                    if period in ema_data:
+                        ema_data[period] = [x for x in ema_data[period] if x is not None and not np.isnan(x) and np.isfinite(x)]
+                        if len(ema_data[period]) == 0:
+                            del ema_data[period]
+            
+            return ohlc_data, ema_data
+            
+        except Exception as e:
+            print(f"Error in data validation: {e}")
+            return ohlc_data, ema_data
+    
+    def _create_empty_chart(self):
+        """空のチャートを作成"""
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.7, 0.3],
+            subplot_titles=(f"{self.config.chart.symbol} - {self.config.chart.timeframe} (Loading...)", "Volume")
+        )
+        
+        fig.update_layout(
+            height=700,
+            xaxis_rangeslider_visible=False,
+            showlegend=True,
+            hovermode='x unified',
+            margin=dict(l=0, r=0, t=30, b=0)
+        )
         
         return fig
 
