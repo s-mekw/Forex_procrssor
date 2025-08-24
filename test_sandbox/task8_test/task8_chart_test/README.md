@@ -30,8 +30,10 @@ task8_chart_test/
 │   ├── test_config.py                  # テスト設定管理
 │   └── chart_helpers.py                # チャート描画ヘルパー
 ├── 01_basic_ema_calculation.py         # EMA計算の基本テスト
-├── 02_realtime_chart_display.py        # リアルタイムチャート表示
-├── 03_marimo_interactive_chart.py      # インタラクティブダッシュボード
+├── 02_realtime_chart_display.py        # リアルタイムチャート表示（HTML生成）
+├── 03_marimo_interactive_chart.py      # Marimoインタラクティブダッシュボード
+├── 04_dash_realtime_chart.py           # Dashリアルタイムチャート（自動更新）
+├── task8_config.toml                    # 統合設定ファイル
 └── README.md                            # このファイル
 ```
 
@@ -144,6 +146,55 @@ uv run marimo edit test_sandbox/task8_test/task8_chart_test/03_marimo_interactiv
 3. "Fetch Data"ボタンでデータ取得
 4. "Start Real-time"でリアルタイム更新開始
 
+### 4. Dashリアルタイムチャート（04_dash_realtime_chart.py）
+
+ブラウザで自動更新されるWebベースのリアルタイムチャートダッシュボード。
+
+```bash
+uv run python test_sandbox/task8_test/task8_chart_test/04_dash_realtime_chart.py
+```
+
+**機能**:
+- 🔄 **自動更新チャート**（手動リロード不要）
+- 📊 リアルタイム価格表示
+- 📈 EMA値のライブ更新  
+- ⏯️ Start/Stopコントロールボタン
+- 📱 レスポンシブデザイン
+- 🌐 複数クライアント同時アクセス対応
+
+**アクセス方法**:
+```
+http://localhost:8050
+```
+ブラウザで上記URLを開くと、自動的にチャートが表示されます。
+
+**特徴**:
+- **自動更新**: Dashフレームワークの`dcc.Interval`により1秒ごとに自動更新
+- **リアルタイムデータ**: MT5から直接ティックデータを受信
+- **メモリ効率**: 最大1000バーまでメモリに保持し、古いデータは自動削除
+- **シンプル実装**: WebSocketを使わず、Dash標準機能のみで実現
+
+**設定（task8_config.toml）**:
+```toml
+[dash]
+host = "0.0.0.0"  # サーバーホスト（全インターフェース）
+port = 8050        # ポート番号
+debug = false      # デバッグモード
+auto_refresh_interval = 1000  # 更新間隔(ミリ秒)
+
+[dash.ui]
+show_start_button = true  # Startボタン表示
+show_stop_button = true   # Stopボタン表示
+chart_height = 700        # チャート高さ（ピクセル）
+```
+
+**動作の流れ**:
+1. アプリケーション起動時にMT5から初期データ（500バー）を取得
+2. ブラウザでダッシュボードが開く
+3. "Start Real-time"ボタンをクリックでリアルタイム更新開始
+4. 1秒ごとに自動的にチャートが更新される
+5. "Stop"ボタンで更新を停止
+
 ## 🔧 設定ファイル
 
 ### task8_config.toml
@@ -252,11 +303,25 @@ Error: Symbol BTCUSD# not available
   - 為替: EURUSD, GBPUSD, USDJPY
 - コマンドラインでシンボルを指定: `--symbol EURUSD`
 
-### チャートが更新されない
+### チャートが更新されない（02_realtime_chart_display.py）
 **解決方法**:
 - ブラウザのキャッシュをクリア
-- `realtime_chart.html`を手動で再読み込み
+- `realtime_chart.html`を手動で再読み込み（F5キー）
 - 更新間隔を長くする（例: 2秒）
+- **推奨**: 自動更新が必要な場合は`04_dash_realtime_chart.py`を使用
+
+### Dashアプリケーションが起動しない（04_dash_realtime_chart.py）
+```
+Error: Address already in use (0.0.0.0:8050)
+```
+**解決方法**:
+- 別のプロセスがポート8050を使用していないか確認
+- Windows: `netstat -ano | findstr :8050`でプロセスを確認
+- `task8_config.toml`でポート番号を変更:
+  ```toml
+  [dash]
+  port = 8051  # 別のポート番号に変更
+  ```
 
 ## 📈 パフォーマンス最適化
 

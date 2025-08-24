@@ -38,6 +38,15 @@ class MT5ConfigFromToml:
     retry_delay: float
 
 @dataclass
+class DashConfigFromToml:
+    """TOMLから読み込んだDash設定"""
+    host: str = "0.0.0.0"
+    port: int = 8050
+    debug: bool = False
+    auto_refresh_interval: int = 1000
+    ui: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
 class Task8Config:
     """Task 8テストの統合設定"""
     chart: ChartConfigFromToml
@@ -49,6 +58,7 @@ class Task8Config:
     use_float32: bool
     theme: Dict[str, Any]
     symbols: Dict[str, List[str]]
+    dash: Optional[DashConfigFromToml] = None
     
     @property
     def symbol(self) -> str:
@@ -142,6 +152,17 @@ def load_config(
         retry_delay=config_data["mt5"]["retry_delay"]
     )
     
+    # Dash設定作成（存在する場合）
+    dash_config = None
+    if "dash" in config_data:
+        dash_config = DashConfigFromToml(
+            host=config_data["dash"].get("host", "0.0.0.0"),
+            port=config_data["dash"].get("port", 8050),
+            debug=config_data["dash"].get("debug", False),
+            auto_refresh_interval=config_data["dash"].get("auto_refresh_interval", 1000),
+            ui=config_data["dash"].get("ui", {})
+        )
+    
     # 統合設定作成
     return Task8Config(
         chart=chart_config,
@@ -152,7 +173,8 @@ def load_config(
         verbose=config_data["general"]["verbose"],
         use_float32=config_data["performance"]["use_float32"],
         theme=config_data["theme"],
-        symbols=config_data["symbols"]
+        symbols=config_data["symbols"],
+        dash=dash_config
     )
 
 def get_available_symbols(config: Task8Config, category: str = "all") -> List[str]:

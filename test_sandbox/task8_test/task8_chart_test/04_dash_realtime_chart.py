@@ -1,0 +1,480 @@
+"""
+Dash Real-time Chart with Auto-refresh
+DashフレームワークによるリアルタイムチャートのWebアプリケーション
+ブラウザ側で自動更新されるインタラクティブチャート
+"""
+
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parents[3]))
+
+import dash
+from dash import dcc, html, Input, Output, State, callback_context
+import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import polars as pl
+import numpy as np
+from datetime import datetime, timedelta
+import MetaTrader5 as mt5
+from typing import Dict, List, Optional
+import threading
+import queue
+import json
+import time
+
+# プロジェクトのインポート
+from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
+from src.data_processing.indicators import TechnicalIndicatorEngine
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar
+from src.common.models import Tick as CommonTick
+from utils.config_loader import load_config
+
+# タイムフレーム変換辞書
+TIMEFRAME_TO_SECONDS = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400
+}
+
+# MT5タイムフレーム変換
+MT5_TIMEFRAMES = {
+    "M1": mt5.TIMEFRAME_M1,
+    "M5": mt5.TIMEFRAME_M5,
+    "M15": mt5.TIMEFRAME_M15,
+    "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1
+}
+
+class DashRealtimeChart:
+    """Dashによるリアルタイムチャートクラス"""
+    
+    def __init__(self, config=None):
+        """初期化"""
+        # TOMLから設定を読み込み
+        self.config = config if config else load_config(preset="full")
+        
+        # MT5とデータ処理の初期化
+        self.mt5_manager = None
+        self.indicator_engine = TechnicalIndicatorEngine(
+            ema_periods=self.config.chart.ema_periods
+        )
+        
+        # TickToBarConverter初期化
+        timeframe_seconds = TIMEFRAME_TO_SECONDS.get(self.config.chart.timeframe, 60)
+        self.converter = TickToBarConverter(
+            symbol=self.config.chart.symbol,
+            timeframe=timeframe_seconds
+        )
+        
+        # データ管理
+        self.ohlc_data = None
+        self.ema_data = {}
+        self.current_bar = None
+        self.tick_queue = queue.Queue()
+        
+        # 統計情報
+        self.stats = {
+            "ticks_received": 0,
+            "bars_completed": 0,
+            "start_time": None,
+            "last_update": None,
+            "current_price": 0,
+            "ema_values": {}
+        }
+        
+        # スレッド管理
+        self.tick_thread = None
+        self.is_running = False
+        
+        # MT5初期化
+        self.initialize_mt5()
+        
+    def initialize_mt5(self):
+        """MT5接続を初期化"""
+        if not mt5.initialize():
+            raise RuntimeError("MT5 initialization failed")
+        
+        # シンボル確認
+        symbol_info = mt5.symbol_info(self.config.chart.symbol)
+        if symbol_info is None:
+            raise ValueError(f"Symbol {self.config.chart.symbol} not available")
+        
+        if not symbol_info.visible:
+            mt5.symbol_select(self.config.chart.symbol, True)
+        
+        # 初期データ取得
+        self.fetch_initial_data()
+        
+    def fetch_initial_data(self):
+        """初期データを取得"""
+        mt5_timeframe = MT5_TIMEFRAMES.get(self.config.chart.timeframe, mt5.TIMEFRAME_M1)
+        rates = mt5.copy_rates_from_pos(
+            self.config.chart.symbol,
+            mt5_timeframe,
+            0,
+            self.config.chart.initial_bars
+        )
+        
+        if rates is None or len(rates) == 0:
+            raise ValueError("Failed to fetch initial data")
+        
+        self.ohlc_data = pl.DataFrame({
+            "time": [datetime.fromtimestamp(r['time']) for r in rates],
+            "open": np.array([r['open'] for r in rates], dtype=np.float32),
+            "high": np.array([r['high'] for r in rates], dtype=np.float32),
+            "low": np.array([r['low'] for r in rates], dtype=np.float32),
+            "close": np.array([r['close'] for r in rates], dtype=np.float32),
+            "volume": np.array([r['tick_volume'] for r in rates], dtype=np.float32)
+        })
+        
+        # EMA計算
+        self.calculate_ema()
+        
+    def calculate_ema(self):
+        """EMAを計算"""
+        if self.ohlc_data is None or self.ohlc_data.is_empty():
+            return
+        
+        df_with_ema = self.indicator_engine.calculate_ema(
+            self.ohlc_data,
+            price_column="close"
+        )
+        
+        for period in self.config.chart.ema_periods:
+            col_name = f"ema_{period}"
+            if col_name in df_with_ema.columns:
+                self.ema_data[period] = df_with_ema[col_name].to_list()
+                if len(self.ema_data[period]) > 0:
+                    self.stats["ema_values"][period] = self.ema_data[period][-1]
+    
+    def tick_receiver_thread(self):
+        """ティック受信スレッド"""
+        last_tick_time = datetime.now()
+        
+        while self.is_running:
+            try:
+                # 最新ティック取得
+                tick = mt5.symbol_info_tick(self.config.chart.symbol)
+                
+                if tick is None:
+                    time.sleep(0.1)
+                    continue
+                
+                tick_time = datetime.fromtimestamp(tick.time)
+                
+                # 新しいティックの場合のみ処理
+                if tick_time > last_tick_time:
+                    # Tickオブジェクトを作成
+                    tick_obj = CommonTick(
+                        symbol=self.config.chart.symbol,
+                        timestamp=tick_time,
+                        bid=float(tick.bid),
+                        ask=float(tick.ask),
+                        volume=float(tick.volume) if hasattr(tick, 'volume') else 1.0
+                    )
+                    
+                    # バーコンバーターに追加
+                    bar = self.converter.add_tick(tick_obj)
+                    
+                    if bar:
+                        # 新しいバーが完成
+                        self.add_new_bar(bar)
+                        self.stats["bars_completed"] += 1
+                    
+                    # 現在のバーを更新
+                    self.current_bar = self.converter.get_current_bar()
+                    if self.current_bar:
+                        self.stats["current_price"] = float(self.current_bar.close)
+                        self.update_ema_incremental(float(self.current_bar.close))
+                    
+                    self.stats["ticks_received"] += 1
+                    self.stats["last_update"] = tick_time
+                    last_tick_time = tick_time
+                
+                time.sleep(0.1)
+                
+            except Exception as e:
+                print(f"Tick receiver error: {e}")
+                time.sleep(1)
+    
+    def add_new_bar(self, bar: Bar):
+        """新しいバーを追加"""
+        new_row = pl.DataFrame({
+            "time": [bar.time],
+            "open": [np.float32(bar.open)],
+            "high": [np.float32(bar.high)],
+            "low": [np.float32(bar.low)],
+            "close": [np.float32(bar.close)],
+            "volume": [np.float32(bar.volume)]
+        })
+        
+        self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+        
+        # メモリ管理
+        max_bars = self.config.chart.initial_bars * 2
+        if len(self.ohlc_data) > max_bars:
+            self.ohlc_data = self.ohlc_data.tail(max_bars)
+        
+        # EMA再計算
+        self.calculate_ema()
+    
+    def update_ema_incremental(self, new_price: float):
+        """EMAを増分更新"""
+        for period in self.config.chart.ema_periods:
+            if period in self.ema_data and len(self.ema_data[period]) > 0:
+                alpha = 2.0 / (period + 1)
+                prev_ema = self.ema_data[period][-1]
+                new_ema = alpha * new_price + (1 - alpha) * prev_ema
+                self.ema_data[period][-1] = new_ema
+                self.stats["ema_values"][period] = new_ema
+    
+    def start_realtime(self):
+        """リアルタイム受信を開始"""
+        if not self.is_running:
+            self.is_running = True
+            self.stats["start_time"] = datetime.now()
+            self.tick_thread = threading.Thread(target=self.tick_receiver_thread)
+            self.tick_thread.daemon = True
+            self.tick_thread.start()
+    
+    def stop_realtime(self):
+        """リアルタイム受信を停止"""
+        self.is_running = False
+        if self.tick_thread:
+            self.tick_thread.join(timeout=2)
+    
+    def create_chart(self):
+        """Plotlyチャートを作成"""
+        if self.ohlc_data is None or self.ohlc_data.is_empty():
+            return go.Figure()
+        
+        # サブプロットの作成
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.7, 0.3],
+            subplot_titles=(f"{self.config.chart.symbol} - {self.config.chart.timeframe}", "Volume")
+        )
+        
+        # ローソク足チャート
+        fig.add_trace(
+            go.Candlestick(
+                x=self.ohlc_data["time"].to_list(),
+                open=self.ohlc_data["open"].to_list(),
+                high=self.ohlc_data["high"].to_list(),
+                low=self.ohlc_data["low"].to_list(),
+                close=self.ohlc_data["close"].to_list(),
+                name="OHLC"
+            ),
+            row=1, col=1
+        )
+        
+        # EMAライン
+        colors = ['orange', 'blue', 'green', 'red', 'purple']
+        for idx, period in enumerate(self.config.chart.ema_periods):
+            if period in self.ema_data:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.ohlc_data["time"].to_list(),
+                        y=self.ema_data[period],
+                        mode='lines',
+                        name=f'EMA {period}',
+                        line=dict(color=colors[idx % len(colors)], width=1)
+                    ),
+                    row=1, col=1
+                )
+        
+        # ボリューム
+        fig.add_trace(
+            go.Bar(
+                x=self.ohlc_data["time"].to_list(),
+                y=self.ohlc_data["volume"].to_list(),
+                name="Volume",
+                marker_color='lightblue'
+            ),
+            row=2, col=1
+        )
+        
+        # レイアウト設定
+        fig.update_layout(
+            height=700,
+            xaxis_rangeslider_visible=False,
+            showlegend=True,
+            hovermode='x unified',
+            margin=dict(l=0, r=0, t=30, b=0)
+        )
+        
+        fig.update_xaxes(title_text="Time", row=2, col=1)
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
+        
+        return fig
+
+# グローバルインスタンス
+chart_manager = None
+
+# Dashアプリケーションの初期化
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# レイアウト定義
+app.layout = dbc.Container([
+    dbc.Row([
+        dbc.Col([
+            html.H1("📈 Real-time Forex Chart Dashboard", className="text-center mb-4"),
+        ])
+    ]),
+    
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H5("Symbol:", className="d-inline me-2"),
+                            html.Span(id="symbol-display", className="badge bg-primary fs-5"),
+                        ], width=3),
+                        dbc.Col([
+                            html.H5("Current Price:", className="d-inline me-2"),
+                            html.Span(id="current-price", className="badge bg-success fs-5"),
+                        ], width=3),
+                        dbc.Col([
+                            html.H5("Ticks:", className="d-inline me-2"),
+                            html.Span(id="tick-count", className="badge bg-info fs-5"),
+                        ], width=3),
+                        dbc.Col([
+                            dbc.Button("Start Real-time", id="start-button", color="success", className="me-2"),
+                            dbc.Button("Stop", id="stop-button", color="danger"),
+                        ], width=3),
+                    ])
+                ])
+            ], className="mb-3")
+        ])
+    ]),
+    
+    dbc.Row([
+        dbc.Col([
+            dcc.Graph(id="live-chart", style={"height": "700px"})
+        ])
+    ]),
+    
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("EMA Values", className="mb-3"),
+                    html.Div(id="ema-values")
+                ])
+            ])
+        ])
+    ]),
+    
+    # 自動更新用のインターバル
+    dcc.Interval(
+        id='interval-component',
+        interval=1000,  # 1秒ごとに更新
+        n_intervals=0
+    ),
+    
+    # データストア
+    dcc.Store(id='realtime-status', data={'is_running': False})
+    
+], fluid=True)
+
+# コールバック: スタートボタン
+@app.callback(
+    Output('realtime-status', 'data'),
+    [Input('start-button', 'n_clicks'),
+     Input('stop-button', 'n_clicks')],
+    [State('realtime-status', 'data')],
+    prevent_initial_call=True
+)
+def toggle_realtime(start_clicks, stop_clicks, status):
+    """リアルタイム更新の開始/停止"""
+    global chart_manager
+    
+    ctx = callback_context
+    if not ctx.triggered:
+        return status
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == 'start-button' and chart_manager:
+        chart_manager.start_realtime()
+        return {'is_running': True}
+    elif button_id == 'stop-button' and chart_manager:
+        chart_manager.stop_realtime()
+        return {'is_running': False}
+    
+    return status
+
+# コールバック: チャート更新
+@app.callback(
+    [Output('live-chart', 'figure'),
+     Output('symbol-display', 'children'),
+     Output('current-price', 'children'),
+     Output('tick-count', 'children'),
+     Output('ema-values', 'children')],
+    [Input('interval-component', 'n_intervals')],
+    [State('realtime-status', 'data')]
+)
+def update_chart(n, status):
+    """チャートと統計情報を更新"""
+    global chart_manager
+    
+    if chart_manager is None:
+        return go.Figure(), "", "$0.00", "0", ""
+    
+    # チャート作成
+    fig = chart_manager.create_chart()
+    
+    # 統計情報
+    symbol = chart_manager.config.chart.symbol
+    current_price = f"${chart_manager.stats['current_price']:,.2f}"
+    tick_count = f"{chart_manager.stats['ticks_received']:,}"
+    
+    # EMA値の表示
+    ema_badges = []
+    for period, value in chart_manager.stats.get("ema_values", {}).items():
+        ema_badges.append(
+            html.Span(f"EMA{period}: ${value:,.2f}", 
+                     className="badge bg-secondary me-2 fs-6")
+        )
+    
+    return fig, symbol, current_price, tick_count, ema_badges
+
+def main():
+    """メイン関数"""
+    global chart_manager
+    
+    print("Initializing Dash Real-time Chart...")
+    
+    # TOMLファイルから設定読み込み
+    config = load_config(preset="full")
+    
+    # チャートマネージャー初期化
+    chart_manager = DashRealtimeChart(config)
+    
+    print(f"Symbol: {config.chart.symbol}")
+    print(f"Timeframe: {config.chart.timeframe}")
+    print(f"EMA periods: {config.chart.ema_periods}")
+    
+    # Dash設定を取得（存在しない場合はデフォルト値を使用）
+    dash_config = getattr(config, 'dash', None)
+    host = getattr(dash_config, 'host', '0.0.0.0') if dash_config else '0.0.0.0'
+    port = getattr(dash_config, 'port', 8050) if dash_config else 8050
+    debug = getattr(dash_config, 'debug', False) if dash_config else False
+    
+    print(f"\nStarting Dash server on http://{host}:{port}")
+    print("Press Ctrl+C to stop")
+    
+    # Dashサーバー起動（設定値を使用）
+    app.run(debug=debug, host=host, port=port)
+
+if __name__ == "__main__":
+    main()

@@ -87,7 +87,7 @@ realtime_enabled = false
 
 [presets.full]
 # Full test configuration
-initial_bars = 500
+initial_bars = 100
 update_interval = 1.0
 realtime_enabled = true
 
@@ -96,3 +96,18 @@ realtime_enabled = true
 initial_bars = 1000
 update_interval = 0.5
 ema_periods = [10, 20, 50, 100, 200]
+
+[dash]
+# Dash Web Server Settings
+host = "0.0.0.0"  # Listen on all interfaces
+port = 8050  # Default port for Dash applications
+debug = false  # Production mode (set true for development)
+auto_refresh_interval = 1000  # Chart refresh interval in milliseconds
+
+[dash.ui]
+# UI Components Settings
+show_start_button = true
+show_stop_button = true
+show_ema_badges = true
+show_statistics = true
+chart_height = 700  # Height of the main chart in pixels
