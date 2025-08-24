@@ -26,6 +26,7 @@ import socket
 import signal
 import atexit
 import os
+from threading import Lock
 
 # プロジェクトのインポート
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
@@ -75,7 +76,8 @@ class DashRealtimeChart:
             timeframe=timeframe_seconds
         )
         
-        # データ管理
+        # データ管理（スレッドセーフ用ロック付き）
+        self.data_lock = Lock()  # データ更新用ロック
         self.ohlc_data = None
         self.ema_data = {}
         self.current_bar = None
@@ -185,19 +187,26 @@ class DashRealtimeChart:
                     # バーコンバーターに追加
                     bar = self.converter.add_tick(tick_obj)
                     
-                    if bar:
-                        # 新しいバーが完成
-                        self.add_new_bar(bar)
-                        self.stats["bars_completed"] += 1
+                    with self.data_lock:
+                        if bar:
+                            # 新しいバーが完成
+                            self.add_new_bar(bar)
+                            self.stats["bars_completed"] += 1
+                        
+                        # 現在のバーを更新（未完成バー）
+                        self.current_bar = self.converter.get_current_bar()
+                        if self.current_bar:
+                            self.stats["current_price"] = float(self.current_bar.close)
+                            
+                            # 未完成バーをOHLCデータに反映
+                            self.update_current_bar_in_ohlc()
+                            
+                            # EMAを更新
+                            self.update_ema_incremental(float(self.current_bar.close))
+                        
+                        self.stats["ticks_received"] += 1
+                        self.stats["last_update"] = tick_time
                     
-                    # 現在のバーを更新
-                    self.current_bar = self.converter.get_current_bar()
-                    if self.current_bar:
-                        self.stats["current_price"] = float(self.current_bar.close)
-                        self.update_ema_incremental(float(self.current_bar.close))
-                    
-                    self.stats["ticks_received"] += 1
-                    self.stats["last_update"] = tick_time
                     last_tick_time = tick_time
                 
                 time.sleep(0.1)
@@ -227,8 +236,60 @@ class DashRealtimeChart:
         # EMA再計算
         self.calculate_ema()
     
+    def update_current_bar_in_ohlc(self):
+        """未完成バーをOHLCデータの最後のロウに反映"""
+        if self.current_bar is None or self.ohlc_data is None:
+            return
+        
+        try:
+            # 最後のロウを未完成バーのデータで更新
+            last_idx = len(self.ohlc_data) - 1
+            if last_idx >= 0:
+                # 最後のバーの時刻が現在のバーと同じかチェック
+                last_time = self.ohlc_data["time"][last_idx]
+                current_bar_time = self.current_bar.time
+                
+                if last_time == current_bar_time:
+                    # 既存のバーを更新
+                    self.ohlc_data = self.ohlc_data.with_columns([
+                        pl.when(pl.col("time") == current_bar_time)
+                        .then(pl.lit(np.float32(self.current_bar.high)))
+                        .otherwise(pl.col("high"))
+                        .alias("high"),
+                        
+                        pl.when(pl.col("time") == current_bar_time)
+                        .then(pl.lit(np.float32(self.current_bar.low)))
+                        .otherwise(pl.col("low"))
+                        .alias("low"),
+                        
+                        pl.when(pl.col("time") == current_bar_time)
+                        .then(pl.lit(np.float32(self.current_bar.close)))
+                        .otherwise(pl.col("close"))
+                        .alias("close"),
+                        
+                        pl.when(pl.col("time") == current_bar_time)
+                        .then(pl.lit(np.float32(self.current_bar.volume)))
+                        .otherwise(pl.col("volume"))
+                        .alias("volume")
+                    ])
+                else:
+                    # 新しい未完成バーを追加
+                    new_row = pl.DataFrame({
+                        "time": [self.current_bar.time],
+                        "open": [np.float32(self.current_bar.open)],
+                        "high": [np.float32(self.current_bar.high)],
+                        "low": [np.float32(self.current_bar.low)],
+                        "close": [np.float32(self.current_bar.close)],
+                        "volume": [np.float32(self.current_bar.volume)]
+                    })
+                    self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+            
+        except Exception as e:
+            print(f"Error updating current bar in OHLC: {e}")
+    
     def update_ema_incremental(self, new_price: float):
-        """EMAを増分更新"""
+        """EMAを増分更新し、OHLCデータに同期"""
+        # EMAの増分更新
         for period in self.config.chart.ema_periods:
             if period in self.ema_data and len(self.ema_data[period]) > 0:
                 alpha = 2.0 / (period + 1)
@@ -236,6 +297,12 @@ class DashRealtimeChart:
                 new_ema = alpha * new_price + (1 - alpha) * prev_ema
                 self.ema_data[period][-1] = new_ema
                 self.stats["ema_values"][period] = new_ema
+        
+        # 未完成バーの場合、EMAを新しいエントリとして追加
+        if self.current_bar and len(self.ohlc_data) > len(self.ema_data.get(self.config.chart.ema_periods[0], [])):
+            for period in self.config.chart.ema_periods:
+                if period in self.ema_data and period in self.stats["ema_values"]:
+                    self.ema_data[period].append(self.stats["ema_values"][period])
     
     def start_realtime(self):
         """リアルタイム受信を開始"""
@@ -253,10 +320,16 @@ class DashRealtimeChart:
             self.tick_thread.join(timeout=2)
     
     def create_chart(self):
-        """Plotlyチャートを作成"""
-        if self.ohlc_data is None or self.ohlc_data.is_empty():
-            return go.Figure()
+        """Plotlyチャートを作成（スレッドセーフ）"""
+        with self.data_lock:
+            if self.ohlc_data is None or self.ohlc_data.is_empty():
+                return go.Figure()
+            
+            # データのコピーを作成してロックを早めに解放
+            ohlc_copy = self.ohlc_data.clone()
+            ema_copy = {k: v.copy() for k, v in self.ema_data.items()}
         
+        # ロック外でチャートを作成
         # サブプロットの作成
         fig = make_subplots(
             rows=2, cols=1,
@@ -266,27 +339,27 @@ class DashRealtimeChart:
             subplot_titles=(f"{self.config.chart.symbol} - {self.config.chart.timeframe}", "Volume")
         )
         
-        # ローソク足チャート
+        # ローソク足チャート（コピーしたデータを使用）
         fig.add_trace(
             go.Candlestick(
-                x=self.ohlc_data["time"].to_list(),
-                open=self.ohlc_data["open"].to_list(),
-                high=self.ohlc_data["high"].to_list(),
-                low=self.ohlc_data["low"].to_list(),
-                close=self.ohlc_data["close"].to_list(),
+                x=ohlc_copy["time"].to_list(),
+                open=ohlc_copy["open"].to_list(),
+                high=ohlc_copy["high"].to_list(),
+                low=ohlc_copy["low"].to_list(),
+                close=ohlc_copy["close"].to_list(),
                 name="OHLC"
             ),
             row=1, col=1
         )
         
-        # EMAライン
+        # EMAライン（コピーしたデータを使用）
         colors = ['orange', 'blue', 'green', 'red', 'purple']
         for idx, period in enumerate(self.config.chart.ema_periods):
-            if period in self.ema_data:
+            if period in ema_copy and len(ema_copy[period]) > 0:
                 fig.add_trace(
                     go.Scatter(
-                        x=self.ohlc_data["time"].to_list(),
-                        y=self.ema_data[period],
+                        x=ohlc_copy["time"].to_list()[:len(ema_copy[period])],
+                        y=ema_copy[period],
                         mode='lines',
                         name=f'EMA {period}',
                         line=dict(color=colors[idx % len(colors)], width=1)
@@ -294,11 +367,11 @@ class DashRealtimeChart:
                     row=1, col=1
                 )
         
-        # ボリューム
+        # ボリューム（コピーしたデータを使用）
         fig.add_trace(
             go.Bar(
-                x=self.ohlc_data["time"].to_list(),
-                y=self.ohlc_data["volume"].to_list(),
+                x=ohlc_copy["time"].to_list(),
+                y=ohlc_copy["volume"].to_list(),
                 name="Volume",
                 marker_color='lightblue'
             ),
