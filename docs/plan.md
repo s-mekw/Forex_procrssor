@@ -1,255 +1,400 @@
-## タスク7: Polarsデータ処理基盤の構築 - 実装計画
+# task9 RCI計算エンジン実装計画書
 
-### 概要
-要件2.1に基づき、Polarsを使用した高速データ処理基盤を構築します。TDD（テスト駆動開発）アプローチで、テストを先に書いてから実装を進めます。
+## 1. 実装概要
 
-### 実装ステップ
+本実装計画書は、Forex_procrssorプロジェクトのtask9「RCI計算エンジンの高速実装」について、Pythonサンプルコード（`rci_differential.py`）の差分計算アルゴリズムを基にした実装方針を定義します。
 
-#### Step 1: テストファイルの作成
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: 基本的なテスト構造とインポートを設定
+### 1.1 実装方針
+- **アルゴリズム**: 差分計算による高速RCI実装（O(n)更新）
+- **データ型**: Float32精度による メモリ効率化（50%削減）
+- **フレームワーク**: Polars統合による高速データ処理
+- **拡張性**: 任意期間（3〜200）対応の汎用エンジン
 
-#### Step 2: 基本的なデータ型定義テスト
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: Float32統一のスキーマ定義テストを追加
-- 詳細:
-  - Forexデータのスキーマ定義（timestamp, open, high, low, close, volume）
-  - Float32への自動変換テスト
-  - メモリ使用量の検証テスト
-  - データ型の整合性チェック
+### 1.2 技術選定の根拠
+| 技術要素 | 選定理由 |
+|---------|---------|
+| 差分計算アルゴリズム | 従来のO(n²)からO(n)への計算量削減により、リアルタイム処理に最適 |
+| dequeバッファ | 固定サイズのスライディングウィンドウで メモリ効率的 |
+| Float32精度 | 金融計算に十分な精度を保ちつつ、メモリ使用量を50%削減 |
+| Polars Expression | ネイティブPolars統合により、データパイプラインとのシームレスな連携 |
 
-#### Step 3: 実装ファイルの作成
-- ファイル: `src/data_processing/processor.py`
-- 作業: PolarsProcessingEngineクラスの骨組みを作成
+## 2. クラス設計
 
-#### Step 4: データ型最適化の実装
-- ファイル: `src/data_processing/processor.py`
-- 作業: Float32変換とメモリ最適化メソッドを実装
+### 2.1 クラス構成図
 
-#### Step 5: LazyFrame処理のテスト追加
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: 遅延評価のテストケースを追加
+```
+┌─────────────────────────────────────────────────────────┐
+│                    RCICalculatorEngine                  │
+│  (メインエンジン：複数期間の並列RCI計算を管理)         │
+└─────────────────────────────────────────────────────────┘
+                            │
+                  ┌─────────┴─────────┐
+                  │                   │
+        ┌─────────▼─────────┐ ┌──────▼──────────┐
+        │DifferentialRCICalc│ │  RCIProcessor   │
+        │(単一期間計算)     │ │ (Polars統合)    │
+        └───────────────────┘ └─────────────────┘
+```
 
-#### Step 6: チャンク処理のテスト追加
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: 大規模データのチャンク処理テストを追加
-- 詳細:
-  - チャンクサイズの設定と検証（デフォルト: 100,000行）
-  - 大規模データ（100万行以上）の分割処理
-  - チャンクごとの処理と集約
-  - メモリ使用量の監視と検証
-  - ストリーミング処理のテスト（scan_csv/scan_parquet）
-  - パフォーマンス測定（処理時間の計測）
+### 2.2 クラス詳細設計
 
-#### Step 7: チャンク処理の実装 ✅ 完了
-- ファイル: `src/data_processing/processor.py`
-- 作業: チャンク処理とストリーミング処理を実装
-- 詳細:
-  1. **process_in_chunksメソッド**
-     - DataFrame/LazyFrameを指定サイズで分割
-     - 各チャンクに対してユーザー定義の処理関数を適用
-     - チャンク結果を効率的に集約（concatまたはvstack）
-     - メモリ使用量の監視と制御
-  
-  2. **adjust_chunk_sizeメソッド**
-     - 現在のメモリ使用率をpsutilで取得
-     - メモリ使用率が高い場合はチャンクサイズを縮小
-     - メモリ使用率が低い場合はチャンクサイズを拡大
-     - 適応的な調整アルゴリズムの実装
-  
-  3. **stream_csvメソッド**
-     - pl.scan_csvを使用したLazyFrame生成
-     - データ型の明示的な指定（Float32統一）
-     - バッチ処理との組み合わせ（collectのタイミング制御）
-  
-  4. **stream_parquetメソッド**
-     - pl.scan_parquetを使用した高速読み込み
-     - 列選択とpredicate pushdownの最適化
-     - メタデータの活用による効率化
-  
-  5. **process_batchesメソッド**
-     - 複数のバッチを順次処理
-     - 結果の順序保証と集約
-     - エラーハンドリングとリトライ機能
+#### 2.2.1 DifferentialRCICalculator
+```python
+class DifferentialRCICalculator:
+    """単一期間のストリーミングRCI計算クラス
+    
+    Attributes:
+        period (int): RCI計算期間（3〜200）
+        prices (deque): 価格データのスライディングウィンドウ
+        time_ranks (np.ndarray): 時間順位（事前計算）
+        denominator (float): RCI式の分母（事前計算）
+    
+    Methods:
+        add(price: float) -> Optional[float]: 
+            新価格を追加してRCIを計算
+        _optimized_ranking(prices: np.ndarray) -> np.ndarray:
+            Float32精度での最適化ランキング計算
+    """
+```
 
-- 目標成果:
-  - test_chunk_processingがPASSする
-  - test_streaming_processingがPASSする
-  - メモリ使用量が指定闾値内に収まる
-  - パフォーマンスが目標値を達成する
+#### 2.2.2 RCICalculatorEngine
+```python
+class RCICalculatorEngine:
+    """複数期間対応の汎用RCI計算エンジン
+    
+    Constants:
+        DEFAULT_PERIODS = [9, 13, 24, 33, 48, 66, 108]
+        MIN_PERIOD = 3
+        MAX_PERIOD = 200  # 仕様書に合わせて540から200に変更
+    
+    Methods:
+        calculate_multiple(
+            data: pl.DataFrame,
+            periods: Optional[List[int]] = None,
+            column_name: str = 'close',
+            mode: Literal['batch', 'streaming'] = 'batch'
+        ) -> pl.DataFrame:
+            複数期間のRCI計算（メインインターフェース）
+        
+        validate_periods(periods: List[int]) -> None:
+            期間パラメータのバリデーション
+        
+        _process_streaming(data, periods, column_name) -> pl.DataFrame:
+            ストリーミングモードでの処理
+        
+        _process_batch(data, periods, column_name) -> pl.DataFrame:
+            バッチモードでの処理（Polars最適化）
+    """
+```
 
-#### Step 8: エラーハンドリングのテスト追加 ✅ 完了
-- ファイル: `tests/unit/test_data_processor.py`
-- 作業: 異常系のテストケースを追加
-- 詳細:
-  1. **test_invalid_data_types**
-     - 非Float32データ型の処理テスト
-     - 文字列カラムが数値カラムとして期待される場合
-     - 欠損値（null/NaN）のハンドリング
-     - 適切なエラーメッセージとログ出力の確認
-  
-  2. **test_empty_dataframe_handling**
-     - 空のDataFrameを処理する際の動作
-     - optimize_dtypesメソッドの安全性
-     - create_lazyframeの空データ対応
-     - チャンク処理での空データハンドリング
-  
-  3. **test_excessive_data_size**
-     - メモリに収まらない大規模データの処理
-     - チャンクサイズの自動調整確認
-     - OutOfMemoryErrorのキャッチと復旧
-     - プログレスバーやログでの適切な通知
-  
-  4. **test_corrupted_file_handling**
-     - 破損したCSV/Parquetファイルの読み込み
-     - 不正なフォーマットのファイル処理
-     - FileNotFoundErrorのハンドリング
-     - スキーマ不整合の検出と報告
-  
-  5. **test_memory_pressure_handling**
-     - メモリ不足状況のシミュレーション
-     - adjust_chunk_sizeの動的調整確認
-     - メモリ使用率が高い場合の処理速度低下
-     - グレースフルデグレデーションの確認
-  
-  6. **test_invalid_parameters**
-     - 負のチャンクサイズの処理
-     - 無効な集計関数名の処理
-     - 不正なフィルタ条件の処理
-     - ValueError/TypeErrorの適切な発生
+#### 2.2.3 RCIProcessor
+```python
+class RCIProcessor:
+    """Polars Expression統合用ラッパークラス
+    
+    Methods:
+        create_rci_expression(
+            column: str,
+            period: int
+        ) -> pl.Expr:
+            Polars Expressionとして RCI計算を定義
+        
+        apply_to_dataframe(
+            df: pl.DataFrame,
+            periods: List[int],
+            column_name: str = 'close'
+        ) -> pl.DataFrame:
+            DataFrameに直接RCI計算を適用
+    """
+```
 
-- 目標成果:
-  - 各エラーケースが適切にキャッチされる
-  - エラーメッセージがユーザーフレンドリー
-  - ログ出力が適切なレベルで記録される
-  - リカバリー可能なエラーは自動復旧を試みる
+### 2.3 エラー処理設計
 
-#### Step 9: エラーハンドリングの実装 🔄 進行中
-- ファイル: `src/data_processing/processor.py`
-- 作業: Step 8のテストをパスさせるエラーハンドリング実装
-- 詳細:
-  1. **カスタム例外クラスの定義**
-     - ProcessingError（基底クラス）
-     - DataTypeError（データ型関連）
-     - MemoryLimitError（メモリ制限関連）
-     - FileValidationError（ファイル検証関連）
-  
-  2. **validate_datatypes メソッド**
-     - Float32以外の数値型を検出して変換
-     - 文字列カラムの数値変換試行
-     - null/NaN値の適切な処理
-     - 変換不可能な場合の明確なエラーメッセージ
-  
-  3. **handle_empty_dataframe メソッド**
-     - 空データの検出（len(df) == 0）
-     - 各処理メソッドでの空データチェック
-     - 空の結果を適切に返す
-     - ログでの通知
-  
-  4. **handle_memory_limit メソッド**
-     - psutilでメモリ使用量を監視
-     - メモリ制限に近づいたら警告
-     - チャンクサイズの自動縮小
-     - 必要に応じて処理を分割
-  
-  5. **validate_file メソッド**
-     - ファイルの存在確認（Path.exists()）
-     - ファイル拡張子の検証
-     - 読み込み可能性のチェック
-     - エラー時の詳細なメッセージ
-  
-  6. **handle_memory_pressure メソッド**
-     - adjust_chunk_sizeの改良版
-     - 段階的なチャンクサイズ縮小
-     - 最小チャンクサイズの保証（1,000行）
-     - グレースフルデグレデーション
-  
-  7. **validate_parameters メソッド**
-     - チャンクサイズの範囲チェック（1以上）
-     - 集計関数名の検証（サポート済みリストと照合）
-     - フィルタ演算子の検証
-     - カラム名の存在確認
-  
-  8. **既存メソッドへのエラーハンドリング追加**
-     - optimize_dtypes: データ型変換エラーの処理
-     - create_lazyframe: LazyFrame作成エラーの処理
-     - apply_filters: フィルタ条件エラーの処理
-     - apply_aggregations: 集計エラーの処理
-     - process_in_chunks: チャンク処理エラーの処理
-     - stream_csv/stream_parquet: ファイル読み込みエラーの処理
+```python
+class RCICalculationError(Exception):
+    """RCI計算固有のエラー"""
+    pass
 
-- 実装方針:
-  - 各メソッドにtry-exceptブロック追加
-  - 適切なログレベル（ERROR/WARNING/INFO/DEBUG）
-  - リカバリー機能（リトライ、フォールバック）
-  - 部分的成功の許容
+class InvalidPeriodError(RCICalculationError):
+    """無効な期間パラメータエラー"""
+    pass
 
-- 目標成果:
-  - 6つのエラーハンドリングテストがすべてPASS
-  - エラーメッセージが明確で実用的
-  - ログ出力が適切
-  - メモリ使用量が制御下にある
-  - 処理の継続性が保たれる
+class InsufficientDataError(RCICalculationError):
+    """データ不足エラー"""
+    pass
+```
 
-#### Step 10: 統合テストとドキュメント更新
-- ファイル: `tests/unit/test_data_processor.py`, `docs/context.md`
-- 作業: 全体のテスト実行と最終確認、ドキュメント更新
+## 3. 既存仕様との整合性
 
-### 成果物
-1. **src/data_processing/processor.py** ✅ 完成
-   - PolarsProcessingEngineクラス（444行）
-   - 15個の公開メソッド
-   - 4つのカスタム例外クラス
-   - メモリ最適化メソッド
-   - チャンク処理/ストリーミング処理
-   - エラーハンドリング機能
+### 3.1 要件適合性チェック
 
-2. **tests/unit/test_data_processor.py** ✅ 完成
-   - 20個のテストケース
-   - データ型変換テスト
-   - LazyFrame処理テスト
-   - チャンク処理テスト
-   - エラーハンドリングテスト
-   - パフォーマンスベンチマーク
+| 要件ID | 要件内容 | 実装方針 | 適合性 |
+|--------|---------|---------|--------|
+| 2.3.1 | ユーザー設定可能な期間リスト | `periods`パラメータで任意リスト指定可能 | ✓ |
+| 2.3.2 | 動的な期間リスト更新 | 実行時にperiodsパラメータで変更可能 | ✓ |
+| 2.3.3 | Polars Expression統合 | RCIProcessorクラスで実装 | ✓ |
+| 2.3.4 | 3〜200期間の汎用対応 | MIN_PERIOD=3, MAX_PERIOD=200で制約 | ✓ |
+| 2.3.5 | -100〜+100の正規化 | RCI式に基づく標準計算 | ✓ |
+| 2.3.6 | 信頼性フラグ | `rci_{period}_reliable`カラムで実装 | ✓ |
+| 2.3.7 | 無効期間の制限と警告 | validate_periods()で実装 | ✓ |
 
-3. **ドキュメント** ✅ 完成
-   - docs/context.md: 実装進捗と結果（タスク7総括を含む）
-   - docs/plan.md: 実装計画と最終成果
+### 3.2 技術スタック準拠
 
-### 技術仕様
-- **データ型**: Float32統一（メモリ効率50%改善）
-- **処理方式**: LazyFrameによる遅延評価
-- **メモリ管理**: チャンク処理（デフォルト: 100,000行）
-- **並列処理**: CPUコア数に応じた自動最適化
+| 仕様 | 実装内容 | 準拠状況 |
+|------|---------|----------|
+| Polars必須 | 全データ処理でPolars使用 | ✓ |
+| Float32精度 | np.float32とpl.Float32統一 | ✓ |
+| 型ヒント必須 | 全メソッドで型ヒント実装 | ✓ |
+| 非同期処理対応 | async/awaitインターフェース提供 | 予定 |
 
-### 検証項目
-- [x] 全テストがグリーン → 90%達成（18/20テストがPASS）
-- [ ] カバレッジ80%以上 → 62.84%（processor.pyのみ）
-- [x] メモリ使用量がFloat64比で50%削減 → 37.9%削減で目標ほぼ達成
-- [x] 処理速度がPandas比で2倍以上 → 大幅に超過達成（最大159M rows/sec）
+### 3.3 ファイル配置
 
-### 最終成果
-1. **実装完了機能**
-   - PolarsProcessingEngineクラス（完成）
-   - Float32統一によるメモリ最適化
-   - LazyFrameによる遅延評価
-   - チャンク処理とストリーミング処理
-   - 動的メモリ管理と適応的チャンクサイズ調整
-   - 包括的なエラーハンドリング
+```
+src/
+└── data_processing/
+    ├── __init__.py        # RCICalculatorEngineをエクスポート追加
+    ├── rci.py            # 新規作成（メイン実装）
+    └── processor.py      # 既存（統合ポイント）
+```
 
-2. **技術的特徴**
-   - TDDアプローチによる品質保証
-   - 20個の包括的なテストケース
-   - 4つのカスタム例外クラス
-   - 6つのエラーハンドリングメソッド
-   - psutilを使用したリアルタイムメモリ監視
+## 4. 実装ステップ
 
-3. **今後の改善ポイント**
-   - 整数型最適化の再検討（現在Float32統一を優先）
-   - カテゴリカル型変換の条件緩和
-   - カバレッジの向上（現在62.84%）
+### Phase 1: 基礎実装（2日）
+- [ ] Step 1.1: DifferentialRCICalculatorクラスの実装
+  - dequeによるスライディングウィンドウ
+  - Float32精度での計算
+  - 基本的な差分更新ロジック
 
-### 参照ドキュメント
-- 要件定義: `.kiro/specs/Forex_procrssor/requirements.md` (要件2.1)
-- 詳細設計: `.kiro/specs/Forex_procrssor/design.md` (セクション2.1, 2.3)
-- Python開発ガイドライン: `.kiro/steering/Python_Development_Guidelines.md`
+- [ ] Step 1.2: ランキング計算の最適化
+  - scipy.stats.rankdataによる正確なタイ処理
+  - NumPyフォールバック実装
+  - パフォーマンステスト
+
+### Phase 2: エンジン実装（2日）
+- [ ] Step 2.1: RCICalculatorEngineクラスの実装
+  - 複数期間の並列計算
+  - バリデーションロジック
+  - エラーハンドリング
+
+- [ ] Step 2.2: バッチ/ストリーミングモード実装
+  - モード切り替えロジック
+  - 大規模データ用バッチ処理
+  - リアルタイム用ストリーミング処理
+
+### Phase 3: Polars統合（1日）
+- [ ] Step 3.1: RCIProcessorクラスの実装
+  - Polars Expression生成
+  - LazyFrame対応
+  - 最適化されたグループ処理
+
+- [ ] Step 3.2: 既存processor.pyとの統合
+  - PolarsProcessingEngineへの組み込み
+  - パイプライン統合テスト
+
+### Phase 4: テストとドキュメント（1日）
+- [ ] Step 4.1: ユニットテスト作成
+  - tests/unit/test_rci.pyの実装
+  - 各クラスの単体テスト
+  - エッジケースのテスト
+
+- [ ] Step 4.2: 統合テストとベンチマーク
+  - 大規模データでのパフォーマンステスト
+  - メモリ使用量の測定
+  - 精度検証
+
+## 5. インターフェース設計
+
+### 5.1 基本使用例
+
+```python
+from src.data_processing.rci import RCICalculatorEngine
+import polars as pl
+
+# エンジンの初期化
+engine = RCICalculatorEngine()
+
+# データの準備
+df = pl.DataFrame({
+    'timestamp': [...],
+    'close': [100.5, 101.2, 99.8, ...]
+})
+
+# RCI計算（デフォルト期間）
+result = engine.calculate_multiple(
+    data=df,
+    column_name='close'
+)
+
+# カスタム期間でのRCI計算
+result = engine.calculate_multiple(
+    data=df,
+    periods=[9, 13, 24, 50, 100],
+    column_name='close',
+    mode='streaming'  # リアルタイムモード
+)
+```
+
+### 5.2 Polars統合例
+
+```python
+from src.data_processing.rci import RCIProcessor
+
+processor = RCIProcessor()
+
+# Polars Expressionとして使用
+df = df.with_columns([
+    processor.create_rci_expression('close', period=9).alias('rci_9'),
+    processor.create_rci_expression('close', period=13).alias('rci_13')
+])
+
+# LazyFrameでの使用
+lazy_df = df.lazy().with_columns(
+    processor.create_rci_expression('close', 24)
+).collect()
+```
+
+### 5.3 ストリーミング処理例
+
+```python
+from src.data_processing.rci import DifferentialRCICalculator
+
+# ストリーミング計算
+calculator = DifferentialRCICalculator(period=9)
+
+async def process_tick_stream(tick_stream):
+    async for tick in tick_stream:
+        rci = calculator.add(tick.close)
+        if rci is not None:
+            print(f"RCI(9): {rci:.2f}")
+```
+
+## 6. パフォーマンス目標
+
+### 6.1 計算性能
+| メトリクス | 目標値 | 測定方法 |
+|-----------|--------|----------|
+| 単一期間RCI計算 | < 0.1ms/update | タイマー計測 |
+| 12期間並列計算 | < 1ms/update | プロファイリング |
+| バッチ処理（10万件） | < 1秒 | ベンチマーク |
+| メモリ使用量 | < 100MB（10万件） | memory_profiler |
+
+### 6.2 最適化戦略
+1. **NumPy/Polarsベクトル化**: ループの最小化
+2. **事前計算**: 定数部分のキャッシュ
+3. **Float32精度**: メモリ帯域幅の削減
+4. **並列処理**: 複数期間の同時計算
+
+## 7. 提案する仕様変更・追加
+
+### 7.1 追加機能提案
+
+#### 提案1: 適応的期間選択
+```python
+class AdaptiveRCIEngine(RCICalculatorEngine):
+    """市場ボラティリティに応じて期間を自動調整"""
+    
+    def calculate_adaptive(
+        self,
+        data: pl.DataFrame,
+        base_periods: List[int],
+        volatility_factor: float = 1.0
+    ) -> pl.DataFrame:
+        # ボラティリティに基づく期間調整ロジック
+        pass
+```
+
+**利点**: 市場状況に応じた動的な分析が可能
+
+#### 提案2: 増分更新API
+```python
+class IncrementalRCIEngine:
+    """既存のRCI値を基に差分更新のみ実行"""
+    
+    def update_incremental(
+        self,
+        previous_state: Dict,
+        new_data: pl.DataFrame
+    ) -> Tuple[pl.DataFrame, Dict]:
+        # 状態を保持して増分更新
+        pass
+```
+
+**利点**: リアルタイム処理の更なる高速化
+
+### 7.2 設定ファイル拡張提案
+
+`config/rci_settings.toml`の追加：
+```toml
+[rci]
+default_periods = [9, 13, 24, 33, 48, 66, 108]
+max_period = 200
+min_period = 3
+
+[rci.performance]
+use_float32 = true
+enable_parallel = true
+batch_size = 10000
+
+[rci.realtime]
+streaming_buffer_size = 1000
+update_interval_ms = 100
+```
+
+**利点**: 運用時の柔軟な設定変更が可能
+
+## 8. リスクと対策
+
+### 8.1 技術的リスク
+
+| リスク | 影響度 | 発生確率 | 対策 |
+|--------|--------|----------|------|
+| Float32精度不足 | 中 | 低 | 重要な計算部分のみFloat64使用オプション |
+| メモリ不足（大規模データ） | 高 | 中 | チャンク処理とストリーミング処理の自動切替 |
+| 並列処理のオーバーヘッド | 低 | 中 | 期間数に応じた動的な並列度調整 |
+
+### 8.2 実装上の注意点
+
+1. **スレッドセーフティ**: 
+   - dequeの操作をスレッドセーフに
+   - 共有状態の最小化
+
+2. **数値安定性**:
+   - ゼロ除算の回避
+   - NaN/Inf値の適切な処理
+
+3. **後方互換性**:
+   - 既存のprocessor.pyとの互換性維持
+   - 段階的な移行パスの提供
+
+## 9. 成功基準
+
+### 9.1 機能要件の達成
+- [ ] 全てのユニットテストがパス（カバレッジ80%以上）
+- [ ] 要件2.3の全項目を満たす
+- [ ] パフォーマンス目標の達成
+
+### 9.2 品質基準
+- [ ] コードレビューの完了
+- [ ] ドキュメントの完備
+- [ ] パフォーマンステストの合格
+
+## 10. まとめ
+
+本実装計画は、Pythonサンプルコードの差分計算アルゴリズムを基に、既存のForex_procrssorプロジェクトの仕様と完全に整合する形でRCI計算エンジンを実装します。
+
+### 主要な特徴
+- **高速性**: O(n)の差分更新による高速計算
+- **効率性**: Float32精度による メモリ使用量50%削減
+- **拡張性**: 3〜200期間の任意設定に対応
+- **統合性**: 既存のPolarsパイプラインとシームレスに統合
+
+### 次のステップ
+1. 本計画書のレビューと承認
+2. Phase 1の基礎実装開始
+3. 継続的なテストとフィードバック
+
+---
+
+*作成日: 2025年8月25日*  
+*対象タスク: task9 - RCI計算エンジンの高速実装*  
+*参考実装: rci_differential.py*
