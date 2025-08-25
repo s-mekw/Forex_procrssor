@@ -387,6 +387,332 @@ class TestRCICalculatorEngine:
         for rci in rci_values:
             assert abs(rci) < 1.0  # ほぼ0
 
+    def test_auto_mode_selection(self):
+        """自動モード選択のテスト"""
+        # 小規模データ（AUTO_MODE_THRESHOLD未満）
+        small_df = self.test_df.head(30000)
+        result = self.engine.calculate_multiple(
+            small_df,
+            periods=[9, 13],
+            mode='auto'
+        )
+        
+        # 自動モード選択が実行されたことを確認
+        assert self.engine._statistics['auto_mode_selections'] > 0
+        
+        # 結果が正しく計算されていることを確認
+        assert 'rci_9' in result.columns
+        assert 'rci_13' in result.columns
+        
+        # 大規模データ（AUTO_MODE_THRESHOLD以上）
+        self.engine.reset()
+        large_df = pl.DataFrame({
+            'close': np.random.randn(60000).cumsum() + 100
+        })
+        
+        result = self.engine.calculate_multiple(
+            large_df,
+            periods=[9, 13, 24],
+            mode='auto'
+        )
+        
+        # 自動モード選択が実行されたことを確認
+        assert self.engine._statistics['auto_mode_selections'] == 1
+        assert len(result) == 60000
+    
+    def test_chunked_batch_processing(self):
+        """チャンク処理のテスト"""
+        # チャンクサイズを小さく設定してテスト
+        engine = RCICalculatorEngine(chunk_size=10000)
+        
+        # チャンク処理が必要な大規模データ
+        large_df = pl.DataFrame({
+            'close': np.random.randn(50000).cumsum() + 100
+        })
+        
+        result = engine.calculate_multiple(
+            large_df,
+            periods=[9, 13],
+            mode='batch'
+        )
+        
+        # チャンク処理が実行されたことを確認
+        assert engine._statistics['chunked_calculations'] > 0
+        
+        # 結果の整合性確認
+        assert len(result) == 50000
+        assert 'rci_9' in result.columns
+        assert 'rci_13' in result.columns
+        
+        # RCI値が正しく計算されていることを確認
+        rci_9_values = result['rci_9'].drop_nulls()
+        assert len(rci_9_values) == 50000 - 8  # 最初の8個はNone
+        assert rci_9_values.min() >= -100
+        assert rci_9_values.max() <= 100
+    
+    def test_parallel_calculation(self):
+        """並列計算のテスト"""
+        periods = [9, 13, 24, 33, 48]  # 複数期間
+        
+        # タイマーで処理時間を測定
+        import time
+        start_time = time.time()
+        
+        result = self.engine.calculate_multiple(
+            self.test_df,
+            periods=periods,
+            mode='batch'
+        )
+        
+        parallel_time = time.time() - start_time
+        
+        # 並列計算が実行されたことを確認（_calculate_rci_parallelが呼ばれる）
+        # 結果の確認
+        for period in periods:
+            assert f'rci_{period}' in result.columns
+        
+        print(f"\nParallel calculation time for {len(periods)} periods: {parallel_time:.2f}s")
+    
+    def test_incremental_update(self):
+        """増分更新（リアルタイム処理）のテスト"""
+        # 初期データでストリーミング計算
+        initial_data = self.test_df.head(50)
+        result = self.engine.calculate_multiple(
+            initial_data,
+            periods=[9, 13],
+            mode='streaming'
+        )
+        
+        # 増分更新のテスト
+        new_prices = [101.5, 102.0, 102.5, 103.0]
+        for price in new_prices:
+            rci_values = self.engine.add_incremental(price, periods=[9, 13])
+            
+            # 返り値の確認
+            assert 9 in rci_values
+            assert 13 in rci_values
+            
+            # 計算器が準備完了状態の場合、RCI値が返される
+            if self.engine.calculators[9].is_ready:
+                assert rci_values[9] is not None
+                assert -100 <= rci_values[9] <= 100
+    
+    def test_get_latest_rci_values(self):
+        """最新RCI値取得のテスト"""
+        # データを流して計算器を準備
+        self.engine.calculate_multiple(
+            self.test_df.head(50),
+            periods=[9, 13],
+            mode='streaming'
+        )
+        
+        # 最新値の取得
+        latest_values = self.engine.get_latest_rci_values()
+        
+        assert 9 in latest_values
+        assert 13 in latest_values
+        
+        # 特定期間のみ取得
+        specific_values = self.engine.get_latest_rci_values(periods=[9])
+        assert 9 in specific_values
+        assert 13 not in specific_values
+    
+    def test_memory_management(self):
+        """メモリ管理機能のテスト"""
+        # メモリ使用量の監視
+        memory_usage = self.engine._monitor_memory_usage()
+        assert isinstance(memory_usage, float)
+        assert 0 <= memory_usage <= 100
+        
+        # チャンクサイズの動的調整
+        original_chunk_size = self.engine.chunk_size
+        
+        # 高メモリ使用時のシミュレーション
+        new_size = self.engine._adjust_chunk_size_dynamically(85.0)
+        assert new_size < original_chunk_size
+        
+        # 低メモリ使用時のシミュレーション
+        self.engine.chunk_size = 10000
+        new_size = self.engine._adjust_chunk_size_dynamically(20.0)
+        assert new_size > 10000
+    
+    def test_large_scale_with_auto_mode(self):
+        """大規模データでの自動モードテスト"""
+        # 10万行のテストデータ
+        n = 100_000
+        large_df = pl.DataFrame({
+            'close': np.random.randn(n).cumsum() + 100,
+            'volume': np.random.randint(1000, 10000, n)
+        })
+        
+        # 自動モードで実行
+        result = self.engine.calculate_multiple(
+            large_df,
+            periods=[9, 13, 24],
+            mode='auto'
+        )
+        
+        # 結果の確認
+        assert len(result) == n
+        for period in [9, 13, 24]:
+            assert f'rci_{period}' in result.columns
+            
+            # null以外の値の数を確認
+            non_null_count = result[f'rci_{period}'].drop_nulls().len()
+            assert non_null_count == n - period + 1
+        
+        # 統計情報の確認
+        stats = self.engine.get_statistics()
+        assert stats['auto_mode_selections'] > 0
+        print(f"\nLarge scale test statistics: {stats}")
+    
+    def test_mode_consistency(self):
+        """異なるモード間の結果一致性テスト"""
+        periods = [9, 13]
+        test_data = self.test_df.head(1000)
+        
+        # バッチモード（通常）
+        self.engine.reset()
+        result_batch = self.engine.calculate_multiple(
+            test_data,
+            periods=periods,
+            mode='batch'
+        )
+        
+        # バッチモード（チャンク処理）
+        engine_chunked = RCICalculatorEngine(chunk_size=200)
+        result_chunked = engine_chunked.calculate_multiple(
+            test_data,
+            periods=periods,
+            mode='batch'  # チャンク処理が自動で適用される
+        )
+        
+        # ストリーミングモード
+        self.engine.reset()
+        result_streaming = self.engine.calculate_multiple(
+            test_data,
+            periods=periods,
+            mode='streaming'
+        )
+        
+        # 結果の一致性を確認（浮動小数点誤差を考慮）
+        for period in periods:
+            batch_values = result_batch[f'rci_{period}'].to_numpy()
+            chunked_values = result_chunked[f'rci_{period}'].to_numpy()
+            streaming_values = result_streaming[f'rci_{period}'].to_numpy()
+            
+            # NaN値のマスク
+            valid_mask = ~np.isnan(batch_values)
+            
+            # 値の一致を確認
+            np.testing.assert_allclose(
+                batch_values[valid_mask],
+                chunked_values[valid_mask],
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=f"Batch vs Chunked mismatch for period {period}"
+            )
+            
+            np.testing.assert_allclose(
+                batch_values[valid_mask],
+                streaming_values[valid_mask],
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=f"Batch vs Streaming mismatch for period {period}"
+            )
+
+
+class TestRCICalculatorEngineAdvancedPerformance:
+    """高度なパフォーマンステスト"""
+    
+    def test_parallel_vs_sequential_performance(self):
+        """並列処理と逐次処理のパフォーマンス比較"""
+        engine = RCICalculatorEngine()
+        
+        # テストデータ
+        n = 50000
+        data = pl.DataFrame({
+            'close': np.random.randn(n).cumsum() + 100
+        })
+        periods = [9, 13, 24, 33, 48]
+        
+        import time
+        
+        # 並列処理のタイミング
+        start = time.time()
+        prices = data['close'].to_numpy()
+        parallel_results = engine._calculate_rci_parallel(prices, periods)
+        parallel_time = time.time() - start
+        
+        # 逐次処理のタイミング
+        start = time.time()
+        sequential_results = {}
+        for period in periods:
+            sequential_results[period] = engine._calculate_rci_batch(prices, period)
+        sequential_time = time.time() - start
+        
+        # パフォーマンス改善の確認
+        speedup = sequential_time / parallel_time
+        print(f"\n並列処理のスピードアップ: {speedup:.2f}x")
+        print(f"逐次処理時間: {sequential_time:.2f}秒")
+        print(f"並列処理時間: {parallel_time:.2f}秒")
+        
+        # 結果の一致性確認
+        for period in periods:
+            parallel_vals = parallel_results[period]
+            sequential_vals = sequential_results[period]
+            
+            # None以外の値を比較
+            for i, (p, s) in enumerate(zip(parallel_vals, sequential_vals)):
+                if p is not None and s is not None:
+                    assert abs(p - s) < 1e-5, f"Mismatch at index {i} for period {period}"
+    
+    def test_memory_efficiency_large_scale(self):
+        """大規模データでのメモリ効率テスト"""
+        import psutil
+        import gc
+        
+        engine = RCICalculatorEngine(chunk_size=50000)
+        
+        # 初期メモリ使用量
+        gc.collect()
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # 50万行のデータ処理
+        n = 500_000
+        large_data = pl.DataFrame({
+            'close': np.random.randn(n).cumsum() + 100
+        })
+        
+        # チャンク処理で実行
+        result = engine.calculate_multiple(
+            large_data,
+            periods=[9, 13, 24],
+            mode='batch'
+        )
+        
+        # 処理後のメモリ使用量
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_increase = final_memory - initial_memory
+        
+        print(f"\n大規模データ処理のメモリ使用量:")
+        print(f"  データサイズ: {n:,} 行")
+        print(f"  初期メモリ: {initial_memory:.2f} MB")
+        print(f"  最終メモリ: {final_memory:.2f} MB")
+        print(f"  増加量: {memory_increase:.2f} MB")
+        
+        # メモリ増加が妥当な範囲内であることを確認
+        # 500K行のデータで500MB以内の増加を期待
+        assert memory_increase < 500, f"Memory increase too large: {memory_increase:.2f} MB"
+        
+        # 結果の妥当性確認
+        assert len(result) == n
+        assert 'rci_9' in result.columns
+        
+        # チャンク処理が使用されたことを確認
+        assert engine._statistics['chunked_calculations'] > 0
+
 
 class TestRCICalculatorEnginePerformance:
     """パフォーマンステスト"""

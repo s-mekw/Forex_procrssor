@@ -6,12 +6,15 @@ Float32精度による メモリ効率化と、O(n)の計算複雑度を実現�
 """
 
 from collections import deque
-from typing import Optional, List, Dict, Any, Literal, Tuple
+from typing import Optional, List, Dict, Any, Literal, Tuple, Union
 import numpy as np
 import polars as pl
 import logging
 import hashlib
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import psutil
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -379,17 +382,30 @@ class RCICalculatorEngine:
     DEFAULT_PERIODS = [9, 13, 24, 33, 48, 66, 108]
     MIN_PERIOD = 3
     MAX_PERIOD = 200
+    DEFAULT_CHUNK_SIZE = 100_000  # デフォルトチャンクサイズ
+    AUTO_MODE_THRESHOLD = 50_000  # 自動モード切り替え閾値
+    MAX_PARALLEL_WORKERS = 4  # 並列処理の最大ワーカー数
     
-    def __init__(self):
-        """エンジンを初期化"""
+    def __init__(self, chunk_size: Optional[int] = None):
+        """エンジンを初期化
+        
+        Args:
+            chunk_size: バッチ処理時のチャンクサイズ（デフォルト: 100,000行）
+        """
         self.calculators: Dict[int, DifferentialRCICalculator] = {}
+        self.chunk_size = chunk_size or self.DEFAULT_CHUNK_SIZE
         self._statistics = {
             'batch_calculations': 0,
             'streaming_calculations': 0,
             'total_periods_calculated': 0,
-            'validation_errors': 0
+            'validation_errors': 0,
+            'chunked_calculations': 0,
+            'parallel_calculations': 0,
+            'auto_mode_selections': 0
         }
-        logger.info("RCICalculatorEngine initialized")
+        # メモリ監視用
+        self._process = psutil.Process(os.getpid())
+        logger.info(f"RCICalculatorEngine initialized with chunk_size={self.chunk_size}")
     
     def validate_periods(self, periods: List[int]) -> List[int]:
         """期間パラメータのバリデーション
@@ -443,7 +459,7 @@ class RCICalculatorEngine:
         data: pl.DataFrame,
         periods: Optional[List[int]] = None,
         column_name: str = 'close',
-        mode: Literal['batch', 'streaming'] = 'batch',
+        mode: Literal['batch', 'streaming', 'auto'] = 'auto',
         add_reliability: bool = True
     ) -> pl.DataFrame:
         """複数期間のRCI計算（メインインターフェース）
@@ -481,15 +497,26 @@ class RCICalculatorEngine:
                 f"but maximum period {max_period} requires at least {max_period} rows"
             )
         
+        # モードの自動選択
+        if mode == 'auto':
+            mode = self._determine_best_mode(data_length, len(periods))
+            self._statistics['auto_mode_selections'] += 1
+            logger.info(f"Auto mode selected: {mode} for {data_length} rows")
+        
         # モードに応じた処理
         if mode == 'batch':
-            result = self._process_batch(data, periods, column_name)
-            self._statistics['batch_calculations'] += 1
+            # 大規模データの場合はチャンク処理を使用
+            if data_length > self.chunk_size:
+                result = self._process_batch_chunked(data, periods, column_name)
+                self._statistics['chunked_calculations'] += 1
+            else:
+                result = self._process_batch(data, periods, column_name)
+                self._statistics['batch_calculations'] += 1
         elif mode == 'streaming':
             result = self._process_streaming(data, periods, column_name)
             self._statistics['streaming_calculations'] += 1
         else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'batch' or 'streaming'")
+            raise ValueError(f"Invalid mode: {mode}. Must be 'batch', 'streaming', or 'auto'")
         
         # 信頼性フラグの追加
         if add_reliability:
@@ -696,6 +723,258 @@ class RCICalculatorEngine:
             'batch_calculations': 0,
             'streaming_calculations': 0,
             'total_periods_calculated': 0,
-            'validation_errors': 0
+            'validation_errors': 0,
+            'chunked_calculations': 0,
+            'parallel_calculations': 0,
+            'auto_mode_selections': 0
         }
         logger.info("RCICalculatorEngine reset")
+
+    def _determine_best_mode(self, data_length: int, num_periods: int) -> str:
+        """データサイズと期間数に基づいて最適なモードを決定
+        
+        Args:
+            data_length: データの行数
+            num_periods: 計算する期間の数
+            
+        Returns:
+            'batch' または 'streaming'
+        """
+        # メモリ使用量をチェック
+        memory_usage = self._monitor_memory_usage()
+        
+        # 決定ロジック
+        if data_length < self.AUTO_MODE_THRESHOLD:
+            # 小規模データはストリーミングが効率的
+            return 'streaming'
+        elif memory_usage > 70:
+            # メモリ使用率が高い場合はチャンク処理を伴うバッチ
+            return 'batch'
+        elif num_periods > 5:
+            # 多数の期間を計算する場合はバッチ（並列処理可能）
+            return 'batch'
+        else:
+            # デフォルトはバッチ
+            return 'batch'
+    
+    def _process_batch_chunked(
+        self,
+        data: pl.DataFrame,
+        periods: List[int],
+        column_name: str,
+        chunk_size: Optional[int] = None
+    ) -> pl.DataFrame:
+        """チャンク処理による大規模データ対応バッチ処理
+        
+        Args:
+            data: 入力データフレーム
+            periods: 計算する期間リスト
+            column_name: 価格データのカラム名
+            chunk_size: カスタムチャンクサイズ
+            
+        Returns:
+            RCI値が追加されたDataFrame
+        """
+        chunk_size = chunk_size or self.chunk_size
+        n_rows = len(data)
+        n_chunks = (n_rows + chunk_size - 1) // chunk_size
+        
+        logger.info(
+            f"Processing {n_rows:,} rows in {n_chunks} chunks of {chunk_size:,} rows"
+        )
+        
+        # 結果を格納する辞書
+        all_rci_values = {period: [] for period in periods}
+        
+        # チャンクごとに処理
+        for chunk_idx in range(n_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, n_rows)
+            
+            # 各期間のウィンドウサイズを考慮してオーバーラップを追加
+            max_period = max(periods)
+            overlap_start = max(0, start_idx - max_period + 1)
+            
+            # チャンクデータを取得（オーバーラップ含む）
+            chunk_data = data[overlap_start:end_idx]
+            
+            # チャンクでRCI計算（並列処理）
+            chunk_rci = self._calculate_rci_parallel(
+                chunk_data[column_name].to_numpy(),
+                periods
+            )
+            
+            # オーバーラップ部分を除いて結果を保存
+            skip_count = start_idx - overlap_start if chunk_idx > 0 else 0
+            for period in periods:
+                values = chunk_rci[period][skip_count:]
+                all_rci_values[period].extend(values)
+            
+            # メモリ使用量をチェックして必要に応じて調整
+            if chunk_idx % 5 == 0:  # 5チャンクごとにチェック
+                memory_usage = self._monitor_memory_usage()
+                if memory_usage > 80:
+                    chunk_size = self._adjust_chunk_size_dynamically(memory_usage)
+                    logger.warning(f"Adjusted chunk size to {chunk_size:,} due to memory pressure")
+            
+            # 進捗ログ
+            if chunk_idx % 10 == 0 or chunk_idx == n_chunks - 1:
+                logger.debug(
+                    f"Processed chunk {chunk_idx + 1}/{n_chunks} "
+                    f"({(chunk_idx + 1) * 100 // n_chunks}%)"
+                )
+        
+        # 結果をDataFrameに追加
+        result = data.clone()
+        for period in periods:
+            rci_column_name = f"rci_{period}"
+            result = result.with_columns(
+                pl.Series(name=rci_column_name, values=all_rci_values[period], dtype=pl.Float32)
+            )
+        
+        return result
+    
+    def _calculate_rci_parallel(
+        self,
+        prices: np.ndarray,
+        periods: List[int]
+    ) -> Dict[int, List[Optional[float]]]:
+        """複数期間のRCIを並列計算
+        
+        Args:
+            prices: 価格配列
+            periods: 計算する期間リスト
+            
+        Returns:
+            各期間のRCI値リスト
+        """
+        results = {}
+        
+        # 並列処理を使用
+        with ThreadPoolExecutor(max_workers=min(len(periods), self.MAX_PARALLEL_WORKERS)) as executor:
+            # 各期間の計算を並列実行
+            future_to_period = {
+                executor.submit(self._calculate_rci_batch, prices, period): period
+                for period in periods
+            }
+            
+            # 結果を収集
+            for future in as_completed(future_to_period):
+                period = future_to_period[future]
+                try:
+                    rci_values = future.result()
+                    results[period] = rci_values
+                    logger.debug(f"Completed RCI calculation for period {period}")
+                except Exception as e:
+                    logger.error(f"Error calculating RCI for period {period}: {e}")
+                    results[period] = [None] * len(prices)
+        
+        self._statistics['parallel_calculations'] += 1
+        return results
+    
+    def add_incremental(
+        self,
+        price: float,
+        periods: Optional[List[int]] = None
+    ) -> Dict[int, Optional[float]]:
+        """単一価格の増分更新（リアルタイム用）
+        
+        Args:
+            price: 新しい価格値
+            periods: 計算する期間リスト（Noneの場合はDEFAULT_PERIODS）
+            
+        Returns:
+            各期間の最新RCI値
+        """
+        if periods is None:
+            periods = self.DEFAULT_PERIODS
+        periods = self.validate_periods(periods)
+        
+        results = {}
+        
+        for period in periods:
+            # 計算器が存在しない場合は作成
+            if period not in self.calculators:
+                self.calculators[period] = DifferentialRCICalculator(period)
+            
+            # 増分更新
+            rci_value = self.calculators[period].add(price)
+            results[period] = rci_value
+        
+        return results
+    
+    def get_latest_rci_values(
+        self,
+        periods: Optional[List[int]] = None
+    ) -> Dict[int, Optional[float]]:
+        """最新のRCI値を取得（リアルタイム監視用）
+        
+        Args:
+            periods: 取得する期間リスト（Noneの場合はアクティブな全期間）
+            
+        Returns:
+            各期間の最新RCI値
+        """
+        if periods is None:
+            periods = list(self.calculators.keys())
+        
+        results = {}
+        for period in periods:
+            if period in self.calculators:
+                results[period] = self.calculators[period].last_rci
+            else:
+                results[period] = None
+        
+        return results
+    
+    def _monitor_memory_usage(self) -> float:
+        """メモリ使用量を監視
+        
+        Returns:
+            メモリ使用率（パーセント）
+        """
+        try:
+            memory_info = self._process.memory_info()
+            memory_percent = self._process.memory_percent()
+            
+            # 詳細ログ（デバッグ用）
+            logger.debug(
+                f"Memory usage: {memory_info.rss / 1024 / 1024:.2f} MB "
+                f"({memory_percent:.1f}%)"
+            )
+            
+            return memory_percent
+        except Exception as e:
+            logger.warning(f"Failed to get memory usage: {e}")
+            return 0.0
+    
+    def _adjust_chunk_size_dynamically(self, current_memory: float) -> int:
+        """メモリ使用量に基づいてチャンクサイズを動的調整
+        
+        Args:
+            current_memory: 現在のメモリ使用率（パーセント）
+            
+        Returns:
+            調整後のチャンクサイズ
+        """
+        if current_memory > 80:
+            # メモリ使用率が80%以上：チャンクサイズを半分に
+            new_size = max(1000, self.chunk_size // 2)
+        elif current_memory > 60:
+            # メモリ使用率が60-80%：チャンクサイズを75%に
+            new_size = max(1000, int(self.chunk_size * 0.75))
+        elif current_memory < 30:
+            # メモリ使用率が30%未満：チャンクサイズを1.5倍に
+            new_size = min(1_000_000, int(self.chunk_size * 1.5))
+        else:
+            # そのまま
+            new_size = self.chunk_size
+        
+        if new_size != self.chunk_size:
+            logger.info(
+                f"Adjusting chunk size: {self.chunk_size:,} -> {new_size:,} "
+                f"(Memory usage: {current_memory:.1f}%)"
+            )
+            self.chunk_size = new_size
+        
+        return new_size

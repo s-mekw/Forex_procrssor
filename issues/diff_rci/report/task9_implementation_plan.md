@@ -171,7 +171,7 @@ src/
   - パフォーマンステスト
 
 ### Phase 2: エンジン実装（2日）
-- [ ] Step 2.1: RCICalculatorEngineクラスの実装
+- [X] Step 2.1: RCICalculatorEngineクラスの実装
   - 複数期間の並列計算
   - バリデーションロジック
   - エラーハンドリング
