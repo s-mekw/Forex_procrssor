@@ -196,21 +196,26 @@ class RCIRealtimeChart:
             # calculator をリセット（初期化時のみ）
             self.rci_calculators[period].reset()
             
-            # 価格データを順次追加してRCI計算
-            for price in close_prices:
+            # 最後のバーを除いて価格データを追加（最後は未完成バー）
+            # MT5から取得した最新バーは現在進行中のバー
+            for i, price in enumerate(close_prices[:-1]):
                 rci_value = self.rci_calculators[period].add(float(price))
                 # None（ウィンドウが満たない）または実際のRCI値を保存
                 self.rci_data[period].append(rci_value)
             
-            # 最後の有効なRCI値を統計情報に保存
-            if self.rci_data[period]:
-                last_value = self.rci_data[period][-1]
-                if last_value is not None:
-                    self.stats["rci_values"][period] = last_value
+            # 最後のバー（未完成バー）のRCIをpreviewで計算
+            if len(close_prices) > 0:
+                last_price = float(close_prices[-1])
+                preview_rci = self.rci_calculators[period].preview(last_price)
+                self.rci_data[period].append(preview_rci)
+                
+                if preview_rci is not None:
+                    self.stats["rci_values"][period] = preview_rci
+                    self.temp_rci_values[period] = preview_rci
             
             # デバッグ情報（必要に応じてコメントアウト）
-            # print(f"Period {period}: Initialized with {len(close_prices)} prices, "
-            #       f"RCI values count: {len(self.rci_data[period])}")
+            # print(f"Period {period}: Initialized with {len(close_prices)-1} complete bars, "
+            #       f"1 incomplete bar, RCI values: {len(self.rci_data[period])}")
     
     def tick_receiver_thread(self):
         """ティック受信スレッド"""
@@ -283,9 +288,20 @@ class RCIRealtimeChart:
             "volume": [np.float32(bar.volume)]
         })
         
-        self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+        # OHLCデータの最後が未完成バーの場合、それを完成バーで置き換え
+        # （初回以降のバー完成時）
+        if len(self.ohlc_data) > 0:
+            last_time = self.ohlc_data["time"][-1]
+            if last_time == bar.time:
+                # 同じ時刻のバーなら、未完成バーを完成バーで置き換え
+                self.ohlc_data = pl.concat([self.ohlc_data[:-1], new_row])
+            else:
+                # 新しい時刻のバーなら追加
+                self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+        else:
+            self.ohlc_data = new_row
         
-        # RCI増分更新（新しいバーのcloseだけをcalculatorに追加）
+        # RCI増分更新（完成バーのcloseをcalculatorに追加）
         new_close = float(bar.close)
         for period in self.config.all_rci_periods:
             # 新しい価格をcalculatorに追加してRCI計算
@@ -295,14 +311,20 @@ class RCIRealtimeChart:
             if period not in self.rci_data:
                 self.rci_data[period] = []
             
-            # 新しいRCI値を追加
-            self.rci_data[period].append(rci_value)
+            # 最後の値がpreview値（未完成バー）の場合、それを正式な値で置き換え
+            # そうでない場合は新しい値を追加
+            if len(self.rci_data[period]) > 0 and len(self.ohlc_data) > 0:
+                # 最後のRCI値を正式な値で更新（未完成バー→完成バー）
+                self.rci_data[period][-1] = rci_value
+            else:
+                # 新しいRCI値を追加
+                self.rci_data[period].append(rci_value)
             
             # 統計情報を更新
             if rci_value is not None:
                 self.stats["rci_values"][period] = rci_value
                 # デバッグ情報（コメントアウト可能）
-                # print(f"New bar - Period {period}: RCI={rci_value:.2f}, "
+                # print(f"Bar completed - Period {period}: RCI={rci_value:.2f}, "
                 #       f"Close={new_close:.5f}, Total bars: {len(self.ohlc_data)}")
         
         # メモリ管理
@@ -560,7 +582,6 @@ class RCIRealtimeChart:
                         mode='lines',
                         name=f'RCI {period}',
                         line=dict(color=color, width=1.5),
-                        line_shape='spline'  # 曲線を滑らかに
                     ),
                     row=2, col=1
                 )
@@ -580,7 +601,6 @@ class RCIRealtimeChart:
                         mode='lines',
                         name=f'RCI {period}',
                         line=dict(color=color, width=1.5),
-                        line_shape='spline'  # 曲線を滑らかに
                     ),
                     row=3, col=1
                 )

@@ -336,8 +336,8 @@ class DifferentialRCICalculator:
     def preview(self, temp_price: float) -> Optional[float]:
         """未完成バーの一時的なRCI値を計算（内部状態は変更しない）
         
-        リアルタイム表示用に、現在のウィンドウの最後の値を仮想的に
-        temp_priceで置き換えてRCIを計算します。
+        リアルタイム表示用に、未完成バーの価格でRCIを計算します。
+        ウィンドウがフルの場合は、最古のバーを削除して未完成バーを追加。
         内部のself.pricesは変更されません。
         
         Args:
@@ -354,8 +354,9 @@ class DifferentialRCICalculator:
             # ちょうど1つ足りない場合、temp_priceを追加して計算
             temp_prices = list(self.prices) + [temp_price]
         else:
-            # ウィンドウがフルの場合、最後の値をtemp_priceで置き換え
-            temp_prices = list(self.prices)[:-1] + [temp_price]
+            # ウィンドウがフルの場合、最古の値を削除してtemp_priceを追加
+            # これにより、最新のperiod個の価格でRCIを計算
+            temp_prices = list(self.prices)[1:] + [temp_price]
         
         # 一時的な価格配列でRCI計算
         prices_array = np.array(temp_prices, dtype=np.float32)
