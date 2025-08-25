@@ -187,7 +187,7 @@ src/
   - LazyFrame対応
   - 最適化されたグループ処理
 
-- [ ] Step 3.2: 既存processor.pyとの統合
+- [X] Step 3.2: 既存processor.pyとの統合
   - PolarsProcessingEngineへの組み込み
   - パイプライン統合テスト
 

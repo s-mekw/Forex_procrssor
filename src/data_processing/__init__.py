@@ -14,6 +14,8 @@ from .rci import (
     InvalidPeriodError,
     InsufficientDataError
 )
+from .pipeline import IndicatorPipeline
+from .indicators import TechnicalIndicatorEngine
 
 __all__ = [
     "PolarsProcessingEngine",
@@ -22,5 +24,7 @@ __all__ = [
     "RCIProcessor",
     "RCICalculationError",
     "InvalidPeriodError",
-    "InsufficientDataError"
+    "InsufficientDataError",
+    "IndicatorPipeline",
+    "TechnicalIndicatorEngine"
 ]
