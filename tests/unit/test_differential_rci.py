@@ -240,6 +240,171 @@ def test_performance_benchmark():
     assert elapsed / len(prices) < 0.0001  # 0.1ms
 
 
+class TestRankingOptimizations:
+    """ランキング最適化のテストクラス"""
+    
+    def test_numpy_ranking_with_ties(self):
+        """NumPyベースの同値対応ランキングのテスト"""
+        calc = DifferentialRCICalculator(period=5)
+        
+        # 同値を含む価格配列
+        prices = np.array([100, 101, 100, 102, 101], dtype=np.float32)
+        
+        ranks = calc._numpy_ranking_with_ties(prices)
+        
+        # 期待される順位（0ベース）
+        # 100: (0+2)/2 = 1.0 (2つの100)
+        # 101: (1+4)/2 = 2.5 (2つの101)
+        # 102: 4 (1つの102)
+        expected = np.array([0.5, 2.5, 0.5, 4, 2.5], dtype=np.float32)
+        
+        np.testing.assert_array_almost_equal(ranks, expected, decimal=5)
+    
+    def test_fast_ranking_no_ties(self):
+        """同値なしの高速ランキングのテスト"""
+        calc = DifferentialRCICalculator(period=5)
+        
+        # 全て異なる価格
+        prices = np.array([100.1, 100.5, 99.8, 101.2, 100.3], dtype=np.float32)
+        
+        ranks = calc._fast_ranking_no_ties(prices)
+        
+        # 正しい順位が割り当てられているか確認
+        sorted_indices = np.argsort(prices)
+        expected = np.empty_like(sorted_indices, dtype=np.float32)
+        expected[sorted_indices] = np.arange(len(prices), dtype=np.float32)
+        
+        np.testing.assert_array_almost_equal(ranks, expected, decimal=5)
+    
+    def test_check_for_ties(self):
+        """同値チェック機能のテスト"""
+        calc = DifferentialRCICalculator(period=5)
+        
+        # 同値あり
+        prices_with_ties = np.array([100, 101, 100, 102], dtype=np.float32)
+        assert calc._check_for_ties(prices_with_ties) == True
+        
+        # 同値なし
+        prices_no_ties = np.array([100.1, 100.2, 100.3, 100.4], dtype=np.float32)
+        assert calc._check_for_ties(prices_no_ties) == False
+    
+    def test_cached_ranking(self):
+        """キャッシュ付きランキングのテスト"""
+        calc = DifferentialRCICalculator(period=5)
+        
+        # 同じ価格パターンを複数回計算
+        prices = np.array([100, 101, 102, 103, 104], dtype=np.float32)
+        
+        # 初回はキャッシュミス
+        result1 = calc._cached_ranking(prices)
+        assert calc._cache_misses == 1
+        assert calc._cache_hits == 0
+        
+        # 2回目はキャッシュヒット
+        result2 = calc._cached_ranking(prices)
+        assert calc._cache_hits == 1
+        
+        # 結果が同じことを確認
+        np.testing.assert_array_equal(result1, result2)
+    
+    def test_cache_size_limit(self):
+        """キャッシュサイズ制限のテスト"""
+        calc = DifferentialRCICalculator(period=3)
+        calc._max_cache_size = 3  # 小さなキャッシュサイズに設定
+        
+        # 異なるパターンを追加
+        patterns = [
+            np.array([100, 101, 102], dtype=np.float32),
+            np.array([101, 102, 103], dtype=np.float32),
+            np.array([102, 103, 104], dtype=np.float32),
+            np.array([103, 104, 105], dtype=np.float32),  # これで上限を超える
+        ]
+        
+        for pattern in patterns:
+            calc._cached_ranking(pattern)
+        
+        # キャッシュサイズが上限を超えないことを確認
+        assert len(calc._ranking_cache) <= calc._max_cache_size
+        
+        # 最初のパターンがキャッシュから削除されていることを確認
+        first_hash = calc._get_price_hash(patterns[0])
+        assert first_hash not in calc._ranking_cache
+
+
+def benchmark_ranking_methods():
+    """各ランキング手法のベンチマーク比較"""
+    import time
+    
+    calc = DifferentialRCICalculator(period=100)
+    n_iterations = 1000
+    
+    # テストデータ準備
+    np.random.seed(42)
+    
+    # 同値なしのデータ
+    prices_no_ties = np.random.randn(100).astype(np.float32) * 10 + 100
+    
+    # 同値ありのデータ（一部を同じ値に）
+    prices_with_ties = prices_no_ties.copy()
+    prices_with_ties[10:15] = prices_with_ties[10]  # 5つの同値
+    prices_with_ties[30:33] = prices_with_ties[30]  # 3つの同値
+    
+    results = {}
+    
+    # 1. 高速ランキング（同値なし）
+    start = time.time()
+    for _ in range(n_iterations):
+        calc._fast_ranking_no_ties(prices_no_ties)
+    results['fast_no_ties'] = time.time() - start
+    
+    # 2. NumPy同値対応ランキング
+    start = time.time()
+    for _ in range(n_iterations):
+        calc._numpy_ranking_with_ties(prices_with_ties)
+    results['numpy_with_ties'] = time.time() - start
+    
+    # 3. キャッシュ付きランキング（初回）
+    calc.reset()  # キャッシュをクリア
+    start = time.time()
+    for _ in range(n_iterations):
+        calc._cached_ranking(prices_no_ties)
+    results['cached_first'] = time.time() - start
+    
+    # 4. キャッシュ付きランキング（キャッシュヒット）
+    # 同じデータで再実行（キャッシュヒット）
+    start = time.time()
+    for _ in range(n_iterations):
+        calc._cached_ranking(prices_no_ties)
+    results['cached_hit'] = time.time() - start
+    
+    # 結果表示
+    print("\n" + "="*60)
+    print("Ranking Method Benchmark Results")
+    print("="*60)
+    print(f"Iterations: {n_iterations}, Period: 100")
+    print("-"*60)
+    
+    for method, elapsed in results.items():
+        avg_ms = (elapsed / n_iterations) * 1000
+        print(f"{method:<20}: {avg_ms:.4f} ms/call")
+    
+    print("-"*60)
+    
+    # キャッシュ統計
+    state = calc.get_buffer_state()
+    cache_stats = state['cache_stats']
+    print(f"\nCache Statistics:")
+    print(f"  Cache hits: {cache_stats['cache_hits']}")
+    print(f"  Cache misses: {cache_stats['cache_misses']}")
+    print(f"  Hit rate: {cache_stats['cache_hit_rate']:.2%}")
+    print(f"  Cache size: {cache_stats['cache_size']}/{cache_stats['max_cache_size']}")
+    
+    # パフォーマンス目標の確認
+    assert results['fast_no_ties'] < results['numpy_with_ties']
+    assert results['cached_hit'] < results['cached_first']
+    print("\n✓ All performance targets met!")
+
+
 if __name__ == "__main__":
     # 基本的なテスト実行
     test = TestDifferentialRCICalculator()
@@ -260,9 +425,32 @@ if __name__ == "__main__":
     test.test_float32_precision()
     print("✓ Float32 precision test passed")
     
+    # 最適化テスト
+    print("\nRunning optimization tests...")
+    opt_test = TestRankingOptimizations()
+    
+    opt_test.test_numpy_ranking_with_ties()
+    print("✓ NumPy ranking with ties test passed")
+    
+    opt_test.test_fast_ranking_no_ties()
+    print("✓ Fast ranking test passed")
+    
+    opt_test.test_check_for_ties()
+    print("✓ Tie detection test passed")
+    
+    opt_test.test_cached_ranking()
+    print("✓ Cached ranking test passed")
+    
+    opt_test.test_cache_size_limit()
+    print("✓ Cache size limit test passed")
+    
     # パフォーマンステスト
     print("\nRunning performance benchmark...")
     test_performance_benchmark()
     print("✓ Performance benchmark passed")
+    
+    # ランキング手法のベンチマーク
+    print("\nRunning ranking methods benchmark...")
+    benchmark_ranking_methods()
     
     print("\nAll tests passed successfully!")
