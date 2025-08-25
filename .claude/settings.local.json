@@ -1,4 +1,7 @@
 {
+  "env": {
+    "MAX_THINKING_TOKENS": "31999"
+  },
   "permissions": {
     "allow": [
       "mcp__serena__list_dir",
@@ -39,7 +42,7 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "Explanatory",
+  "outputStyle": "default",
   "comment": "Claude Code Settings - Simplified Configuration",
   "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }
