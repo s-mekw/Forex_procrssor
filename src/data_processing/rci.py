@@ -333,6 +333,48 @@ class DifferentialRCICalculator:
         """最後に計算されたRCI値を取得"""
         return self._last_rci
     
+    def preview(self, temp_price: float) -> Optional[float]:
+        """未完成バーの一時的なRCI値を計算（内部状態は変更しない）
+        
+        リアルタイム表示用に、現在のウィンドウの最後の値を仮想的に
+        temp_priceで置き換えてRCIを計算します。
+        内部のself.pricesは変更されません。
+        
+        Args:
+            temp_price: 未完成バーの現在価格
+            
+        Returns:
+            一時的なRCI値、またはウィンドウが不足の場合None
+        """
+        # ウィンドウが不足している場合
+        if len(self.prices) < self.period - 1:
+            # 価格を追加してもまだ不足する場合
+            return None
+        elif len(self.prices) == self.period - 1:
+            # ちょうど1つ足りない場合、temp_priceを追加して計算
+            temp_prices = list(self.prices) + [temp_price]
+        else:
+            # ウィンドウがフルの場合、最後の値をtemp_priceで置き換え
+            temp_prices = list(self.prices)[:-1] + [temp_price]
+        
+        # 一時的な価格配列でRCI計算
+        prices_array = np.array(temp_prices, dtype=np.float32)
+        
+        # ランキング計算（キャッシュは使用しない）
+        if self._check_for_ties(prices_array):
+            price_ranks = self._optimized_ranking(prices_array)
+        else:
+            price_ranks = self._fast_ranking_no_ties(prices_array)
+        
+        # RCI計算
+        d_squared_sum = np.sum(
+            (self.time_ranks - price_ranks) ** 2, 
+            dtype=np.float32
+        )
+        rci = (1.0 - (6.0 * d_squared_sum) / self.denominator) * 100.0
+        
+        return float(rci)
+    
     def get_buffer_state(self) -> Dict[str, Any]:
         """内部バッファの状態を取得（デバッグ用）
         
