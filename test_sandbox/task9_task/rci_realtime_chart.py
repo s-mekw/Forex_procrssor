@@ -412,30 +412,28 @@ class RCIRealtimeChart:
     
     def update_rci_incremental(self):
         """RCIを増分更新（未完成バー用の一時値を計算）"""
-        # 未完成バーを含む最新データでRCIを再計算
-        # （RCIは順位相関なので、最新データ全体で計算が必要）
+        # 未完成バーを含む全データでRCIを計算
+        # （RCIは順位相関なので、全データで計算することで連続性を保つ）
         if self.ohlc_data is None or self.ohlc_data.is_empty():
             return
         
         try:
-            # 一時的なRCI値を計算（未完成バー含む）
+            # 一時的なRCI値を全データで計算（未完成バー含む）
+            df_with_rci = self.rci_processor.apply_to_dataframe(
+                self.ohlc_data,
+                periods=self.config.all_rci_periods,
+                column_name='close',
+                add_reliability=False
+            )
+            
+            # 各期間の最後の値を一時値として保存
             for period in self.config.all_rci_periods:
-                if len(self.ohlc_data) >= period:
-                    # 最後のn期間のデータでRCIを計算
-                    recent_data = self.ohlc_data.tail(period)
-                    temp_df = self.rci_processor.apply_to_dataframe(
-                        recent_data,
-                        periods=[period],
-                        column_name='close',
-                        add_reliability=False
-                    )
-                    
-                    col_name = f"rci_{period}"
-                    if col_name in temp_df.columns:
-                        rci_values = temp_df[col_name].to_list()
-                        if rci_values and rci_values[-1] is not None:
-                            self.temp_rci_values[period] = rci_values[-1]
-                            self.stats["rci_values"][period] = rci_values[-1]
+                col_name = f"rci_{period}"
+                if col_name in df_with_rci.columns:
+                    rci_values = df_with_rci[col_name].to_list()
+                    if rci_values and rci_values[-1] is not None:
+                        self.temp_rci_values[period] = rci_values[-1]
+                        self.stats["rci_values"][period] = rci_values[-1]
         except Exception as e:
             print(f"Error updating RCI incrementally: {e}")
     
@@ -538,7 +536,8 @@ class RCIRealtimeChart:
                         y=rci_data_values,
                         mode='lines',
                         name=f'RCI {period}',
-                        line=dict(color=color, width=1.5)
+                        line=dict(color=color, width=1.5),
+                        line_shape='spline'  # 曲線を滑らかに
                     ),
                     row=2, col=1
                 )
@@ -557,7 +556,8 @@ class RCIRealtimeChart:
                         y=rci_data_values,
                         mode='lines',
                         name=f'RCI {period}',
-                        line=dict(color=color, width=1.5)
+                        line=dict(color=color, width=1.5),
+                        line_shape='spline'  # 曲線を滑らかに
                     ),
                     row=3, col=1
                 )
