@@ -201,6 +201,140 @@ src/
   - 大規模データでのパフォーマンステスト
   - メモリ使用量の測定
   - 精度検証
+  
+### Phase 5: テストカバレッジ向上（2日）
+
+#### 目標
+- **rci.py**: 現在67.00% → 85%以上
+- **全体カバレッジ**: 現在9.66% → 15%以上
+- **品質指標**: mutation testing導入によるテスト品質向上
+
+#### Step 5.1: コアロジックの追加テスト
+- [ ] 未カバーコードパスの網羅的テスト
+  - エラーハンドリングの全分岐パス
+  - 並列処理モード（batch/streaming/auto）の境界条件
+  - キャッシュ機構の有効性検証
+  - Float32/Float64精度切り替えロジック
+
+- [ ] エッジケース の拡充
+  - 極小期間（period=3）での動作
+  - 最大期間（period=200）での メモリ効率
+  - 同一値連続データでのランキング処理
+  - NaN/Inf混入データの処理
+
+#### Step 5.2: モックベースの統合テスト
+- [ ] 外部依存関係のモック化
+  ```python
+  # tests/unit/test_rci_mocked.py
+  @patch('psutil.Process')
+  def test_memory_monitoring_with_mock(mock_process):
+      """メモリ監視機能のモックテスト"""
+      mock_process.return_value.memory_info.return_value.rss = 1024 * 1024 * 100
+      # メモリ制限下での動作確認
+  
+  @patch('scipy.stats.rankdata')
+  def test_ranking_fallback(mock_rankdata):
+      """ランキング計算のフォールバック動作"""
+      mock_rankdata.side_effect = ImportError
+      # NumPyフォールバック実装の検証
+  ```
+
+- [ ] ログ出力の検証
+  - 各ログレベルでの適切な出力
+  - エラー時の詳細情報記録
+  - パフォーマンス統計の記録
+
+#### Step 5.3: プロパティベーステスト
+- [ ] hypothesis使用による数学的性質の検証
+  ```python
+  # tests/unit/test_rci_properties.py
+  from hypothesis import given, strategies as st
+  
+  @given(
+      prices=st.lists(
+          st.floats(min_value=0.01, max_value=1000000),
+          min_size=3, max_size=200
+      ),
+      period=st.integers(min_value=3, max_value=200)
+  )
+  def test_rci_range_property(prices, period):
+      """RCI値が常に-100〜100の範囲内であることを検証"""
+      if len(prices) >= period:
+          rci = calculate_rci(prices, period)
+          assert -100 <= rci <= 100
+  ```
+
+- [ ] 不変条件の検証
+  - 同一データで同一結果（決定性）
+  - 順位相関の数学的性質
+  - 差分更新の正確性
+
+#### Step 5.4: パフォーマンス回帰テスト
+- [ ] ベンチマークスイートの作成
+  ```python
+  # tests/performance/test_rci_regression.py
+  class TestRCIPerformanceRegression:
+      """パフォーマンス劣化を検出する回帰テスト"""
+      
+      BASELINE_METRICS = {
+          'single_update': 0.1,  # ms
+          'batch_10k': 1.0,      # seconds
+          'memory_10k': 100,     # MB
+      }
+      
+      def test_single_update_performance(self):
+          """単一更新のパフォーマンス基準"""
+          # 基準値からの乖離が10%以内であることを確認
+      
+      def test_batch_processing_scalability(self):
+          """バッチ処理のスケーラビリティ"""
+          # O(n)の計算量を維持していることを確認
+  ```
+
+- [ ] CI/CDパイプラインへの統合
+  - GitHub Actionsでの自動実行
+  - パフォーマンス劣化時の自動通知
+  - ベンチマーク結果の可視化
+
+#### Step 5.5: 統合テストの拡充
+- [ ] 実データを使用した End-to-End テスト
+  ```python
+  # tests/integration/test_rci_e2e.py
+  def test_full_pipeline_with_real_data():
+      """実際のFXデータでの完全パイプラインテスト"""
+      # 1. データ取得
+      # 2. RCI計算
+      # 3. 結果検証
+      # 4. パフォーマンス測定
+  ```
+
+- [ ] 他モジュールとの連携テスト
+  - processor.pyとの統合
+  - indicators.pyとの組み合わせ
+  - pipeline.pyでの使用
+
+#### Step 5.6: カバレッジ分析と改善
+- [ ] カバレッジレポートの詳細分析
+  - 未カバー行の特定と分類
+  - ブランチカバレッジの向上
+  - 条件カバレッジの測定
+
+- [ ] テスト品質メトリクスの導入
+  - Mutation Testing（mutmut使用）
+  - Cyclomatic Complexityの測定
+  - テストの保守性評価
+
+#### 実装優先順位
+1. **高優先度**: Step 5.1（コアロジックのテスト）
+2. **中優先度**: Step 5.3（プロパティベーステスト）、Step 5.5（統合テスト）
+3. **低優先度**: Step 5.2（モックテスト）、Step 5.4（回帰テスト）
+
+#### 成功基準
+- [ ] rci.pyのカバレッジ85%以上達成
+- [ ] 全エッジケースのテスト完了
+- [ ] パフォーマンス回帰テストの自動化
+- [ ] mutation scoreが80%以上
+- [ ] CI/CDパイプラインでの全テスト通過
 
 ## 5. インターフェース設計
 
