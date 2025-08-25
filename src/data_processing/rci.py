@@ -978,3 +978,324 @@ class RCICalculatorEngine:
             self.chunk_size = new_size
         
         return new_size
+
+
+class RCIProcessor:
+    """Polars Expression統合用ラッパークラス
+    
+    RCI計算をPolars Expressionとして提供し、
+    DataFrameやLazyFrameとシームレスに統合できるようにします。
+    
+    Attributes:
+        engine (RCICalculatorEngine): 内部で使用するRCI計算エンジン
+        use_float32 (bool): Float32精度を使用するかどうか
+        
+    Methods:
+        create_rci_expression: Polars ExpressionとしてRCI計算を定義
+        apply_to_dataframe: DataFrameに直接RCI計算を適用
+        apply_to_lazyframe: LazyFrameにRCI計算を適用（遅延評価）
+        apply_grouped: グループごとのRCI計算（最適化済み）
+    """
+    
+    def __init__(self, use_float32: bool = True):
+        """RCIProcessorの初期化
+        
+        Args:
+            use_float32: Float32精度を使用するかどうか（デフォルト: True）
+        """
+        self.engine = RCICalculatorEngine()
+        self.use_float32 = use_float32
+        self._expr_cache: Dict[Tuple[str, int], pl.Expr] = {}
+        
+    def create_rci_expression(
+        self,
+        column: str,
+        period: int
+    ) -> pl.Expr:
+        """Polars ExpressionとしてRCI計算を定義
+        
+        Args:
+            column: 価格データのカラム名
+            period: RCI計算期間
+            
+        Returns:
+            RCI計算を表すPolars Expression
+            
+        Raises:
+            InvalidPeriodError: 無効な期間が指定された場合
+        """
+        # パラメータ検証
+        if period < RCICalculatorEngine.MIN_PERIOD or period > RCICalculatorEngine.MAX_PERIOD:
+            raise InvalidPeriodError(
+                f"Period must be between {RCICalculatorEngine.MIN_PERIOD} and "
+                f"{RCICalculatorEngine.MAX_PERIOD}, got {period}"
+            )
+        
+        # キャッシュチェック
+        cache_key = (column, period)
+        if cache_key in self._expr_cache:
+            return self._expr_cache[cache_key]
+        
+        # RCI計算Expression作成
+        # 時間順位の事前計算
+        time_ranks = np.arange(period, dtype=np.float32)
+        denominator = np.float32(period * (period**2 - 1))
+        
+        def _calculate_rci_values(values) -> float:
+            """ウィンドウ内のRCI値を計算"""
+            # Polars SeriesをNumPy配列に変換
+            if hasattr(values, 'to_numpy'):
+                values = values.to_numpy()
+            
+            if len(values) < period:
+                return None
+            
+            # Float32精度での計算
+            values_f32 = values.astype(np.float32)
+            
+            # ランキング計算
+            try:
+                from scipy.stats import rankdata
+                price_ranks = rankdata(values_f32, method='average') - 1
+            except ImportError:
+                # NumPyフォールバック
+                order = np.argsort(values_f32)
+                price_ranks = np.empty_like(order, dtype=np.float32)
+                price_ranks[order] = np.arange(period, dtype=np.float32)
+            
+            # RCI計算
+            d_squared_sum = np.sum((time_ranks - price_ranks) ** 2)
+            rci = (1.0 - (6.0 * d_squared_sum) / denominator) * 100.0
+            
+            return float(rci)
+        
+        # Polars Expressionの構築
+        expr = (
+            pl.col(column)
+            .cast(pl.Float32 if self.use_float32 else pl.Float64)
+            .rolling_map(
+                function=_calculate_rci_values,
+                window_size=period,
+                min_periods=period
+            )
+            .alias(f"rci_{period}")
+        )
+        
+        # キャッシュ保存
+        self._expr_cache[cache_key] = expr
+        
+        return expr
+    
+    def apply_to_dataframe(
+        self,
+        df: pl.DataFrame,
+        periods: Optional[List[int]] = None,
+        column_name: str = 'close',
+        add_reliability: bool = True
+    ) -> pl.DataFrame:
+        """DataFrameに直接RCI計算を適用
+        
+        Args:
+            df: 入力DataFrame
+            periods: RCI計算期間のリスト（Noneの場合はデフォルト期間）
+            column_name: 価格データのカラム名
+            add_reliability: 信頼性フラグを追加するかどうか
+            
+        Returns:
+            RCI列が追加されたDataFrame
+        """
+        if periods is None:
+            periods = RCICalculatorEngine.DEFAULT_PERIODS
+        
+        # 期間の検証
+        self.engine.validate_periods(periods)
+        
+        # 各期間のRCI Expression作成
+        expressions = []
+        for period in periods:
+            expr = self.create_rci_expression(column_name, period)
+            expressions.append(expr)
+        
+        # DataFrameに適用
+        result = df.with_columns(expressions)
+        
+        # 信頼性フラグの追加（別ステップで）
+        if add_reliability:
+            reliability_expressions = []
+            for period in periods:
+                reliability_expr = (
+                    pl.col(f"rci_{period}")
+                    .is_not_null()
+                    .alias(f"rci_{period}_reliable")
+                )
+                reliability_expressions.append(reliability_expr)
+            result = result.with_columns(reliability_expressions)
+        
+        return result
+    
+    def apply_to_lazyframe(
+        self,
+        lf: pl.LazyFrame,
+        periods: Optional[List[int]] = None,
+        column_name: str = 'close',
+        add_reliability: bool = True
+    ) -> pl.LazyFrame:
+        """LazyFrameにRCI計算を適用（遅延評価）
+        
+        Args:
+            lf: 入力LazyFrame
+            periods: RCI計算期間のリスト（Noneの場合はデフォルト期間）
+            column_name: 価格データのカラム名
+            add_reliability: 信頼性フラグを追加するかどうか
+            
+        Returns:
+            RCI列が追加されたLazyFrame（遅延評価）
+        """
+        if periods is None:
+            periods = RCICalculatorEngine.DEFAULT_PERIODS
+        
+        # 期間の検証
+        self.engine.validate_periods(periods)
+        
+        # 各期間のRCI Expression作成
+        expressions = []
+        for period in periods:
+            expr = self.create_rci_expression(column_name, period)
+            expressions.append(expr)
+        
+        # LazyFrameに適用（遅延評価）
+        result = lf.with_columns(expressions)
+        
+        # 信頼性フラグの追加（別ステップで）
+        if add_reliability:
+            reliability_expressions = []
+            for period in periods:
+                reliability_expr = (
+                    pl.col(f"rci_{period}")
+                    .is_not_null()
+                    .alias(f"rci_{period}_reliable")
+                )
+                reliability_expressions.append(reliability_expr)
+            result = result.with_columns(reliability_expressions)
+        
+        return result
+    
+    def apply_grouped(
+        self,
+        df: Union[pl.DataFrame, pl.LazyFrame],
+        group_by: List[str],
+        periods: Optional[List[int]] = None,
+        column_name: str = 'close',
+        add_reliability: bool = True,
+        parallel: bool = True
+    ) -> Union[pl.DataFrame, pl.LazyFrame]:
+        """グループごとのRCI計算（最適化済み）
+        
+        Args:
+            df: 入力DataFrame/LazyFrame
+            group_by: グループ化するカラムのリスト
+            periods: RCI計算期間のリスト
+            column_name: 価格データのカラム名
+            add_reliability: 信頼性フラグを追加するかどうか
+            parallel: 並列処理を使用するかどうか
+            
+        Returns:
+            グループごとにRCIが計算されたDataFrame/LazyFrame
+        """
+        if periods is None:
+            periods = RCICalculatorEngine.DEFAULT_PERIODS
+        
+        # 期間の検証
+        self.engine.validate_periods(periods)
+        
+        # グループごとのRCI計算用Expression作成
+        expressions = []
+        
+        for period in periods:
+            # グループ内でのRCI計算
+            def _group_rci_calc(group_values: np.ndarray) -> List[Optional[float]]:
+                """グループ内のRCI計算"""
+                calculator = DifferentialRCICalculator(period)
+                results = []
+                
+                for value in group_values:
+                    rci = calculator.add(float(value))
+                    results.append(rci)
+                
+                return results
+            
+            # over()句を使用したグループ計算Expression
+            dtype = pl.Float32 if self.use_float32 else pl.Float64
+            expr = (
+                pl.col(column_name)
+                .cast(dtype)
+                .map_batches(
+                    lambda s: pl.Series(
+                        _group_rci_calc(s.to_numpy()),
+                        dtype=dtype
+                    ),
+                    return_dtype=dtype
+                )
+                .over(group_by)
+                .alias(f"rci_{period}")
+            )
+            expressions.append(expr)
+        
+        # DataFrameに適用
+        result = df.with_columns(expressions)
+        
+        # 信頼性フラグの追加（別ステップで）
+        if add_reliability:
+            reliability_expressions = []
+            for period in periods:
+                reliability_expr = (
+                    pl.col(f"rci_{period}")
+                    .is_not_null()
+                    .over(group_by)
+                    .alias(f"rci_{period}_reliable")
+                )
+                reliability_expressions.append(reliability_expr)
+            result = result.with_columns(reliability_expressions)
+        
+        return result
+    
+    def create_multi_period_expression(
+        self,
+        column: str,
+        periods: List[int]
+    ) -> List[pl.Expr]:
+        """複数期間のRCI Expressionを一度に作成
+        
+        Args:
+            column: 価格データのカラム名
+            periods: RCI計算期間のリスト
+            
+        Returns:
+            RCI Expressionのリスト
+        """
+        # 期間の検証
+        self.engine.validate_periods(periods)
+        
+        expressions = []
+        for period in periods:
+            expr = self.create_rci_expression(column, period)
+            expressions.append(expr)
+        
+        return expressions
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """統計情報を取得
+        
+        Returns:
+            Expressionキャッシュのサイズなど
+        """
+        return {
+            "expression_cache_size": len(self._expr_cache),
+            "cached_expressions": list(self._expr_cache.keys()),
+            "engine_statistics": self.engine.get_statistics()
+        }
+    
+    def clear_cache(self) -> None:
+        """Expressionキャッシュをクリア"""
+        self._expr_cache.clear()
+        logger.info("RCIProcessor expression cache cleared")

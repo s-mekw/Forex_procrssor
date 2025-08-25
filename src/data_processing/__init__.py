@@ -9,6 +9,7 @@ from .processor import PolarsProcessingEngine
 from .rci import (
     RCICalculatorEngine,
     DifferentialRCICalculator,
+    RCIProcessor,
     RCICalculationError,
     InvalidPeriodError,
     InsufficientDataError
@@ -18,6 +19,7 @@ __all__ = [
     "PolarsProcessingEngine",
     "RCICalculatorEngine",
     "DifferentialRCICalculator",
+    "RCIProcessor",
     "RCICalculationError",
     "InvalidPeriodError",
     "InsufficientDataError"
