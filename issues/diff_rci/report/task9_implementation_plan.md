@@ -160,7 +160,7 @@ src/
 ## 4. 実装ステップ
 
 ### Phase 1: 基礎実装（2日）
-- [ ] Step 1.1: DifferentialRCICalculatorクラスの実装
+- [X] Step 1.1: DifferentialRCICalculatorクラスの実装
   - dequeによるスライディングウィンドウ
   - Float32精度での計算
   - 基本的な差分更新ロジック
