@@ -73,6 +73,12 @@ class RCIRealtimeChart:
         # RCIProcessor初期化
         self.rci_processor = RCIProcessor(use_float32=self.config.rci.use_float32)
         
+        # DifferentialRCICalculator初期化（ストリーミング用）
+        from src.data_processing.rci import DifferentialRCICalculator
+        self.rci_calculators = {}  # 各期間のDifferentialRCICalculatorインスタンス
+        for period in self.config.all_rci_periods:
+            self.rci_calculators[period] = DifferentialRCICalculator(period)
+        
         # TickToBarConverter初期化
         timeframe_seconds = TIMEFRAME_TO_SECONDS.get(self.config.chart.timeframe, 60)
         self.converter = TickToBarConverter(
@@ -84,7 +90,7 @@ class RCIRealtimeChart:
         self.data_lock = Lock()  # データ更新用ロック
         self.ohlc_data = None
         self.ema_data = {}
-        self.rci_data = {}  # RCIデータを保持
+        self.rci_data = {}  # RCIデータを保持（完成バーのみ）
         self.temp_ema_values = {}  # 未完成バー用の一時EMA値
         self.temp_rci_values = {}  # 未完成バー用の一時RCI値
         self.current_bar = None
@@ -173,34 +179,39 @@ class RCIRealtimeChart:
                     self.stats["ema_values"][period] = self.ema_data[period][-1]
     
     def calculate_rci(self):
-        """RCIを計算（完成バーのみ対象）"""
+        """RCIを計算（初期化時のみ使用、ストリーミング方式）"""
         if self.ohlc_data is None or self.ohlc_data.is_empty():
             return
         
         # 一時RCI値をクリア
         self.temp_rci_values.clear()
         
-        # 全RCI期間を取得
-        all_periods = self.config.all_rci_periods
+        # 初期データをcalculatorに流し込んでRCI計算
+        close_prices = self.ohlc_data["close"].to_list()
         
-        # RCI計算を適用
-        df_with_rci = self.rci_processor.apply_to_dataframe(
-            self.ohlc_data,
-            periods=all_periods,
-            column_name='close',
-            add_reliability=self.config.rci.add_reliability
-        )
-        
-        # RCIデータを保存
-        for period in all_periods:
-            col_name = f"rci_{period}"
-            if col_name in df_with_rci.columns:
-                self.rci_data[period] = df_with_rci[col_name].to_list()
-                if len(self.rci_data[period]) > 0:
-                    # 最後の値を統計情報に保存（nullでない場合）
-                    last_value = self.rci_data[period][-1]
-                    if last_value is not None:
-                        self.stats["rci_values"][period] = last_value
+        # 各期間のRCIデータを初期化
+        for period in self.config.all_rci_periods:
+            self.rci_data[period] = []
+            
+            # calculator をリセット（初期化時のみ）
+            self.rci_calculators[period].reset()
+            
+            # 価格データを順次追加してRCI計算
+            for price in close_prices:
+                rci_value = self.rci_calculators[period].add(float(price))
+                # None（ウィンドウが満たない）または実際のRCI値を保存
+                self.rci_data[period].append(rci_value)
+            
+            # 最後の有効なRCI値を統計情報に保存
+            if self.rci_data[period]:
+                last_value = self.rci_data[period][-1]
+                if last_value is not None:
+                    self.stats["rci_values"][period] = last_value
+            
+            # デバッグ情報
+            print(f"Period {period}: Initialized with {len(close_prices)} prices, "
+                  f"RCI values count: {len(self.rci_data[period])}, "
+                  f"Last RCI: {self.stats['rci_values'].get(period, 'None')}")
     
     def tick_receiver_thread(self):
         """ティック受信スレッド"""
@@ -275,6 +286,27 @@ class RCIRealtimeChart:
         
         self.ohlc_data = pl.concat([self.ohlc_data, new_row])
         
+        # RCI増分更新（新しいバーのcloseだけをcalculatorに追加）
+        new_close = float(bar.close)
+        for period in self.config.all_rci_periods:
+            # 新しい価格をcalculatorに追加してRCI計算
+            rci_value = self.rci_calculators[period].add(new_close)
+            
+            # RCIデータリストが存在しない場合は初期化
+            if period not in self.rci_data:
+                self.rci_data[period] = []
+            
+            # 新しいRCI値を追加
+            self.rci_data[period].append(rci_value)
+            
+            # 統計情報を更新
+            if rci_value is not None:
+                self.stats["rci_values"][period] = rci_value
+                # デバッグ情報
+                print(f"New bar - Period {period}: RCI={rci_value:.2f}, "
+                      f"Total bars: {len(self.ohlc_data)}, "
+                      f"RCI data points: {len(self.rci_data[period])}")
+        
         # メモリ管理
         max_bars = self.config.chart.initial_bars * 2
         if len(self.ohlc_data) > max_bars:
@@ -288,11 +320,8 @@ class RCIRealtimeChart:
                 if period in self.rci_data and len(self.rci_data[period]) > max_bars:
                     self.rci_data[period] = self.rci_data[period][-max_bars:]
         
-        # EMA再計算
+        # EMA再計算（EMAは全体再計算が必要）
         self.calculate_ema()
-        
-        # RCI再計算
-        self.calculate_rci()
         
         # データ同期を確認・修復
         self.sync_data_integrity()
@@ -388,15 +417,16 @@ class RCIRealtimeChart:
                         # RCIデータが長すぎる場合はトリム
                         self.rci_data[period] = self.rci_data[period][:ohlc_length]
                     elif rci_length < ohlc_length - 1:  # -1は未完成バーを考慮
-                        # RCIデータが短すぎる場合はRCIを再計算
-                        self.calculate_rci()
-                        break
+                        # RCIデータが短すぎる場合は、Noneで埋める（再計算はしない）
+                        # calculatorの状態を保持するため
+                        missing = ohlc_length - rci_length
+                        self.rci_data[period].extend([None] * missing)
+                        print(f"Warning: RCI data sync - Period {period}: Added {missing} None values")
                         
         except Exception as e:
             print(f"Error in data sync: {e}")
-            # エラー時はEMAとRCIを再計算
+            # エラー時はEMAのみ再計算（RCIはcalculatorの状態を保持）
             self.calculate_ema()
-            self.calculate_rci()
     
     def update_ema_incremental(self, new_price: float):
         """EMAを増分更新（未完成バー用の一時値を計算）"""
@@ -410,32 +440,70 @@ class RCIRealtimeChart:
                 self.temp_ema_values[period] = new_ema
                 self.stats["ema_values"][period] = new_ema
     
+    def _calculate_single_rci(self, prices: list, period: int) -> float:
+        """単一のRCI値を計算（ヘルパー関数）"""
+        import numpy as np
+        try:
+            from scipy.stats import rankdata
+        except ImportError:
+            # scipyが利用できない場合の代替実装
+            def rankdata(data, method='average'):
+                n = len(data)
+                order = np.argsort(data)
+                ranks = np.arange(1, n + 1, dtype=np.float32)
+                sorted_data = np.array(data)[order]
+                
+                # 同値処理
+                for i in range(n):
+                    j = i
+                    while j < n - 1 and np.abs(sorted_data[j+1] - sorted_data[i]) < 1e-9:
+                        j += 1
+                    if j > i:
+                        avg_rank = np.mean(ranks[i:j+1])
+                        ranks[i:j+1] = avg_rank
+                
+                result = np.empty(n, dtype=np.float32)
+                result[order] = ranks
+                return result
+        
+        if len(prices) < period:
+            return None
+        
+        # 最後のperiod個の価格を使用
+        window_prices = prices[-period:] if len(prices) >= period else prices
+        
+        # Float32精度での計算
+        prices_array = np.array(window_prices, dtype=np.float32)
+        time_ranks = np.arange(period, dtype=np.float32)
+        price_ranks = rankdata(prices_array, method='average') - 1
+        denominator = period * (period**2 - 1)
+        
+        # RCI計算
+        d_squared_sum = np.sum((time_ranks - price_ranks) ** 2)
+        rci = (1.0 - (6.0 * d_squared_sum) / denominator) * 100.0
+        return float(rci)
+    
     def update_rci_incremental(self):
         """RCIを増分更新（未完成バー用の一時値を計算）"""
-        # 未完成バーを含む全データでRCIを計算
-        # （RCIは順位相関なので、全データで計算することで連続性を保つ）
-        if self.ohlc_data is None or self.ohlc_data.is_empty():
+        if self.current_bar is None or self.ohlc_data is None or self.ohlc_data.is_empty():
             return
         
-        try:
-            # 一時的なRCI値を全データで計算（未完成バー含む）
-            df_with_rci = self.rci_processor.apply_to_dataframe(
-                self.ohlc_data,
-                periods=self.config.all_rci_periods,
-                column_name='close',
-                add_reliability=False
-            )
-            
-            # 各期間の最後の値を一時値として保存
-            for period in self.config.all_rci_periods:
-                col_name = f"rci_{period}"
-                if col_name in df_with_rci.columns:
-                    rci_values = df_with_rci[col_name].to_list()
-                    if rci_values and rci_values[-1] is not None:
-                        self.temp_rci_values[period] = rci_values[-1]
-                        self.stats["rci_values"][period] = rci_values[-1]
-        except Exception as e:
-            print(f"Error updating RCI incrementally: {e}")
+        # 未完成バーの価格で一時的なRCI値を計算
+        current_close = float(self.current_bar.close)
+        
+        for period in self.config.all_rci_periods:
+            # 既存のRCIデータがあり、十分なデータがある場合
+            if period in self.rci_data and len(self.ohlc_data) >= period:
+                # 最後のperiod個の価格を取得（最後の1つは未完成バー）
+                recent_closes = self.ohlc_data["close"].tail(period).to_list()
+                # 最後の価格を未完成バーの現在価格で置き換え
+                recent_closes[-1] = current_close
+                
+                # 一時的なRCI計算
+                temp_rci = self._calculate_single_rci(recent_closes, period)
+                if temp_rci is not None:
+                    self.temp_rci_values[period] = temp_rci
+                    self.stats["rci_values"][period] = temp_rci
     
     def start_realtime(self):
         """リアルタイム受信を開始"""
