@@ -1,0 +1,151 @@
+# Task 9 RCI Chart Configuration File
+# RCIインジケーターを含むリアルタイムチャート表示設定
+# ========================================================================
+
+[general]
+# 一般設定
+# ----------------------------------------
+test_mode = "full"  # テストモード: "quick"(簡易), "full"(完全), "performance"(性能測定)
+use_mock_data = false  # モックデータ使用フラグ (true: ダミーデータ, false: 実データ)
+save_results = true  # テスト結果の保存フラグ
+verbose = true  # 詳細ログ出力フラグ
+
+[mt5]
+# MT5接続設定
+# 注意: 実際の認証情報は.envファイルに設定してください：
+#   FOREX_MT5_LOGIN=あなたのログインID
+#   FOREX_MT5_PASSWORD=あなたのパスワード
+#   FOREX_MT5_SERVER=あなたのサーバー名
+# ----------------------------------------
+login = 12345678  # プレースホルダー - 実際のログインIDは.envに設定
+password = "placeholder"  # プレースホルダー - 実際のパスワードは.envに設定
+server = "Demo-Server"  # プレースホルダー - 実際のサーバー名は.envに設定
+timeout = 60000  # 接続タイムアウト時間（ミリ秒）
+max_retries = 3  # 最大リトライ回数
+retry_delay = 1.0  # リトライ間隔（秒）
+
+[chart]
+# チャート表示設定
+# ----------------------------------------
+symbol = "EURJPY#"  # 取引シンボル
+timeframe = "M1"  # 時間枠（M1: 1分, M5: 5分, M15: 15分, H1: 1時間, H4: 4時間, D1: 日足）
+initial_bars = 100  # 初期表示バー数
+update_interval = 1.0  # 更新間隔（秒）
+realtime_enabled = true  # リアルタイム更新の有効化
+max_tick_buffer = 1000  # ティックバッファの最大サイズ
+
+# チャートサイズ設定
+chart_height = 800  # チャートの高さ（ピクセル）
+chart_width = 1200  # チャートの幅（ピクセル）
+show_volume = false  # 出来高表示フラグ（RCIチャートではfalse）
+show_grid = true  # グリッド表示フラグ
+
+[ema]
+# EMA（指数移動平均）インジケーター設定
+# ----------------------------------------
+periods = [20, 50, 200]  # EMA計算期間（短期: 20, 中期: 50, 長期: 200）
+
+[ema.colors]
+# EMAライン色設定（16進数またはカラー名）
+# ----------------------------------------
+20 = "blue"  # 短期EMA（20期間）- 青
+50 = "green"  # 中期EMA（50期間）- 緑
+200 = "red"  # 長期EMA（200期間）- 赤
+
+[rci]
+# RCI（Rank Correlation Index）インジケーター設定
+# ----------------------------------------
+periods_short = [9, 13]  # 短期RCI期間（サブウィンドウ1）
+periods_long = [26, 33]  # 長期RCI期間（サブウィンドウ2）
+use_float32 = true  # 32ビット浮動小数点を使用（メモリ節約）
+add_reliability = false  # 信頼性フラグを追加するか
+
+[rci.colors]
+# RCIライン色設定
+# ----------------------------------------
+9 = "blue"  # RCI 9期間 - 青
+13 = "red"  # RCI 13期間 - 赤
+26 = "green"  # RCI 26期間 - 緑
+33 = "purple"  # RCI 33期間 - 紫
+
+[rci.levels]
+# RCI基準レベル
+# ----------------------------------------
+overbought = 80  # 買われすぎレベル
+oversold = -80  # 売られすぎレベル
+zero_line = 0  # ゼロライン
+
+[theme]
+# チャートテーマ設定
+# ----------------------------------------
+background = "#1e1e1e"  # 背景色（ダークグレー）
+grid = "#333333"  # グリッド線色（グレー）
+text = "#ffffff"  # テキスト色（白）
+
+[theme.candlestick]
+# ローソク足の色設定
+bullish = "#26a69a"  # 陽線（上昇）- 緑
+bearish = "#ef5350"  # 陰線（下降）- 赤
+
+[theme.rci]
+# RCIパネルの設定
+background = "#1a1a1a"  # RCIパネル背景色
+grid = "#2a2a2a"  # RCIグリッド線色
+overbought_line = "#ff6666"  # 買われすぎライン色
+oversold_line = "#66ff66"  # 売られすぎライン色
+zero_line = "#666666"  # ゼロライン色
+
+[performance]
+# パフォーマンス設定
+# ----------------------------------------
+use_float32 = true  # 32ビット浮動小数点使用フラグ（メモリ節約）
+cache_size = 10000  # キャッシュサイズ（バー数）
+update_batch_size = 100  # バッチ更新サイズ
+
+[symbols]
+# テスト用シンボルリスト
+# ----------------------------------------
+crypto = ["BTCUSD#", "ETHUSD#", "LTCUSD#"]  # 暗号通貨シンボル
+forex = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY#"]  # 外国為替シンボル
+default = "EURJPY#"  # デフォルトシンボル
+
+[presets.quick]
+# クイックテスト用プリセット設定
+# ----------------------------------------
+initial_bars = 100
+update_interval = 2.0
+realtime_enabled = false
+
+[presets.full]
+# フルテスト用プリセット設定
+# ----------------------------------------
+initial_bars = 100
+update_interval = 1.0
+realtime_enabled = true
+
+[presets.performance]
+# パフォーマンステスト用プリセット設定
+# ----------------------------------------
+initial_bars = 1000
+update_interval = 0.5
+rci_periods_short = [9, 13]
+rci_periods_long = [26, 33, 52]
+
+[dash]
+# Dashウェブサーバー設定
+# ----------------------------------------
+host = "0.0.0.0"  # リッスンホスト（0.0.0.0: すべてのインターフェース）
+port = 8050  # ポート番号（Dashアプリケーションのデフォルト）
+debug = false  # デバッグモード（本番: false, 開発: true）
+auto_refresh_interval = 1000  # チャート自動更新間隔（ミリ秒）
+
+[dash.ui]
+# DashのUIコンポーネント設定
+# ----------------------------------------
+show_start_button = true  # 開始ボタン表示フラグ
+show_stop_button = true  # 停止ボタン表示フラグ
+show_ema_badges = true  # EMAバッジ表示フラグ
+show_rci_badges = true  # RCIバッジ表示フラグ
+show_statistics = true  # 統計情報表示フラグ
+chart_height = 700  # メインチャートの高さ（ピクセル）
+rci_panel_height = 150  # 各RCIパネルの高さ（ピクセル）
