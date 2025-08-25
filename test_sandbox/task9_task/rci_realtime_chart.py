@@ -497,7 +497,11 @@ class RCIRealtimeChart:
                 high=ohlc_copy["high"].to_list(),
                 low=ohlc_copy["low"].to_list(),
                 close=ohlc_copy["close"].to_list(),
-                name="OHLC"
+                name="OHLC",
+                increasing_line_color='black',  # 陽線の枠線
+                increasing_fillcolor='white',   # 陽線の塗りつぶし
+                decreasing_line_color='black',  # 陰線の枠線
+                decreasing_fillcolor='black'    # 陰線の塗りつぶし
             ),
             row=1, col=1
         )
@@ -562,10 +566,16 @@ class RCIRealtimeChart:
                     row=3, col=1
                 )
         
-        # RCI基準線を追加（買われすぎ、売られすぎ、ゼロライン）
+        # RCI基準線を追加（買われすぎ、売られすぎ、ゼロライン、±100境界線）
         time_range = ohlc_copy["time"].to_list()
         if time_range:
             # 短期RCIパネル
+            # ±100境界線
+            fig.add_hline(y=100, row=2, col=1,
+                         line_dash="solid", line_color="black", line_width=1)
+            fig.add_hline(y=-100, row=2, col=1,
+                         line_dash="solid", line_color="black", line_width=1)
+            # 買われすぎ・売られすぎライン
             fig.add_hline(y=self.config.rci.levels['overbought'], row=2, col=1,
                          line_dash="dash", line_color="red", opacity=0.3)
             fig.add_hline(y=self.config.rci.levels['oversold'], row=2, col=1,
@@ -574,6 +584,12 @@ class RCIRealtimeChart:
                          line_dash="dot", line_color="gray", opacity=0.5)
             
             # 長期RCIパネル
+            # ±100境界線
+            fig.add_hline(y=100, row=3, col=1,
+                         line_dash="solid", line_color="black", line_width=1)
+            fig.add_hline(y=-100, row=3, col=1,
+                         line_dash="solid", line_color="black", line_width=1)
+            # 買われすぎ・売られすぎライン
             fig.add_hline(y=self.config.rci.levels['overbought'], row=3, col=1,
                          line_dash="dash", line_color="red", opacity=0.3)
             fig.add_hline(y=self.config.rci.levels['oversold'], row=3, col=1,
@@ -588,21 +604,21 @@ class RCIRealtimeChart:
             showlegend=True,
             hovermode='x unified',
             margin=dict(l=0, r=0, t=30, b=0),
-            plot_bgcolor=self.config.theme.get('background', '#1e1e1e'),
-            paper_bgcolor=self.config.theme.get('background', '#1e1e1e'),
-            font=dict(color=self.config.theme.get('text', '#ffffff'))
+            plot_bgcolor=self.config.theme.get('background', '#fffbea'),
+            paper_bgcolor=self.config.theme.get('background', '#fffbea'),
+            font=dict(color=self.config.theme.get('text', '#000000'))
         )
         
         # 軸の設定
         fig.update_xaxes(title_text="Time", row=3, col=1)
         fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="RCI", row=2, col=1, range=[-100, 100])
-        fig.update_yaxes(title_text="RCI", row=3, col=1, range=[-100, 100])
+        fig.update_yaxes(title_text="RCI", row=2, col=1, range=[-105, 105])  # 境界線表示のため範囲拡張
+        fig.update_yaxes(title_text="RCI", row=3, col=1, range=[-105, 105])  # 境界線表示のため範囲拡張
         
         # グリッドの設定
         if self.config.chart.show_grid:
-            fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor=self.config.theme.get('grid', '#333333'))
-            fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor=self.config.theme.get('grid', '#333333'))
+            fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor=self.config.theme.get('grid', '#e0e0e0'))
+            fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor=self.config.theme.get('grid', '#e0e0e0'))
         
         return fig
     

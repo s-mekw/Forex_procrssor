@@ -78,14 +78,14 @@ zero_line = 0  # ゼロライン
 [theme]
 # チャートテーマ設定
 # ----------------------------------------
-background = "#1e1e1e"  # 背景色（ダークグレー）
-grid = "#333333"  # グリッド線色（グレー）
-text = "#ffffff"  # テキスト色（白）
+background = "#fffbea"  # 背景色（クリーム色: 255, 253, 234）
+grid = "#e0e0e0"  # グリッド線色（薄いグレー）
+text = "#000000"  # テキスト色（黒）
 
 [theme.candlestick]
 # ローソク足の色設定
-bullish = "#26a69a"  # 陽線（上昇）- 緑
-bearish = "#ef5350"  # 陰線（下降）- 赤
+bullish = "#ffffff"  # 陽線（上昇）- 白
+bearish = "#000000"  # 陰線（下降）- 黒
 
 [theme.rci]
 # RCIパネルの設定
