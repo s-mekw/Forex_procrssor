@@ -100,8 +100,7 @@ class RealtimePipeline:
             try:
                 # 入力キューからDataPointを取得（タイムアウト設定）
                 data_point = await asyncio.wait_for(
-                    self._input_queue.get(),
-                    timeout=1.0
+                    self._input_queue.get(), timeout=1.0
                 )
 
                 # データ処理（1分足データのパススルー）
@@ -114,11 +113,13 @@ class RealtimePipeline:
 
                     await asyncio.wait_for(
                         self._output_queue.put(result),
-                        timeout=1.0  # 1秒タイムアウト
+                        timeout=1.0,  # 1秒タイムアウト
                     )
                 except TimeoutError:
                     self._logger.error("Output queue timeout, dropping result")
-                    self._metrics['dropped_results'] = self._metrics.get('dropped_results', 0) + 1
+                    self._metrics["dropped_results"] = (
+                        self._metrics.get("dropped_results", 0) + 1
+                    )
 
             except TimeoutError:
                 # タイムアウト時は続行（graceful handling）
@@ -137,13 +138,13 @@ class RealtimePipeline:
         """
 
         # 1分足データをそのままパススルー（将来的に変換処理を追加）
-        processed_data = data_point['data']
+        processed_data = data_point["data"]
 
         # 遅延計測 (timestampをdatetimeからfloatに変換)
-        if isinstance(data_point['timestamp'], datetime):
-            timestamp = data_point['timestamp'].timestamp()
+        if isinstance(data_point["timestamp"], datetime):
+            timestamp = data_point["timestamp"].timestamp()
         else:
-            timestamp = data_point['timestamp']
+            timestamp = data_point["timestamp"]
 
         latency = time.time() - timestamp
 
@@ -153,7 +154,9 @@ class RealtimePipeline:
         else:
             # アラート解除
             if self._consecutive_alerts > 0:
-                self._logger.info(f"Latency returned to normal after {self._consecutive_alerts} alerts")
+                self._logger.info(
+                    f"Latency returned to normal after {self._consecutive_alerts} alerts"
+                )
                 self._consecutive_alerts = 0
 
         # メトリクス更新
@@ -161,9 +164,9 @@ class RealtimePipeline:
             self._update_metrics(latency)
 
         return {
-            'processed_data': processed_data,
-            'latency': latency,
-            'status': 'success'
+            "processed_data": processed_data,
+            "latency": latency,
+            "status": "success",
         }
 
     def _update_metrics(self, latency: float) -> None:
@@ -172,19 +175,21 @@ class RealtimePipeline:
         Args:
             latency: 計測された遅延時間（秒）
         """
-        self._metrics['processed_count'] += 1
-        self._metrics['total_latency'] += latency
-        self._metrics['max_latency'] = max(self._metrics.get('max_latency', 0), latency)
-        self._metrics['min_latency'] = min(self._metrics.get('min_latency', float('inf')), latency)
+        self._metrics["processed_count"] += 1
+        self._metrics["total_latency"] += latency
+        self._metrics["max_latency"] = max(self._metrics.get("max_latency", 0), latency)
+        self._metrics["min_latency"] = min(
+            self._metrics.get("min_latency", float("inf")), latency
+        )
 
         # 移動平均の更新
-        if 'latency_samples' not in self._metrics:
-            self._metrics['latency_samples'] = []
+        if "latency_samples" not in self._metrics:
+            self._metrics["latency_samples"] = []
 
-        self._metrics['latency_samples'].append(latency)
+        self._metrics["latency_samples"].append(latency)
         # 最新100サンプルのみ保持
-        if len(self._metrics['latency_samples']) > 100:
-            self._metrics['latency_samples'].pop(0)
+        if len(self._metrics["latency_samples"]) > 100:
+            self._metrics["latency_samples"].pop(0)
 
     async def start(self) -> None:
         """
@@ -239,8 +244,8 @@ class RealtimePipeline:
         try:
             # Check if queue is full
             if self._input_queue.full():
-                self._metrics['queue_full_count'] += 1
-                self._metrics['backpressure_events'] += 1
+                self._metrics["queue_full_count"] += 1
+                self._metrics["backpressure_events"] += 1
                 self._logger.warning(
                     f"Input queue is full ({self._input_queue.qsize()}/{self._input_queue.maxsize})"
                 )
@@ -248,7 +253,7 @@ class RealtimePipeline:
                 # Wait with timeout
                 await asyncio.wait_for(
                     self._input_queue.put(data),
-                    timeout=0.1  # 100ms timeout
+                    timeout=0.1,  # 100ms timeout
                 )
                 return True
             else:
@@ -257,14 +262,13 @@ class RealtimePipeline:
 
                 # Update queue size metrics
                 current_size = self._input_queue.qsize()
-                self._metrics['max_queue_size'] = max(
-                    self._metrics['max_queue_size'],
-                    current_size
+                self._metrics["max_queue_size"] = max(
+                    self._metrics["max_queue_size"], current_size
                 )
                 return True
 
         except TimeoutError:
-            self._metrics['rejected_items'] += 1
+            self._metrics["rejected_items"] += 1
             self._logger.error("Failed to submit data: queue timeout")
             return False
 
@@ -347,15 +351,15 @@ class RealtimePipeline:
             - max_queue_size: Maximum queue size observed
         """
         return {
-            'is_running': self._is_running,
-            'input_queue_size': self._input_queue.qsize(),
-            'input_queue_maxsize': self._input_queue.maxsize,
-            'output_queue_size': self._output_queue.qsize(),
-            'output_queue_maxsize': self._output_queue.maxsize,
-            'backpressure_active': self.is_backpressure_active(),
-            'backpressure_events': self._metrics.get('backpressure_events', 0),
-            'rejected_items': self._metrics.get('rejected_items', 0),
-            'max_queue_size': self._metrics.get('max_queue_size', 0)
+            "is_running": self._is_running,
+            "input_queue_size": self._input_queue.qsize(),
+            "input_queue_maxsize": self._input_queue.maxsize,
+            "output_queue_size": self._output_queue.qsize(),
+            "output_queue_maxsize": self._output_queue.maxsize,
+            "backpressure_active": self.is_backpressure_active(),
+            "backpressure_events": self._metrics.get("backpressure_events", 0),
+            "rejected_items": self._metrics.get("rejected_items", 0),
+            "max_queue_size": self._metrics.get("max_queue_size", 0),
         }
 
     async def _check_latency_alert(self, latency: float, data_point: DataPoint) -> None:
@@ -367,11 +371,11 @@ class RealtimePipeline:
         """
         self._consecutive_alerts += 1
         alert_info = {
-            'timestamp': datetime.now(),
-            'latency': latency,
-            'data_point': data_point,
-            'severity': self._get_alert_severity(latency),
-            'consecutive_count': self._consecutive_alerts
+            "timestamp": datetime.now(),
+            "latency": latency,
+            "data_point": data_point,
+            "severity": self._get_alert_severity(latency),
+            "consecutive_count": self._consecutive_alerts,
         }
 
         # アラート履歴に追加（最新100件を保持）
@@ -380,17 +384,16 @@ class RealtimePipeline:
             self._alert_history.pop(0)
 
         # アラートメトリクス更新
-        self._metrics['alert_count'] += 1
-        self._metrics['last_alert_time'] = time.time()
-        self._metrics['max_consecutive_alerts'] = max(
-            self._metrics.get('max_consecutive_alerts', 0),
-            self._consecutive_alerts
+        self._metrics["alert_count"] += 1
+        self._metrics["last_alert_time"] = time.time()
+        self._metrics["max_consecutive_alerts"] = max(
+            self._metrics.get("max_consecutive_alerts", 0), self._consecutive_alerts
         )
 
         # ログ出力（重要度によって変更）
-        if alert_info['severity'] == 'critical':
+        if alert_info["severity"] == "critical":
             self._logger.critical(f"CRITICAL: Latency {latency:.3f}s exceeds threshold")
-        elif alert_info['severity'] == 'high':
+        elif alert_info["severity"] == "high":
             self._logger.error(f"HIGH: Latency alert - {latency:.3f}s")
         else:
             self._logger.warning(f"Latency alert: {latency:.3f}s")
@@ -416,13 +419,13 @@ class RealtimePipeline:
             重要度文字列 (low/medium/high/critical)
         """
         if latency > 10.0:  # 10秒超
-            return 'critical'
+            return "critical"
         elif latency > 5.0:  # 5秒超
-            return 'high'
+            return "high"
         elif latency > self.alert_threshold:  # 1秒超
-            return 'medium'
+            return "medium"
         else:
-            return 'low'
+            return "low"
 
     async def _escalate_alert(self, alert_info: dict) -> None:
         """アラートをエスカレーション（連続発生時の特別処理）
@@ -437,9 +440,11 @@ class RealtimePipeline:
 
         # パイプライン一時停止の検討
         if self._consecutive_alerts >= 10:
-            self._logger.critical("Automatic pipeline pause triggered due to persistent high latency")
+            self._logger.critical(
+                "Automatic pipeline pause triggered due to persistent high latency"
+            )
             # 自動停止フラグを設定（オプション）
-            self._metrics['auto_pause_triggered'] = True
+            self._metrics["auto_pause_triggered"] = True
 
     def get_alert_statistics(self) -> dict[str, Any]:
         """アラート統計情報を取得
@@ -449,23 +454,23 @@ class RealtimePipeline:
         """
         if not self._alert_history:
             return {
-                'total_alerts': 0,
-                'recent_alerts': [],
-                'avg_latency': 0,
-                'max_latency': 0
+                "total_alerts": 0,
+                "recent_alerts": [],
+                "avg_latency": 0,
+                "max_latency": 0,
             }
 
         recent_alerts = self._alert_history[-10:]  # 最新10件
-        latencies = [a['latency'] for a in self._alert_history]
+        latencies = [a["latency"] for a in self._alert_history]
 
         return {
-            'total_alerts': self._metrics.get('alert_count', 0),
-            'recent_alerts': recent_alerts,
-            'avg_latency': sum(latencies) / len(latencies),
-            'max_latency': max(latencies),
-            'consecutive_alerts': self._consecutive_alerts,
-            'last_alert_time': self._metrics.get('last_alert_time'),
-            'severity_distribution': self._get_severity_distribution()
+            "total_alerts": self._metrics.get("alert_count", 0),
+            "recent_alerts": recent_alerts,
+            "avg_latency": sum(latencies) / len(latencies),
+            "max_latency": max(latencies),
+            "consecutive_alerts": self._consecutive_alerts,
+            "last_alert_time": self._metrics.get("last_alert_time"),
+            "severity_distribution": self._get_severity_distribution(),
         }
 
     def _get_severity_distribution(self) -> dict[str, int]:
@@ -474,9 +479,9 @@ class RealtimePipeline:
         Returns:
             重要度別のアラート数
         """
-        distribution = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        distribution = {"low": 0, "medium": 0, "high": 0, "critical": 0}
         for alert in self._alert_history:
-            severity = alert.get('severity', 'medium')
+            severity = alert.get("severity", "medium")
             distribution[severity] += 1
         return distribution
 
