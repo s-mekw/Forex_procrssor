@@ -94,6 +94,7 @@ class RCIRealtimeChart:
         self.temp_ema_values = {}  # 未完成バー用の一時EMA値
         self.temp_rci_values = {}  # 未完成バー用の一時RCI値
         self.current_bar = None
+        self.has_incomplete_bar = False  # 未完成バーの存在フラグ
         self.tick_queue = queue.Queue()
         
         # 統計情報
@@ -216,6 +217,9 @@ class RCIRealtimeChart:
             # デバッグ情報（必要に応じてコメントアウト）
             # print(f"Period {period}: Initialized with {len(close_prices)-1} complete bars, "
             #       f"1 incomplete bar, RCI values: {len(self.rci_data[period])}")
+                    
+        # 最後のバーは未完成バーとしてマーク
+        self.has_incomplete_bar = True
     
     def tick_receiver_thread(self):
         """ティック受信スレッド"""
@@ -290,11 +294,13 @@ class RCIRealtimeChart:
         
         # OHLCデータの最後が未完成バーの場合、それを完成バーで置き換え
         # （初回以降のバー完成時）
+        was_replacement = False
         if len(self.ohlc_data) > 0:
             last_time = self.ohlc_data["time"][-1]
             if last_time == bar.time:
                 # 同じ時刻のバーなら、未完成バーを完成バーで置き換え
                 self.ohlc_data = pl.concat([self.ohlc_data[:-1], new_row])
+                was_replacement = True
             else:
                 # 新しい時刻のバーなら追加
                 self.ohlc_data = pl.concat([self.ohlc_data, new_row])
@@ -303,6 +309,7 @@ class RCIRealtimeChart:
         
         # RCI増分更新（完成バーのcloseをcalculatorに追加）
         new_close = float(bar.close)
+        
         for period in self.config.all_rci_periods:
             # 新しい価格をcalculatorに追加してRCI計算
             rci_value = self.rci_calculators[period].add(new_close)
@@ -311,9 +318,9 @@ class RCIRealtimeChart:
             if period not in self.rci_data:
                 self.rci_data[period] = []
             
-            # 最後の値がpreview値（未完成バー）の場合、それを正式な値で置き換え
-            # そうでない場合は新しい値を追加
-            if len(self.rci_data[period]) > 0 and len(self.ohlc_data) > 0:
+            # 未完成バーを完成バーで置き換えた場合は、RCIデータも更新
+            # 新しいバーの場合は、RCIデータを追加
+            if was_replacement and len(self.rci_data[period]) > 0:
                 # 最後のRCI値を正式な値で更新（未完成バー→完成バー）
                 self.rci_data[period][-1] = rci_value
             else:
@@ -323,9 +330,11 @@ class RCIRealtimeChart:
             # 統計情報を更新
             if rci_value is not None:
                 self.stats["rci_values"][period] = rci_value
-                # デバッグ情報（コメントアウト可能）
-                # print(f"Bar completed - Period {period}: RCI={rci_value:.2f}, "
-                #       f"Close={new_close:.5f}, Total bars: {len(self.ohlc_data)}")
+                # デバッグ情報
+                if period == 9:  # 短期RCIのみログ出力
+                    print(f"[Bar Complete] Period {period}: RCI={rci_value:.2f}, "
+                          f"Replacement={was_replacement}, OHLC len={len(self.ohlc_data)}, "
+                          f"RCI len={len(self.rci_data[period])}")
         
         # メモリ管理
         max_bars = self.config.chart.initial_bars * 2
@@ -393,6 +402,20 @@ class RCIRealtimeChart:
                         "volume": [np.float32(self.current_bar.volume)]
                     })
                     self.ohlc_data = pl.concat([self.ohlc_data, new_row])
+                    
+                    # 新しい未完成バーのRCIデータも追加
+                    for period in self.config.all_rci_periods:
+                        if period in self.rci_calculators:
+                            # 新しい未完成バーのpreview値を計算して追加
+                            preview_rci = self.rci_calculators[period].preview(float(self.current_bar.close))
+                            if period not in self.rci_data:
+                                self.rci_data[period] = []
+                            self.rci_data[period].append(preview_rci)
+                            # デバッグ情報
+                            if period == 9:  # 短期RCIのみログ出力
+                                print(f"[New Incomplete Bar] Period {period}: Preview={preview_rci}, "
+                                      f"OHLC len={len(self.ohlc_data)}, RCI len={len(self.rci_data[period])}")
+                    self.has_incomplete_bar = True
             else:
                 # OHLCデータが空の場合
                 self.ohlc_data = pl.DataFrame({
@@ -475,8 +498,17 @@ class RCIRealtimeChart:
                 if temp_rci is not None:
                     self.temp_rci_values[period] = temp_rci
                     self.stats["rci_values"][period] = temp_rci
+                    
+                    # 未完成バーのRCI値を直接更新（重要な修正）
+                    if self.has_incomplete_bar and len(self.rci_data[period]) > 0:
+                        # 最後の値をpreview値で更新
+                        # これによりrci_dataが常に正しい長さを保つ
+                        self.rci_data[period][-1] = temp_rci
+                    
                     # デバッグ情報
-                    # print(f"Preview - Period {period}: RCI={temp_rci:.2f} for price={current_close:.5f}")
+                    if period == 9:  # 短期RCIのみログ出力
+                        print(f"[RCI Update] Period {period}: Preview={temp_rci:.2f}, "
+                              f"OHLC len={len(self.ohlc_data)}, RCI len={len(self.rci_data[period])}")
     
     def start_realtime(self):
         """リアルタイム受信を開始"""
@@ -709,15 +741,11 @@ class RCIRealtimeChart:
                         if len(ema_data[period]) == 0:
                             del ema_data[period]
             
-            # RCIデータと一時RCI値を結合・検証
+            # RCIデータの検証（temp値の追加処理は削除）
             for period in self.config.all_rci_periods:
                 if period in rci_data:
-                    # 現在のRCIデータの長さをチェック
-                    rci_length = len(rci_data[period])
-                    
-                    # 一時RCI値を追加（未完成バー用）
-                    if period in temp_rci_values and ohlc_length > rci_length:
-                        rci_data[period] = rci_data[period] + [temp_rci_values[period]]
+                    # RCIデータは既にupdate_rci_incrementalで更新されているため、
+                    # ここではデータ長の調整と検証のみを行う
                     
                     # RCIデータの長さをOHLCに合わせる
                     if len(rci_data[period]) > ohlc_length:
