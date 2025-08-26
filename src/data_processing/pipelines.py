@@ -69,6 +69,10 @@ class RealtimePipeline:
             "min_latency": float("inf"),
             "alert_count": 0,
             "backpressure_events": 0,
+            "queue_full_count": 0,
+            "max_queue_size": 0,
+            "rejected_items": 0,
+            "dropped_results": 0,
         }
 
         # Pipeline state
@@ -94,8 +98,18 @@ class RealtimePipeline:
                 # データ処理（1分足データのパススルー）
                 result = await self._process_data(data_point)
 
-                # 出力キューへ送信
-                await self._output_queue.put(result)
+                # 出力キューへ送信（バックプレッシャー考慮）
+                try:
+                    if self._output_queue.full():
+                        self._logger.warning("Output queue is full, waiting...")
+
+                    await asyncio.wait_for(
+                        self._output_queue.put(result),
+                        timeout=1.0  # 1秒タイムアウト
+                    )
+                except TimeoutError:
+                    self._logger.error("Output queue timeout, dropping result")
+                    self._metrics['dropped_results'] = self._metrics.get('dropped_results', 0) + 1
 
             except TimeoutError:
                 # タイムアウト時は続行（graceful handling）
@@ -195,21 +209,53 @@ class RealtimePipeline:
 
         self._logger.info("RealtimePipeline stopped")
 
-    async def submit(self, data: DataPoint) -> None:
+    async def submit(self, data: DataPoint) -> bool:
         """
-        Submit data to the pipeline for processing.
+        Submit data to the pipeline for processing (with backpressure control).
 
         Args:
             data: DataPoint to be processed
 
+        Returns:
+            bool: True if submission succeeded, False if timed out
+
         Raises:
-            asyncio.QueueFull: If the input queue is full (backpressure)
+            RuntimeError: If the pipeline is not running
         """
         if not self._is_running:
             raise RuntimeError("Pipeline is not running")
 
-        await self._input_queue.put(data)
-        # TODO: Add metrics tracking in Step 4
+        try:
+            # Check if queue is full
+            if self._input_queue.full():
+                self._metrics['queue_full_count'] += 1
+                self._metrics['backpressure_events'] += 1
+                self._logger.warning(
+                    f"Input queue is full ({self._input_queue.qsize()}/{self._input_queue.maxsize})"
+                )
+
+                # Wait with timeout
+                await asyncio.wait_for(
+                    self._input_queue.put(data),
+                    timeout=0.1  # 100ms timeout
+                )
+                return True
+            else:
+                # Normal submission
+                await self._input_queue.put(data)
+
+                # Update queue size metrics
+                current_size = self._input_queue.qsize()
+                self._metrics['max_queue_size'] = max(
+                    self._metrics['max_queue_size'],
+                    current_size
+                )
+                return True
+
+        except TimeoutError:
+            self._metrics['rejected_items'] += 1
+            self._logger.error("Failed to submit data: queue timeout")
+            return False
 
     async def get_result(self) -> ProcessingResult:
         """
@@ -258,3 +304,41 @@ class RealtimePipeline:
             metrics["avg_latency"] = 0.0
 
         return metrics
+
+    def is_backpressure_active(self) -> bool:
+        """
+        Check if backpressure is currently active.
+
+        Returns:
+            bool: True if input queue usage exceeds 80% threshold
+        """
+        if not self._is_running:
+            return False
+
+        # Backpressure active if queue is 80% or more full
+        threshold = self._input_queue.maxsize * 0.8
+        return self._input_queue.qsize() >= threshold
+
+    async def get_queue_status(self) -> dict[str, Any]:
+        """
+        Get detailed queue status information.
+
+        Returns:
+            Dictionary containing:
+            - input_queue_size: Current input queue size
+            - input_queue_maxsize: Maximum input queue capacity
+            - output_queue_size: Current output queue size
+            - output_queue_maxsize: Maximum output queue capacity
+            - backpressure_active: Whether backpressure is active
+            - backpressure_events: Total backpressure events
+            - rejected_items: Total rejected items
+        """
+        return {
+            'input_queue_size': self._input_queue.qsize(),
+            'input_queue_maxsize': self._input_queue.maxsize,
+            'output_queue_size': self._output_queue.qsize(),
+            'output_queue_maxsize': self._output_queue.maxsize,
+            'backpressure_active': self.is_backpressure_active(),
+            'backpressure_events': self._metrics.get('backpressure_events', 0),
+            'rejected_items': self._metrics.get('rejected_items', 0)
+        }

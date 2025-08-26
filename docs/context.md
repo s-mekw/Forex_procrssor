@@ -160,12 +160,174 @@
 - ✅ 移動平均計算のための100サンプル保持機構
 - ✅ 複数プロデューサーからの並行データ処理の安定性
 
+### Step 4 完了 ✅
+**バックプレッシャー制御の実装**
+- ✅ `src/data_processing/pipelines.py` を更新
+- ✅ バックプレッシャー関連メトリクスの追加:
+  - backpressure_events: バックプレッシャー発生回数
+  - queue_full_count: キューフル検出回数
+  - max_queue_size: 最大キューサイズ記録
+  - rejected_items: 拒否されたアイテム数
+  - dropped_results: ドロップされた結果数
+- ✅ submitメソッドの更新:
+  - bool型の戻り値（成功/失敗）
+  - キューフル時の100msタイムアウト処理
+  - バックプレッシャーイベントのカウント
+- ✅ is_backpressure_active()メソッドの実装:
+  - 80%閾値でバックプレッシャー判定
+- ✅ get_queue_status()メソッドの実装:
+  - キューステータスの詳細情報取得
+- ✅ _process_loop()メソッドの更新:
+  - 出力キューのバックプレッシャー処理
+  - タイムアウト時の結果ドロップ処理
+- ✅ バックプレッシャーテストの実装:
+  - test_backpressure_control: バックプレッシャー制御の検証
+  - test_backpressure_rejection: データ拒否の検証
+- 📁 変更ファイル: 
+  - src/data_processing/pipelines.py（メソッド追加・更新）
+  - tests/integration/test_data_pipeline.py（テスト実装）
+- 📝 備考:
+  - 6/9テストがパス（残り3つは次のステップで実装）
+  - pipelines.pyのカバレッジ: 81.70%
+
 ## 📍 現在の状態
-- ステップ: 3/7 完了 → Step 4 開始予定
+- ステップ: 4/7 完了 → Step 5 準備
 - 最終更新: 2025-08-26
-- 現在作業中: Step 3 完了
+- 現在作業中: 完了
 
 ## 次のステップ
+
+### Step 5 遅延監視とアラート機能の実装（次回実装予定）
+**1秒を超える遅延時のアラート機能強化**
+
+#### 📁 対象ファイル
+- `src/data_processing/pipelines.py`（既存ファイルを更新）
+- `tests/integration/test_data_pipeline.py`（テスト追加）
+
+#### 🎯 実装内容
+
+##### 1. **キューサイズ制限の実装**
+```python
+# __init__メソッドの更新
+self._input_queue = asyncio.Queue(maxsize=queue_size)  # 既に実装済み
+self._output_queue = asyncio.Queue(maxsize=queue_size)  # 既に実装済み
+
+# バックプレッシャー関連のメトリクス初期化
+self._metrics['backpressure_events'] = 0
+self._metrics['queue_full_count'] = 0
+self._metrics['max_queue_size'] = 0
+self._metrics['rejected_items'] = 0
+```
+
+##### 2. **submitメソッドの更新（バックプレッシャー制御）**
+```python
+async def submit(self, data_point: DataPoint) -> bool:
+    """
+    データをパイプラインに送信（バックプレッシャー制御付き）
+    
+    Returns:
+        bool: 送信成功時True、キューフル時False
+    """
+    try:
+        # キューフルチェック
+        if self._input_queue.full():
+            self._metrics['queue_full_count'] += 1
+            self._metrics['backpressure_events'] += 1
+            self._logger.warning(
+                f"Input queue is full ({self._input_queue.qsize()}/{self._input_queue.maxsize})"
+            )
+            
+            # タイムアウト付きの待機
+            await asyncio.wait_for(
+                self._input_queue.put(data_point),
+                timeout=0.1  # 100msタイムアウト
+            )
+            return True
+        else:
+            # 通常の送信
+            await self._input_queue.put(data_point)
+            
+            # キューサイズメトリクス更新
+            current_size = self._input_queue.qsize()
+            self._metrics['max_queue_size'] = max(
+                self._metrics['max_queue_size'], 
+                current_size
+            )
+            return True
+            
+    except asyncio.TimeoutError:
+        self._metrics['rejected_items'] += 1
+        self._logger.error("Failed to submit data: queue timeout")
+        return False
+```
+
+##### 3. **バックプレッシャー状態監視メソッドの追加**
+```python
+def is_backpressure_active(self) -> bool:
+    """バックプレッシャーが発生しているかチェック"""
+    if not self._is_running:
+        return False
+    
+    # 入力キューが80%以上使用されている場合
+    threshold = self._input_queue.maxsize * 0.8
+    return self._input_queue.qsize() >= threshold
+
+async def get_queue_status(self) -> dict[str, Any]:
+    """キューの状態を取得"""
+    return {
+        'input_queue_size': self._input_queue.qsize(),
+        'input_queue_maxsize': self._input_queue.maxsize,
+        'output_queue_size': self._output_queue.qsize(),
+        'output_queue_maxsize': self._output_queue.maxsize,
+        'backpressure_active': self.is_backpressure_active(),
+        'backpressure_events': self._metrics.get('backpressure_events', 0),
+        'rejected_items': self._metrics.get('rejected_items', 0)
+    }
+```
+
+##### 4. **_process_loopメソッドの更新（出力キュー管理）**
+```python
+# _process_loopメソッドの更新部分
+try:
+    # 処理結果を出力キューへ送信（バックプレッシャー考慮）
+    if self._output_queue.full():
+        self._logger.warning("Output queue is full, waiting...")
+        
+    await asyncio.wait_for(
+        self._output_queue.put(result),
+        timeout=1.0  # 1秒タイムアウト
+    )
+except asyncio.TimeoutError:
+    self._logger.error("Output queue timeout, dropping result")
+    self._metrics['dropped_results'] = self._metrics.get('dropped_results', 0) + 1
+```
+
+##### 5. **動的スループット調整機能**
+```python
+async def adjust_throughput(self):
+    """バックプレッシャー状態に基づいてスループットを調整"""
+    while self._is_running:
+        await asyncio.sleep(1.0)  # 1秒ごとにチェック
+        
+        if self.is_backpressure_active():
+            # 処理速度を下げる（将来的な実装）
+            self._logger.info("Backpressure detected, adjusting throughput")
+            # 必要に応じてワーカー数を調整するなど
+```
+
+#### ✅ 完了基準
+- [ ] キューの最大サイズ設定が機能する
+- [ ] キューフル時に適切な待機処理が実行される
+- [ ] バックプレッシャー発生時のメトリクスが記録される
+- [ ] is_backpressure_active()メソッドが正しく動作する
+- [ ] submitメソッドがタイムアウト処理を含む
+- [ ] test_backpressure_controlテストがパスする
+
+#### 🧪 テスト項目
+- [ ] キューサイズ制限が正しく機能する
+- [ ] バックプレッシャー発生時の待機動作
+- [ ] タイムアウト時のデータ拒否
+- [ ] メトリクス収集の正確性
 
 ### Step 3 完了 ✅
 **非同期データフロー処理の実装（1分足データパススルー）**

@@ -40,9 +40,9 @@
 ## タスク10.1 実装計画
 
 ### 📍 現在の状態
-- ステップ: 2/7 完了 → Step 3 開始
+- ステップ: 3/7 完了 → Step 4 開始
 - 最終更新: 2025-08-26
-- 現在作業中: Step 3（非同期データフロー処理 - 1分足データパススルー）
+- 現在作業中: Step 4（バックプレッシャー制御）
 
 ### 📋 実装ステップ
 
@@ -79,7 +79,7 @@
     - async def get_result() -> ProcessingResult
 - 完了: [x] ✅ 2025-08-26 完了
 
-#### Step 3: 非同期データフロー処理の実装 🔄 **現在作業中**
+#### Step 3: 非同期データフロー処理の実装 ✅
 - ファイル: `src/data_processing/pipelines.py`
 - 作業: 1分足データのパススルー処理を実装
 - 内容:
@@ -103,23 +103,36 @@
   - **基本的なエラーハンドリング**
     - try-except による例外処理
     - ログ出力（error/warning/info）
-- 完了: [ ]
+- 完了: [x] ✅ 2025-08-26 完了
 
-#### Step 4: バックプレッシャー制御の実装
-- ファイル: `src/data_processing/pipelines.py`
+#### Step 4: バックプレッシャー制御の実装 🔄 **現在作業中**
+- ファイル: `src/data_processing/pipelines.py`, `tests/integration/test_data_pipeline.py`
 - 作業: キューサイズ管理とバックプレッシャー機能を追加
 - 内容:
-  - キューの最大サイズ設定（maxsize パラメータ）
-    - asyncio.Queue(maxsize=self.queue_size)
-  - キューフル時の待機ロジック
-    - await queue.put() での自動待機
-    - タイムアウト処理の追加
-  - メトリクス収集（キューサイズ、処理待ち件数）
-    - queue.qsize() での現在サイズ取得
-    - 最大/平均キューサイズの記録
-    - バックプレッシャー発生回数のカウント
-  - async def is_backpressure_active() メソッド追加
-    - キューの状態チェック
+  - **キューの最大サイズ設定**（既に__init__で実装済み）
+    - asyncio.Queue(maxsize=self.queue_size) ✅
+    - 入力/出力両方のキューにサイズ制限
+  - **submitメソッドの更新**
+    - キューフルチェック機能追加
+    - タイムアウト処理（100ms）の実装
+    - bool型の戻り値（成功/失敗）
+    - バックプレッシャーイベントのカウント
+  - **メトリクス収集の拡張**
+    - backpressure_events: バックプレッシャー発生回数
+    - queue_full_count: キューフル検出回数
+    - max_queue_size: 最大キューサイズ記録
+    - rejected_items: 拒否されたアイテム数
+    - dropped_results: ドロップされた結果数
+  - **新規メソッド追加**
+    - is_backpressure_active(): バックプレッシャー状態チェック（80%閾値）
+    - get_queue_status(): キューステータスの詳細情報取得
+  - **_process_loopの更新**
+    - 出力キューのバックプレッシャー処理
+    - タイムアウト時の結果ドロップ処理
+  - **テストの実装**
+    - test_backpressure_controlテストの有効化
+    - キューフル時の待機動作確認
+    - メトリクス記録の検証
 - 完了: [ ]
 
 #### Step 5: 遅延監視とアラート機能の実装
