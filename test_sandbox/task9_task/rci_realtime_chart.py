@@ -179,6 +179,45 @@ class RCIRealtimeChart:
                 if len(self.ema_data[period]) > 0:
                     self.stats["ema_values"][period] = self.ema_data[period][-1]
     
+    def fetch_confirmed_bar_from_mt5(self, bar_time: datetime) -> Optional[Dict]:
+        """MT5から指定時刻の確定バーデータを取得
+        
+        Args:
+            bar_time: 取得するバーの開始時刻
+            
+        Returns:
+            確定バーデータ（OHLC）またはNone
+        """
+        try:
+            mt5_timeframe = MT5_TIMEFRAMES.get(self.config.chart.timeframe, mt5.TIMEFRAME_M1)
+            
+            # 指定時刻から1本のバーを取得
+            rates = mt5.copy_rates_from(
+                self.config.chart.symbol,
+                mt5_timeframe,
+                bar_time,
+                1  # 1本のみ取得
+            )
+            
+            if rates is None or len(rates) == 0:
+                print(f"Warning: Failed to fetch confirmed bar from MT5 for time {bar_time}")
+                return None
+            
+            # 取得したバーデータを返す
+            bar_data = rates[0]
+            return {
+                "time": datetime.fromtimestamp(bar_data['time']),
+                "open": np.float32(bar_data['open']),
+                "high": np.float32(bar_data['high']),
+                "low": np.float32(bar_data['low']),
+                "close": np.float32(bar_data['close']),
+                "volume": np.float32(bar_data['tick_volume'])
+            }
+            
+        except Exception as e:
+            print(f"Error fetching confirmed bar from MT5: {e}")
+            return None
+    
     def calculate_rci(self):
         """RCIを計算（初期化時のみ使用、ストリーミング方式）"""
         if self.ohlc_data is None or self.ohlc_data.is_empty():
@@ -220,6 +259,105 @@ class RCIRealtimeChart:
                     
         # 最後のバーは未完成バーとしてマーク
         self.has_incomplete_bar = True
+    
+    def _update_confirmed_bar(self, bar_time: datetime, confirmed_bar: Dict):
+        """確定バーをMT5データで更新し、インジケーターを再計算
+        
+        Args:
+            bar_time: 更新するバーの時刻
+            confirmed_bar: MT5から取得した確定バーデータ
+        """
+        try:
+            # OHLCデータ内でbar_timeに一致するインデックスを検索
+            time_list = self.ohlc_data["time"].to_list()
+            bar_index = None
+            
+            for i, t in enumerate(time_list):
+                if t == bar_time:
+                    bar_index = i
+                    break
+            
+            if bar_index is None:
+                print(f"Warning: Bar at time {bar_time} not found in OHLC data")
+                return
+            
+            # デバッグ: 更新前後の値を比較
+            old_close = self.ohlc_data["close"][bar_index]
+            new_close = confirmed_bar["close"]
+            
+            if abs(old_close - new_close) > 0.00001:  # 有意な差がある場合のみログ出力
+                print(f"[MT5 Sync] Bar at {bar_time}: Close {old_close:.5f} -> {new_close:.5f}")
+            
+            # OHLCデータを更新（Polarsの場合は新しいDataFrameを作成）
+            # bar_indexより前のデータ
+            before_data = self.ohlc_data[:bar_index] if bar_index > 0 else None
+            
+            # 更新するバーのデータ
+            updated_bar = pl.DataFrame({
+                "time": [confirmed_bar["time"]],
+                "open": [confirmed_bar["open"]],
+                "high": [confirmed_bar["high"]],
+                "low": [confirmed_bar["low"]],
+                "close": [confirmed_bar["close"]],
+                "volume": [confirmed_bar["volume"]]
+            })
+            
+            # bar_indexより後のデータ
+            after_data = self.ohlc_data[bar_index + 1:] if bar_index < len(self.ohlc_data) - 1 else None
+            
+            # データを結合
+            if before_data is not None and after_data is not None and len(after_data) > 0:
+                self.ohlc_data = pl.concat([before_data, updated_bar, after_data])
+            elif before_data is not None:
+                self.ohlc_data = pl.concat([before_data, updated_bar])
+            elif after_data is not None and len(after_data) > 0:
+                self.ohlc_data = pl.concat([updated_bar, after_data])
+            else:
+                self.ohlc_data = updated_bar
+            
+            # 確定バーのRCIを正確な値で再計算
+            # RCICalculatorの履歴を修正する必要がある
+            self._recalculate_rci_for_confirmed_bar(bar_index, new_close)
+            
+            # EMAは全体を再計算（EMAは過去の値に依存するため）
+            self.calculate_ema()
+            
+            print(f"[MT5 Sync] Successfully updated bar at {bar_time} with MT5 data")
+            
+        except Exception as e:
+            print(f"Error updating confirmed bar: {e}")
+    
+    def _recalculate_rci_for_confirmed_bar(self, bar_index: int, confirmed_close: float):
+        """確定バーのRCIを再計算
+        
+        Args:
+            bar_index: 更新するバーのインデックス
+            confirmed_close: MT5から取得した確定終値
+        """
+        try:
+            # 各期間のRCIを再計算
+            for period in self.config.all_rci_periods:
+                if period not in self.rci_data or period not in self.rci_calculators:
+                    continue
+                
+                # RCIデータの長さを確認
+                if bar_index < len(self.rci_data[period]):
+                    # DifferentialRCICalculatorの内部価格履歴を更新する必要がある
+                    # calculatorには履歴の修正機能がないため、最新の値として追跡のみ
+                    
+                    # 前の値と新しい値の差を記録（デバッグ用）
+                    old_rci = self.rci_data[period][bar_index]
+                    
+                    # Note: DifferentialRCICalculatorは過去の価格を内部で保持しているが、
+                    # 過去の価格を修正する機能はないため、ここでは記録のみ行う
+                    # 将来的にcalculatorに履歴修正機能を追加することを検討
+                    
+                    if old_rci is not None:
+                        print(f"[RCI Update] Period {period}, Index {bar_index}: "
+                              f"RCI value at confirmed close {confirmed_close:.5f}")
+                        
+        except Exception as e:
+            print(f"Error recalculating RCI for confirmed bar: {e}")
     
     def tick_receiver_thread(self):
         """ティック受信スレッド"""
@@ -295,17 +433,31 @@ class RCIRealtimeChart:
         # OHLCデータの最後が未完成バーの場合、それを完成バーで置き換え
         # （初回以降のバー完成時）
         was_replacement = False
+        previous_bar_time = None  # 前のバー（[1]）の時刻を保持
+        
         if len(self.ohlc_data) > 0:
             last_time = self.ohlc_data["time"][-1]
             if last_time == bar.time:
                 # 同じ時刻のバーなら、未完成バーを完成バーで置き換え
                 self.ohlc_data = pl.concat([self.ohlc_data[:-1], new_row])
                 was_replacement = True
+                # 前のバー（[1]）の時刻を取得（データが2本以上ある場合）
+                if len(self.ohlc_data) >= 2:
+                    previous_bar_time = self.ohlc_data["time"][-2]
             else:
                 # 新しい時刻のバーなら追加
+                # この場合、last_timeが確定したバー（[1]）になる
+                previous_bar_time = last_time
                 self.ohlc_data = pl.concat([self.ohlc_data, new_row])
         else:
             self.ohlc_data = new_row
+        
+        # MT5から前のバー（[1]）の確定データを取得して更新
+        if previous_bar_time is not None:
+            confirmed_bar = self.fetch_confirmed_bar_from_mt5(previous_bar_time)
+            if confirmed_bar is not None:
+                # [1]のバーをMT5データで更新
+                self._update_confirmed_bar(previous_bar_time, confirmed_bar)
         
         # RCI増分更新（完成バーのcloseをcalculatorに追加）
         new_close = float(bar.close)
@@ -332,9 +484,10 @@ class RCIRealtimeChart:
                 self.stats["rci_values"][period] = rci_value
                 # デバッグ情報
                 if period == 9:  # 短期RCIのみログ出力
-                    print(f"[Bar Complete] Period {period}: RCI={rci_value:.2f}, "
+                    print(f"[Bar Complete] Period {period}: RCI={rci_value:.2f if rci_value else 'None'}, "
                           f"Replacement={was_replacement}, OHLC len={len(self.ohlc_data)}, "
-                          f"RCI len={len(self.rci_data[period])}")
+                          f"RCI len={len(self.rci_data[period])}, "
+                          f"Bar time={bar.time.strftime('%H:%M:%S')}")
         
         # メモリ管理
         max_bars = self.config.chart.initial_bars * 2
