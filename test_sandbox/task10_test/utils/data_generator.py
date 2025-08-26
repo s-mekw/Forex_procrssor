@@ -38,6 +38,7 @@ class FXDataGenerator:
         "EURJPY": 162.00,
         "GBPJPY": 187.50,
         "AUDJPY": 97.50,
+        "EURGBP": 0.8640,  # 追加
     }
     
     def __init__(self, seed: Optional[int] = None):

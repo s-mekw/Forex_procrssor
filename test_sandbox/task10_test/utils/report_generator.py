@@ -47,7 +47,7 @@ class ReportGenerator:
             output_dir: レポート出力ディレクトリ
         """
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.test_results = []
         
     def add_test_result(self, result: TestResult):

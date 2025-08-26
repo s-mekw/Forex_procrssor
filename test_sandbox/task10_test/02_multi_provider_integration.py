@@ -394,7 +394,7 @@ async def main():
         
         # 最終メトリクス取得
         await asyncio.sleep(2)
-        final_metrics = await pipeline.get_metrics()
+        final_metrics = pipeline.get_metrics()
         provider_stats = manager.get_statistics()
         
         # 分析終了

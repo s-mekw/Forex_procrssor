@@ -383,7 +383,7 @@ async def main():
         
         # 最終メトリクス取得
         await asyncio.sleep(2)
-        final_metrics = await pipeline.get_metrics()
+        final_metrics = pipeline.get_metrics()
         
         # 分析終了
         analyzer.end_analysis()

@@ -65,11 +65,11 @@ async def monitor_pipeline_health(
         await asyncio.sleep(5)  # 5秒ごとに監視
         
         # メトリクス取得
-        metrics = await pipeline.get_metrics()
+        metrics = pipeline.get_metrics()
         queue_status = await pipeline.get_queue_status()
         
         # バックプレッシャー状態を確認
-        is_backpressure = await pipeline.is_backpressure_active()
+        is_backpressure = pipeline.is_backpressure_active()
         
         # メトリクスを記録
         analyzer.record_metrics_snapshot(metrics)
@@ -87,7 +87,7 @@ async def monitor_pipeline_health(
             load_controller.increase_load(1.2)  # 緩やかに増加
             
         # アラート状態の確認
-        alert_stats = await pipeline.get_alert_statistics()
+        alert_stats = pipeline.get_alert_statistics()
         if alert_stats["total_alerts"] > 0:
             severity_dist = alert_stats["severity_distribution"]
             
@@ -348,9 +348,9 @@ async def main():
         
         # 最終メトリクス取得
         await asyncio.sleep(2)
-        final_metrics = await pipeline.get_metrics()
+        final_metrics = pipeline.get_metrics()
         queue_status = await pipeline.get_queue_status()
-        alert_stats = await pipeline.get_alert_statistics()
+        alert_stats = pipeline.get_alert_statistics()
         
         # 分析終了
         analyzer.end_analysis()

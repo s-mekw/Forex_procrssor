@@ -60,7 +60,7 @@ async def simulate_market_open(
     await asyncio.sleep(2)
     
     # メトリクスを取得して分析
-    metrics = await pipeline.get_metrics()
+    metrics = pipeline.get_metrics()
     analyzer.analyze_pipeline_metrics(metrics)
     logger.info(f"市場オープン処理完了: {metrics['processed_count']}件処理")
 
@@ -97,7 +97,7 @@ async def simulate_normal_trading(
     
     # メトリクスを取得
     await asyncio.sleep(1)
-    metrics = await pipeline.get_metrics()
+    metrics = pipeline.get_metrics()
     analyzer.analyze_pipeline_metrics(metrics)
     logger.info(f"通常取引処理完了: {message_count}件送信, {metrics['processed_count']}件処理")
 
@@ -138,7 +138,7 @@ async def simulate_news_release(
     await asyncio.sleep(3)
     
     # アラート統計を確認
-    alert_stats = await pipeline.get_alert_statistics()
+    alert_stats = pipeline.get_alert_statistics()
     if alert_stats["total_alerts"] > 0:
         logger.warning(f"アラート発生: {alert_stats['total_alerts']}件")
         logger.info(f"アラート分布: {alert_stats['severity_distribution']}")
@@ -175,7 +175,7 @@ async def simulate_high_volatility(
     
     # メトリクス確認
     await asyncio.sleep(2)
-    metrics = await pipeline.get_metrics()
+    metrics = pipeline.get_metrics()
     analyzer.analyze_pipeline_metrics(metrics)
     logger.info(f"高ボラティリティ処理: {metrics['processed_count']}件処理")
 
@@ -215,7 +215,7 @@ async def simulate_delayed_provider(
     await asyncio.sleep(3)
     
     # アラート統計確認
-    alert_stats = await pipeline.get_alert_statistics()
+    alert_stats = pipeline.get_alert_statistics()
     logger.info(f"遅延アラート発生: {alert_stats['total_alerts']}件")
     logger.info(f"カスタムコールバック呼び出し: {alert_count['count']}回")
     
@@ -275,7 +275,7 @@ async def main():
         
         # 最終メトリクス取得
         await asyncio.sleep(3)
-        final_metrics = await pipeline.get_metrics()
+        final_metrics = pipeline.get_metrics()
         queue_status = await pipeline.get_queue_status()
         
         # 分析終了

@@ -194,7 +194,7 @@ async def simulate_market_session(
         await asyncio.sleep(tick_interval)
     
     # セッション終了時のメトリクス
-    metrics = await pipeline.get_metrics()
+    metrics = pipeline.get_metrics()
     logger.info(f"{session}セッション終了: {metrics['processed_count']}件処理")
 
 
@@ -213,7 +213,7 @@ async def continuous_monitoring(
         resources = monitor.sample_resources()
         
         # パイプラインメトリクスを取得
-        metrics = await pipeline.get_metrics()
+        metrics = pipeline.get_metrics()
         queue_status = await pipeline.get_queue_status()
         
         # 分析器に記録
@@ -221,7 +221,7 @@ async def continuous_monitoring(
         analyzer.record_metrics_snapshot({
             **metrics,
             **resources,
-            "queue_usage_percent": queue_status["current_input_size"] / queue_status["max_input_size"] * 100
+            "queue_usage_percent": queue_status["input_queue_size"] / queue_status["input_queue_maxsize"] * 100
         })
         
         # 定期レポート
@@ -322,7 +322,7 @@ async def main():
         
         # 最終メトリクス取得
         await asyncio.sleep(2)
-        final_metrics = await pipeline.get_metrics()
+        final_metrics = pipeline.get_metrics()
         system_stats = monitor.get_statistics()
         
         # 分析終了
