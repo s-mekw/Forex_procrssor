@@ -36,3 +36,87 @@
 - 
 ### 作業メモ欄（自由記述）
 - ここには「選択タスク」「対象ファイル」「追加の参照リンク」「決定事項」などを簡潔に記録してください。
+
+## タスク10.1 実装計画
+
+### 📍 現在の状態
+- ステップ: 0/7
+- 最終更新: 2025-08-26
+
+### 📋 実装ステップ
+
+#### Step 1: テストファイルの作成と基本構造
+- ファイル: `tests/integration/test_data_pipeline.py`
+- 作業: テストファイルを作成し、基本的なimportとテストクラスの骨格を実装
+- 内容:
+  - pytest-asyncioの設定
+  - RealtimePipelineのテストクラス作成
+  - 基本的なセットアップ/ティアダウンメソッド
+- 完了: [ ]
+
+#### Step 2: RealtimePipelineクラスの骨格実装
+- ファイル: `src/data_processing/pipelines.py` (新規作成)
+- 作業: RealtimePipelineクラスの基本構造を実装
+- 内容:
+  - asyncioベースの基本クラス定義
+  - 初期化メソッド（__init__）
+  - 基本的な型定義とプロトコル定義
+- 完了: [ ]
+
+#### Step 3: 非同期データフロー処理の実装
+- ファイル: `src/data_processing/pipelines.py`
+- 作業: 1分足データのパススルー処理を実装
+- 内容:
+  - async def process_data() メソッド実装
+  - asyncio.Queue を使用したデータフロー
+  - 基本的なエラーハンドリング
+- 完了: [ ]
+
+#### Step 4: バックプレッシャー制御の実装
+- ファイル: `src/data_processing/pipelines.py`
+- 作業: キューサイズ管理とバックプレッシャー機能を追加
+- 内容:
+  - キューの最大サイズ設定（maxsize パラメータ）
+  - キューフル時の待機ロジック
+  - メトリクス収集（キューサイズ、処理待ち件数）
+- 完了: [ ]
+
+#### Step 5: 遅延監視とアラート機能の実装
+- ファイル: `src/data_processing/pipelines.py`
+- 作業: 1秒を超える遅延時のアラート機能を追加
+- 内容:
+  - タイムスタンプベースの遅延計測
+  - 閾値（1秒）を超えた場合のアラート発出
+  - ログとメトリクスへの記録
+- 完了: [ ]
+
+#### Step 6: 統合テストの実装
+- ファイル: `tests/integration/test_data_pipeline.py`
+- 作業: 非同期処理とバックプレッシャーのテストケース実装
+- 内容:
+  - test_realtime_pipeline_basic_flow: 基本的なデータフロー
+  - test_backpressure_control: バックプレッシャー制御
+  - test_latency_alert: 遅延アラート機能
+  - test_concurrent_processing: 並行処理の正常動作
+- 完了: [ ]
+
+#### Step 7: パフォーマンステストと最適化
+- ファイル: `tests/integration/test_data_pipeline.py`, `src/data_processing/pipelines.py`
+- 作業: パフォーマンステストの追加と必要に応じた最適化
+- 内容:
+  - test_throughput: スループット測定テスト
+  - test_memory_usage: メモリ使用量の監視
+  - 必要に応じてバッファサイズやワーカー数の最適化
+- 完了: [ ]
+
+### 技術的決定事項
+1. **非同期フレームワーク**: Python標準のasyncioを使用
+2. **キュー実装**: asyncio.Queueを使用（maxsizeでバックプレッシャー制御）
+3. **遅延計測**: データオブジェクトにタイムスタンプを付与し、処理時に経過時間を計算
+4. **アラート方式**: 初期実装ではloggingモジュールを使用（将来的にはPrometheusメトリクス連携）
+5. **テスト方針**: pytest-asyncioを使用した非同期テスト
+
+### 依存関係
+- 既存: `src/data_processing/pipeline.py` (IndicatorPipeline)
+- 新規作成: `src/data_processing/pipelines.py` (RealtimePipeline)
+- テスト: `pytest-asyncio` パッケージが必要

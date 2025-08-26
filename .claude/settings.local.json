@@ -34,7 +34,9 @@
       "Bash(git commit:*)",
       "Bash(pytest:*)",
       "Bash(git log:*)",
-      "mcp__serena__insert_before_symbol"
+      "mcp__serena__insert_before_symbol",
+      "Bash(uv pip show:*)",
+      "Bash(uv pip install:*)"
     ],
     "additionalDirectories": [
       "C:\\c\\Users\\shota\\repos"
