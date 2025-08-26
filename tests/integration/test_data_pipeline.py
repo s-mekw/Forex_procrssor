@@ -89,7 +89,7 @@ class TestRealtimePipeline:
         assert pipeline is not None
         assert pipeline.queue_size == 50
         assert pipeline.alert_threshold == 0.5
-        assert pipeline.enable_metrics == True
+        assert pipeline._enable_metrics == True
         assert pipeline._is_running == False
         
         # メトリクスの初期値を確認
@@ -100,34 +100,84 @@ class TestRealtimePipeline:
         assert metrics['output_queue_size'] == 0
 
     @pytest.mark.asyncio
-    async def test_basic_data_flow(self, pipeline, sample_data):
+    async def test_basic_data_flow(self):
         """基本的なデータフロー処理のテスト
 
         検証項目:
         - データが正しく入力から出力へ流れること
         - データの順序が保持されること
+        - 遅延が正しく計測されること
         """
-        if pipeline is None:
-            pytest.skip("RealtimePipelineが未実装のためスキップ")
-
-        # TODO: Step 3実装後に実装
-        # results = []
-        # async def collect_results():
-        #     async for data in pipeline.output():
-        #         results.append(data)
-        #         if len(results) >= len(sample_data):
-        #             break
-        #
-        # # データを入力
-        # for data in sample_data:
-        #     await pipeline.process(data)
-        #
-        # # 結果を収集
-        # await asyncio.wait_for(collect_results(), timeout=5.0)
-        #
-        # assert len(results) == len(sample_data)
-        # for original, result in zip(sample_data, results):
-        #     assert result["symbol"] == original["symbol"]
+        # パイプラインを作成して開始
+        pipeline = RealtimePipeline(
+            queue_size=100,
+            alert_threshold=1.0,
+            enable_metrics=True
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # テスト用データを作成
+            test_data: list[DataPoint] = []
+            for i in range(3):
+                data_point: DataPoint = {
+                    'timestamp': datetime.now(),
+                    'data': {
+                        'id': i,
+                        'symbol': 'USDJPY',
+                        'bid': 150.123 + i * 0.001,
+                        'ask': 150.126 + i * 0.001,
+                        'volume': 1000 + i * 100
+                    },
+                    'metadata': {
+                        'source': 'test',
+                        'sequence': i
+                    }
+                }
+                test_data.append(data_point)
+            
+            # データをパイプラインに送信
+            for data_point in test_data:
+                await pipeline.submit(data_point)
+            
+            # 少し待機してパイプラインが処理するのを待つ
+            await asyncio.sleep(0.5)
+            
+            # 結果を取得
+            results = []
+            for _ in range(len(test_data)):
+                result = await pipeline.get_result()
+                results.append(result)
+            
+            # 検証: 結果の数が正しいこと
+            assert len(results) == len(test_data)
+            
+            # 検証: データの順序と内容が保持されていること
+            for i, (original, result) in enumerate(zip(test_data, results)):
+                assert result['status'] == 'success'
+                assert result['processed_data'] == original['data']
+                assert result['latency'] >= 0  # 遅延は正の値
+                assert result['latency'] < 1.0  # テスト環境では1秒未満のはず
+                
+                # メタデータも確認
+                assert result['processed_data']['id'] == i
+                assert result['processed_data']['symbol'] == 'USDJPY'
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            assert metrics['processed_count'] == 3
+            assert metrics['alert_count'] == 0  # 遅延アラートはないはず
+            # avg_latency のチェック（遅延が極小値の場合も考慮）
+            assert 'avg_latency' in metrics
+            assert metrics['avg_latency'] >= 0
+            assert metrics['max_latency'] >= metrics['avg_latency']
+            assert metrics['min_latency'] <= metrics['avg_latency']
+            assert len(metrics.get('latency_samples', [])) == 3
+            
+        finally:
+            # パイプラインを停止
+            await pipeline.stop()
 
     @pytest.mark.asyncio
     @pytest.mark.skip(reason="Step 4以降で実装予定")

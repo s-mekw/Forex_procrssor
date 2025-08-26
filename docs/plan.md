@@ -40,9 +40,9 @@
 ## タスク10.1 実装計画
 
 ### 📍 現在の状態
-- ステップ: 1/7 完了
+- ステップ: 2/7 完了 → Step 3 開始
 - 最終更新: 2025-08-26
-- 現在作業中: Step 2（RealtimePipelineクラスの骨格実装）
+- 現在作業中: Step 3（非同期データフロー処理 - 1分足データパススルー）
 
 ### 📋 実装ステップ
 
@@ -77,24 +77,32 @@
     - async def stop() -> None
     - async def submit(data: DataPoint) -> None
     - async def get_result() -> ProcessingResult
-- 完了: [ ]
+- 完了: [x] ✅ 2025-08-26 完了
 
-#### Step 3: 非同期データフロー処理の実装
+#### Step 3: 非同期データフロー処理の実装 🔄 **現在作業中**
 - ファイル: `src/data_processing/pipelines.py`
 - 作業: 1分足データのパススルー処理を実装
 - 内容:
-  - async def _process_loop() メソッド実装
-    - 入力キューからデータを取得
-    - タイムスタンプ情報を付与
-    - 簡単な変換処理（パススルー）
-    - 出力キューへ送信
-  - async def process_data(data: DataPoint) メソッド実装
-    - 単一データの処理ロジック
-    - 遅延計測の追加
-  - 基本的なエラーハンドリング
+  - **async def _process_loop() メソッド実装**
+    - 入力キューからDataPointを取得（asyncio.wait_forで1秒タイムアウト）
+    - while self._is_runningループで継続的に処理
+    - 1分足データを_process_dataメソッドで処理
+    - ProcessingResultを出力キューへ送信
+    - TimeoutError時はcontinueで処理継続
+  - **async def _process_data(data: DataPoint) メソッド実装**  
+    - 1分足データをパススルー（data['data']をそのまま返却）
+    - timestampから遅延計測（time.time() - data['timestamp']）
+    - 1秒超の遅延を検出してwarningログ出力（アラート準備）
+    - ProcessingResult作成（processed_data, latency, status）
+  - **メトリクス更新機能 _update_metrics()追加**
+    - 処理数カウント、遅延情報収集
+    - 最大遅延、移動平均の計算（100サンプル保持）
+  - **start/stopメソッドの実装**
+    - start: asyncio.create_task()で_process_loopを起動
+    - stop: _is_runningフラグをFalseにして安全に停止
+  - **基本的なエラーハンドリング**
     - try-except による例外処理
-    - ログ出力
-  - asyncio.create_task()でのループ起動
+    - ログ出力（error/warning/info）
 - 完了: [ ]
 
 #### Step 4: バックプレッシャー制御の実装

@@ -7,6 +7,7 @@ with backpressure control and latency monitoring.
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any, TypedDict
 
@@ -54,7 +55,7 @@ class RealtimePipeline:
         """
         self.queue_size = queue_size
         self.alert_threshold = alert_threshold
-        self.enable_metrics = enable_metrics
+        self._enable_metrics = enable_metrics
 
         # Initialize queues
         self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
@@ -72,9 +73,92 @@ class RealtimePipeline:
 
         # Pipeline state
         self._is_running: bool = False
+        self._processing_task: asyncio.Task | None = None
 
         # Logger
         self._logger: logging.Logger = logging.getLogger(__name__)
+
+    async def _process_loop(self) -> None:
+        """非同期処理ループ（1分足データを継続的に処理）
+
+        入力キューからDataPointを取得し、処理して出力キューへ送信します。
+        """
+        while self._is_running:
+            try:
+                # 入力キューからDataPointを取得（タイムアウト設定）
+                data_point = await asyncio.wait_for(
+                    self._input_queue.get(),
+                    timeout=1.0
+                )
+
+                # データ処理（1分足データのパススルー）
+                result = await self._process_data(data_point)
+
+                # 出力キューへ送信
+                await self._output_queue.put(result)
+
+            except TimeoutError:
+                # タイムアウト時は続行（graceful handling）
+                continue
+            except Exception as e:
+                self._logger.error(f"Processing error: {e}")
+
+    async def _process_data(self, data_point: DataPoint) -> ProcessingResult:
+        """1分足データの処理（現在はパススルー）
+
+        Args:
+            data_point: 処理対象のデータポイント
+
+        Returns:
+            ProcessingResult: 処理結果
+        """
+
+        # 1分足データをそのままパススルー（将来的に変換処理を追加）
+        processed_data = data_point['data']
+
+        # 遅延計測 (timestampをdatetimeからfloatに変換)
+        if isinstance(data_point['timestamp'], datetime):
+            timestamp = data_point['timestamp'].timestamp()
+        else:
+            timestamp = data_point['timestamp']
+
+        latency = time.time() - timestamp
+
+        # 1秒を超える遅延をチェック（アラート準備）
+        if latency > self.alert_threshold:
+            self._logger.warning(f"High latency detected: {latency:.3f}s")
+            if self._enable_metrics:
+                self._metrics['alert_count'] += 1
+
+        # メトリクス更新
+        if self._enable_metrics:
+            self._update_metrics(latency)
+
+        return {
+            'processed_data': processed_data,
+            'latency': latency,
+            'status': 'success'
+        }
+
+    def _update_metrics(self, latency: float) -> None:
+        """メトリクスの更新（遅延情報の記録）
+
+        Args:
+            latency: 計測された遅延時間（秒）
+        """
+        self._metrics['processed_count'] += 1
+        self._metrics['total_latency'] += latency
+        self._metrics['max_latency'] = max(self._metrics.get('max_latency', 0), latency)
+        self._metrics['min_latency'] = min(self._metrics.get('min_latency', float('inf')), latency)
+
+        # 移動平均の更新
+        if 'latency_samples' not in self._metrics:
+            self._metrics['latency_samples'] = []
+
+        self._metrics['latency_samples'].append(latency)
+        # 最新100サンプルのみ保持
+        if len(self._metrics['latency_samples']) > 100:
+            self._metrics['latency_samples'].pop(0)
 
     async def start(self) -> None:
         """
@@ -88,8 +172,8 @@ class RealtimePipeline:
             return
 
         self._is_running = True
-        self._logger.info("Pipeline started")
-        # TODO: Implement processing loop in Step 3
+        self._processing_task = asyncio.create_task(self._process_loop())
+        self._logger.info("RealtimePipeline started")
 
     async def stop(self) -> None:
         """
@@ -103,8 +187,13 @@ class RealtimePipeline:
             return
 
         self._is_running = False
-        self._logger.info("Pipeline stopped")
-        # TODO: Implement graceful shutdown in Step 3
+
+        # 処理タスクの終了を待つ
+        if self._processing_task:
+            await self._processing_task
+            self._processing_task = None
+
+        self._logger.info("RealtimePipeline stopped")
 
     async def submit(self, data: DataPoint) -> None:
         """
@@ -151,7 +240,7 @@ class RealtimePipeline:
             - alert_count: Number of latency alerts triggered
             - backpressure_events: Number of backpressure events
         """
-        if not self.enable_metrics:
+        if not self._enable_metrics:
             return {}
 
         metrics = self._metrics.copy()
