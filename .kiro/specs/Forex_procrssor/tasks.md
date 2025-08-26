@@ -61,7 +61,7 @@
   - チャンク処理とストリーミング処理の切り替えロジックを実装
   - _要件: 2.1_
 
-- [ ] 8. テクニカル指標計算エンジンの実装
+- [X] 8. テクニカル指標計算エンジンの実装
   - tests/unit/test_indicators.pyに各指標の計算精度テストを作成
   - src/data_processing/indicators.pyにTechnicalIndicatorEngineクラスを実装
   - polars-ta-extensionを使用したEMA（5、20、50、100、200期間）計算を実装
@@ -69,7 +69,7 @@
   - 増分計算による効率的な更新メカニズムを追加
   - _要件: 2.2_
 
-- [ ] 9. RCI計算エンジンの高速実装
+- [X] 9. RCI計算エンジンの高速実装
   - tests/unit/test_rci.pyにRCI計算とパラメータ検証のテストを作成
   - src/data_processing/rci.pyにRCICalculatorクラスを実装
   - 設定可能な期間リストのRCI計算を実装（エンジンは汎用）
