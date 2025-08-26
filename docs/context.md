@@ -219,9 +219,9 @@
 - Message: feat: Step 4完了 - バックプレッシャー制御の実装
 
 ## 📍 現在の状態
-- ステップ: 5/7 完了 → Step 6 開始
+- ステップ: 6/7 完了
 - 最終更新: 2025-08-26
-- 現在作業中: Step 5 完了済み
+- 現在作業中: Step 7待機中
 
 ### Step 5 完了 ✅
 **遅延監視とアラート機能（1秒閾値）の実装**
@@ -298,170 +298,228 @@
 - [x] 合格（次へ進む）
 
 ### コミット結果（Step 5）
-- Hash: [コミット実行予定]
+- Hash: 089f86f
 - Message: feat: Step 5完了 - 遅延監視とアラート機能の実装（1秒閾値）
+
+### Step 6 完了 ✅
+**統合テストの実装**
+- ✅ `tests/integration/test_data_pipeline.py` を更新
+- ✅ 実装したテスト:
+  - test_concurrent_processing: 並行処理の安定性検証
+  - test_error_handling: エラーハンドリングとリカバリー検証
+  - test_metrics_collection: メトリクス収集の正確性検証
+  - test_pipeline_lifecycle: ライフサイクル管理の検証
+  - test_stress_test: ストレステスト（500データの高速処理）
+- ✅ `src/data_processing/pipelines.py` を微調整:
+  - get_queue_statusにis_runningキー追加
+  - startメソッドでRuntimeError発生を修正
+- ✅ テスト結果:
+  - 11/12テストがパス（1つはStep 7用でスキップ）
+  - pipelines.pyのカバレッジ: 87.28%（目標85%を達成）
+- 📁 変更ファイル:
+  - tests/integration/test_data_pipeline.py（5つのテスト追加）
+  - src/data_processing/pipelines.py（微修正）
+- 📝 備考:
+  - ストレステストはキューサイズ100で500データを処理
+  - バックプレッシャー動作を確認
+  - 並行プロデューサーからのデータ処理安定性を確認
 
 ## 次のステップ
 
-### Step 6 統合テストの実装（開始予定）
-**非同期処理とバックプレッシャーのテストケース実装**
+### Step 7 パフォーマンステストと最適化（未実装）
+**パフォーマンステストと必要に応じた最適化**
 
 #### 📁 対象ファイル
-- `src/data_processing/pipelines.py`（既存ファイルを更新）
-- `tests/integration/test_data_pipeline.py`（テスト追加）
+- `tests/integration/test_data_pipeline.py`（test_throughput_performance）
+- `src/data_processing/pipelines.py`（必要に応じて最適化）
 
 #### 🎯 実装内容
 
-##### 1. **アラート管理システムの追加**
+##### 1. **test_concurrent_processingテストの実装**
 ```python
-# __init__メソッドに追加
-self._alert_history = []  # アラート履歴を保持
-self._alert_callback = None  # カスタムアラート処理用コールバック
-self._consecutive_alerts = 0  # 連続アラート数カウント
-self._alert_escalation_threshold = 5  # エスカレーション閾値
-```
-
-##### 2. **高度な遅延監視メソッドの実装**
-```python
-async def _check_latency_alert(self, latency: float, data_point: DataPoint) -> None:
-    """遅延をチェックしてアラートを発出"""
-    if latency > self._alert_threshold:
-        self._consecutive_alerts += 1
-        alert_info = {
-            'timestamp': datetime.now(),
-            'latency': latency,
-            'data_point': data_point,
-            'severity': self._get_alert_severity(latency),
-            'consecutive_count': self._consecutive_alerts
-        }
-        
-        # アラート履歴に追加（最新100件を保持）
-        self._alert_history.append(alert_info)
-        if len(self._alert_history) > 100:
-            self._alert_history.pop(0)
-        
-        # アラートメトリクス更新
-        self._metrics['alert_count'] += 1
-        self._metrics['last_alert_time'] = time.time()
-        self._metrics['max_consecutive_alerts'] = max(
-            self._metrics.get('max_consecutive_alerts', 0),
-            self._consecutive_alerts
-        )
-        
-        # ログ出力（重要度によって変更）
-        if alert_info['severity'] == 'critical':
-            self._logger.critical(f"CRITICAL: Latency {latency:.3f}s exceeds threshold")
-        elif alert_info['severity'] == 'high':
-            self._logger.error(f"HIGH: Latency alert - {latency:.3f}s")
-        else:
-            self._logger.warning(f"Latency alert: {latency:.3f}s")
-        
-        # エスカレーション処理
-        if self._consecutive_alerts >= self._alert_escalation_threshold:
-            await self._escalate_alert(alert_info)
-        
-        # カスタムコールバック実行
-        if self._alert_callback:
-            await self._alert_callback(alert_info)
-    else:
-        # アラート解除
-        if self._consecutive_alerts > 0:
-            self._logger.info(f"Latency returned to normal after {self._consecutive_alerts} alerts")
-            self._consecutive_alerts = 0
-```
-
-##### 3. **アラート重要度判定メソッド**
-```python
-def _get_alert_severity(self, latency: float) -> str:
-    """遅延時間に基づいてアラートの重要度を判定"""
-    if latency > 10.0:  # 10秒超
-        return 'critical'
-    elif latency > 5.0:  # 5秒超
-        return 'high'
-    elif latency > self._alert_threshold:  # 1秒超
-        return 'medium'
-    else:
-        return 'low'
-```
-
-##### 4. **アラートエスカレーション機能**
-```python
-async def _escalate_alert(self, alert_info: dict) -> None:
-    """アラートをエスカレーション（連続発生時の特別処理）"""
-    self._logger.critical(
-        f"ESCALATION: {self._consecutive_alerts} consecutive alerts detected! "
-        f"Latest latency: {alert_info['latency']:.3f}s"
-    )
+async def test_concurrent_processing():
+    """並行データ処理の正常動作を検証"""
+    pipeline = RealtimePipeline(queue_size=100)
+    await pipeline.start()
     
-    # パイプライン一時停止の検討
-    if self._consecutive_alerts >= 10:
-        self._logger.critical("Automatic pipeline pause triggered due to persistent high latency")
-        # 自動停止フラグを設定（オプション）
-        self._metrics['auto_pause_triggered'] = True
+    # 複数のプロデューサーから同時にデータ送信
+    async def producer(pipeline, prefix, count=10):
+        for i in range(count):
+            data_point = {
+                'timestamp': time.time(),
+                'data': {'id': f'{prefix}_{i}', 'value': i},
+                'metadata': {'source': prefix}
+            }
+            await pipeline.submit(data_point)
+            await asyncio.sleep(0.01)  # 少し間隔を開ける
+    
+    # 3つの並行プロデューサーを起動
+    producers = [
+        producer(pipeline, 'A'),
+        producer(pipeline, 'B'),
+        producer(pipeline, 'C')
+    ]
+    await asyncio.gather(*producers)
+    
+    # 全データが処理されることを確認（30個）
+    results = []
+    for _ in range(30):
+        result = await pipeline.get_result()
+        results.append(result)
+    
+    assert len(results) == 30
+    assert all(r['status'] == 'success' for r in results)
+    
+    await pipeline.stop()
 ```
 
-##### 5. **アラート統計情報取得メソッド**
+##### 2. **test_error_handlingテストの実装**
 ```python
-def get_alert_statistics(self) -> dict[str, Any]:
-    """アラート統計情報を取得"""
-    if not self._alert_history:
-        return {
-            'total_alerts': 0,
-            'recent_alerts': [],
-            'avg_latency': 0,
-            'max_latency': 0
-        }
+async def test_error_handling():
+    """エラーハンドリングとリカバリー処理のテスト"""
+    pipeline = RealtimePipeline(queue_size=10)
+    await pipeline.start()
     
-    recent_alerts = self._alert_history[-10:]  # 最新10件
-    latencies = [a['latency'] for a in self._alert_history]
-    
-    return {
-        'total_alerts': self._metrics.get('alert_count', 0),
-        'recent_alerts': recent_alerts,
-        'avg_latency': sum(latencies) / len(latencies),
-        'max_latency': max(latencies),
-        'consecutive_alerts': self._consecutive_alerts,
-        'last_alert_time': self._metrics.get('last_alert_time'),
-        'severity_distribution': self._get_severity_distribution()
+    # 無効なデータを送信（timestampなし）
+    invalid_data = {
+        'data': {'value': 100},
+        'metadata': {}
     }
-
-def _get_severity_distribution(self) -> dict[str, int]:
-    """アラートの重要度分布を取得"""
-    distribution = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
-    for alert in self._alert_history:
-        severity = alert.get('severity', 'medium')
-        distribution[severity] += 1
-    return distribution
+    # エラーが発生してもパイプラインが停止しないことを確認
+    result = await pipeline.submit(invalid_data)
+    assert result is False  # 無効なデータは拒否される
+    
+    # 正常なデータを送信してパイプラインが継続動作することを確認
+    valid_data = {
+        'timestamp': time.time(),
+        'data': {'value': 200},
+        'metadata': {}
+    }
+    result = await pipeline.submit(valid_data)
+    assert result is True
+    
+    # パイプラインがまだ動作中であることを確認
+    queue_status = pipeline.get_queue_status()
+    assert queue_status['is_running'] is True
+    
+    await pipeline.stop()
 ```
 
-##### 6. **_process_dataメソッドの更新**
+##### 3. **test_metrics_collectionテストの実装**
 ```python
-# 既存の_process_dataメソッドに統合
-if latency > self._alert_threshold:
-    await self._check_latency_alert(latency, data_point)
+async def test_metrics_collection():
+    """メトリクス収集機能の正確性を検証"""
+    pipeline = RealtimePipeline(queue_size=50, enable_metrics=True)
+    await pipeline.start()
+    
+    # 20個のデータを送信
+    for i in range(20):
+        data_point = {
+            'timestamp': time.time() - random.uniform(0, 0.5),  # ランダムな遅延
+            'data': {'id': i, 'value': i * 10},
+            'metadata': {'batch': 1}
+        }
+        await pipeline.submit(data_point)
+        await asyncio.sleep(0.05)
+    
+    # 結果を取得
+    results = []
+    while not pipeline._output_queue.empty():
+        result = await pipeline.get_result()
+        results.append(result)
+    
+    # メトリクスを取得して検証
+    metrics = pipeline.get_metrics()
+    assert metrics['processed_count'] == 20
+    assert metrics['avg_latency'] > 0
+    assert metrics['max_latency'] > metrics['avg_latency']
+    assert metrics['min_latency'] <= metrics['avg_latency']
+    assert 'latency_moving_avg' in metrics
+    assert len(metrics['latency_moving_avg']) <= 100
+    
+    await pipeline.stop()
 ```
 
-##### 7. **アラートコールバック設定機能**
+##### 4. **test_pipeline_lifecycleテストの実装**
 ```python
-def set_alert_callback(self, callback: callable) -> None:
-    """カスタムアラート処理のコールバックを設定"""
-    self._alert_callback = callback
+async def test_pipeline_lifecycle():
+    """パイプラインのライフサイクル管理のテスト"""
+    pipeline = RealtimePipeline(queue_size=10)
+    
+    # パイプラインが未起動状態
+    assert pipeline._is_running is False
+    
+    # startを複数回呼ぶとエラー
+    await pipeline.start()
+    assert pipeline._is_running is True
+    
+    with pytest.raises(RuntimeError, match="Pipeline already running"):
+        await pipeline.start()
+    
+    # stop後に再起動可能
+    await pipeline.stop()
+    assert pipeline._is_running is False
+    
+    await pipeline.start()
+    assert pipeline._is_running is True
+    
+    # 正常停止
+    await pipeline.stop()
+    assert pipeline._is_running is False
+```
+
+##### 5. **test_stress_testテストの実装（オプション）**
+```python
+@pytest.mark.slow
+async def test_stress_test():
+    """ストレステスト（大量データ処理）"""
+    pipeline = RealtimePipeline(queue_size=1000)
+    await pipeline.start()
+    
+    # 1000個のデータを高速で送信
+    send_count = 0
+    for i in range(1000):
+        data_point = {
+            'timestamp': time.time(),
+            'data': {'id': i, 'value': i},
+            'metadata': {'test': 'stress'}
+        }
+        success = await pipeline.submit(data_point)
+        if success:
+            send_count += 1
+        # バックプレッシャーが発生した場合は少し待つ
+        if not success:
+            await asyncio.sleep(0.01)
+    
+    # 送信率を確認（100%でなくてもOK）
+    assert send_count > 900  # 90%以上送信成功
+    
+    # メトリクス確認
+    metrics = pipeline.get_metrics()
+    assert metrics['backpressure_events'] > 0  # バックプレッシャーが発生
+    assert metrics['processed_count'] > 0
+    
+    await pipeline.stop()
 ```
 
 #### ✅ 完了基準
-- [x] 1秒超の遅延時にアラートが発出される
-- [x] アラート履歴が保持される（最新100件）
-- [x] 重要度に応じたログレベルの使い分け
-- [x] 連続アラート時のエスカレーション機能
-- [x] アラート統計情報の取得機能
-- [x] test_latency_alertテストがパスする
+- [ ] test_concurrent_processing: 並行処理の正常動作検証
+- [ ] test_error_handling: エラーハンドリングとリカバリー
+- [ ] test_metrics_collection: メトリクス収集の正確性
+- [ ] test_pipeline_lifecycle: ライフサイクル管理
+- [ ] test_stress_test: 大量データ処理（オプション）
+- [ ] コードカバレッジが85%以上を達成
 
 #### 🧪 テスト項目
-- [x] 1秒超遅延時のアラート発出確認
-- [x] アラート履歴の正確な記録
-- [x] 連続アラート時のエスカレーション動作
-- [x] アラート統計情報の正確性
-- [x] カスタムコールバックの実行確認
+- [ ] 並行プロデューサーからのデータ処理
+- [ ] エラー発生時のパイプライン継続動作
+- [ ] メトリクスの正確な収集と統計計算
+- [ ] start/stopの正常動作と再起動
+- [ ] バックプレッシャー下での安定動作
+#### 📊 メトリクス目標
+- コードカバレッジ: 85%以上（pipelines.py）
+- テスト成功率: 100%（9/9テスト）
+- パフォーマンス: 1000データ/秒以上（ストレステスト）
 
 ### Step 3 完了 ✅
 **非同期データフロー処理の実装（1分足データパススルー）**

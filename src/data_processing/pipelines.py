@@ -194,8 +194,7 @@ class RealtimePipeline:
         consuming data from the input queue.
         """
         if self._is_running:
-            self._logger.warning("Pipeline is already running")
-            return
+            raise RuntimeError("Pipeline already running")
 
         self._is_running = True
         self._processing_task = asyncio.create_task(self._process_loop())
@@ -337,6 +336,7 @@ class RealtimePipeline:
 
         Returns:
             Dictionary containing:
+            - is_running: Whether the pipeline is currently running
             - input_queue_size: Current input queue size
             - input_queue_maxsize: Maximum input queue capacity
             - output_queue_size: Current output queue size
@@ -344,15 +344,18 @@ class RealtimePipeline:
             - backpressure_active: Whether backpressure is active
             - backpressure_events: Total backpressure events
             - rejected_items: Total rejected items
+            - max_queue_size: Maximum queue size observed
         """
         return {
+            'is_running': self._is_running,
             'input_queue_size': self._input_queue.qsize(),
             'input_queue_maxsize': self._input_queue.maxsize,
             'output_queue_size': self._output_queue.qsize(),
             'output_queue_maxsize': self._output_queue.maxsize,
             'backpressure_active': self.is_backpressure_active(),
             'backpressure_events': self._metrics.get('backpressure_events', 0),
-            'rejected_items': self._metrics.get('rejected_items', 0)
+            'rejected_items': self._metrics.get('rejected_items', 0),
+            'max_queue_size': self._metrics.get('max_queue_size', 0)
         }
 
     async def _check_latency_alert(self, latency: float, data_point: DataPoint) -> None:
