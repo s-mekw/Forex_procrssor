@@ -73,7 +73,16 @@ class RealtimePipeline:
             "max_queue_size": 0,
             "rejected_items": 0,
             "dropped_results": 0,
+            "last_alert_time": None,
+            "max_consecutive_alerts": 0,
+            "auto_pause_triggered": False,
         }
+
+        # Alert management
+        self._alert_history: list[dict[str, Any]] = []  # アラート履歴を保持
+        self._alert_callback: Any = None  # カスタムアラート処理用コールバック
+        self._consecutive_alerts: int = 0  # 連続アラート数カウント
+        self._alert_escalation_threshold: int = 5  # エスカレーション閾値
 
         # Pipeline state
         self._is_running: bool = False
@@ -138,11 +147,14 @@ class RealtimePipeline:
 
         latency = time.time() - timestamp
 
-        # 1秒を超える遅延をチェック（アラート準備）
+        # 1秒を超える遅延をチェック（アラート機能統合）
         if latency > self.alert_threshold:
-            self._logger.warning(f"High latency detected: {latency:.3f}s")
-            if self._enable_metrics:
-                self._metrics['alert_count'] += 1
+            await self._check_latency_alert(latency, data_point)
+        else:
+            # アラート解除
+            if self._consecutive_alerts > 0:
+                self._logger.info(f"Latency returned to normal after {self._consecutive_alerts} alerts")
+                self._consecutive_alerts = 0
 
         # メトリクス更新
         if self._enable_metrics:
@@ -342,3 +354,133 @@ class RealtimePipeline:
             'backpressure_events': self._metrics.get('backpressure_events', 0),
             'rejected_items': self._metrics.get('rejected_items', 0)
         }
+
+    async def _check_latency_alert(self, latency: float, data_point: DataPoint) -> None:
+        """遅延をチェックしてアラートを発出
+
+        Args:
+            latency: 遅延時間（秒）
+            data_point: 処理中のデータポイント
+        """
+        self._consecutive_alerts += 1
+        alert_info = {
+            'timestamp': datetime.now(),
+            'latency': latency,
+            'data_point': data_point,
+            'severity': self._get_alert_severity(latency),
+            'consecutive_count': self._consecutive_alerts
+        }
+
+        # アラート履歴に追加（最新100件を保持）
+        self._alert_history.append(alert_info)
+        if len(self._alert_history) > 100:
+            self._alert_history.pop(0)
+
+        # アラートメトリクス更新
+        self._metrics['alert_count'] += 1
+        self._metrics['last_alert_time'] = time.time()
+        self._metrics['max_consecutive_alerts'] = max(
+            self._metrics.get('max_consecutive_alerts', 0),
+            self._consecutive_alerts
+        )
+
+        # ログ出力（重要度によって変更）
+        if alert_info['severity'] == 'critical':
+            self._logger.critical(f"CRITICAL: Latency {latency:.3f}s exceeds threshold")
+        elif alert_info['severity'] == 'high':
+            self._logger.error(f"HIGH: Latency alert - {latency:.3f}s")
+        else:
+            self._logger.warning(f"Latency alert: {latency:.3f}s")
+
+        # エスカレーション処理
+        if self._consecutive_alerts >= self._alert_escalation_threshold:
+            await self._escalate_alert(alert_info)
+
+        # カスタムコールバック実行
+        if self._alert_callback:
+            if asyncio.iscoroutinefunction(self._alert_callback):
+                await self._alert_callback(alert_info)
+            else:
+                self._alert_callback(alert_info)
+
+    def _get_alert_severity(self, latency: float) -> str:
+        """遅延時間に基づいてアラートの重要度を判定
+
+        Args:
+            latency: 遅延時間（秒）
+
+        Returns:
+            重要度文字列 (low/medium/high/critical)
+        """
+        if latency > 10.0:  # 10秒超
+            return 'critical'
+        elif latency > 5.0:  # 5秒超
+            return 'high'
+        elif latency > self.alert_threshold:  # 1秒超
+            return 'medium'
+        else:
+            return 'low'
+
+    async def _escalate_alert(self, alert_info: dict) -> None:
+        """アラートをエスカレーション（連続発生時の特別処理）
+
+        Args:
+            alert_info: アラート情報
+        """
+        self._logger.critical(
+            f"ESCALATION: {self._consecutive_alerts} consecutive alerts detected! "
+            f"Latest latency: {alert_info['latency']:.3f}s"
+        )
+
+        # パイプライン一時停止の検討
+        if self._consecutive_alerts >= 10:
+            self._logger.critical("Automatic pipeline pause triggered due to persistent high latency")
+            # 自動停止フラグを設定（オプション）
+            self._metrics['auto_pause_triggered'] = True
+
+    def get_alert_statistics(self) -> dict[str, Any]:
+        """アラート統計情報を取得
+
+        Returns:
+            アラート統計情報を含む辞書
+        """
+        if not self._alert_history:
+            return {
+                'total_alerts': 0,
+                'recent_alerts': [],
+                'avg_latency': 0,
+                'max_latency': 0
+            }
+
+        recent_alerts = self._alert_history[-10:]  # 最新10件
+        latencies = [a['latency'] for a in self._alert_history]
+
+        return {
+            'total_alerts': self._metrics.get('alert_count', 0),
+            'recent_alerts': recent_alerts,
+            'avg_latency': sum(latencies) / len(latencies),
+            'max_latency': max(latencies),
+            'consecutive_alerts': self._consecutive_alerts,
+            'last_alert_time': self._metrics.get('last_alert_time'),
+            'severity_distribution': self._get_severity_distribution()
+        }
+
+    def _get_severity_distribution(self) -> dict[str, int]:
+        """アラートの重要度分布を取得
+
+        Returns:
+            重要度別のアラート数
+        """
+        distribution = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        for alert in self._alert_history:
+            severity = alert.get('severity', 'medium')
+            distribution[severity] += 1
+        return distribution
+
+    def set_alert_callback(self, callback: Any) -> None:
+        """カスタムアラート処理のコールバックを設定
+
+        Args:
+            callback: アラート発生時に呼び出されるコールバック関数
+        """
+        self._alert_callback = callback

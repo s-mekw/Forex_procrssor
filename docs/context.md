@@ -190,15 +190,121 @@
   - 6/9テストがパス（残り3つは次のステップで実装）
   - pipelines.pyのカバレッジ: 81.70%
 
+## 👁️ レビュー結果
+
+### Step 4 レビュー
+#### 良い点
+- ✅ バックプレッシャー制御の基本機能が正しく実装されている
+- ✅ submitメソッドが100msタイムアウトとbool戻り値を正しく実装している
+- ✅ is_backpressure_active()メソッドが80%閾値判定を正確に行っている
+- ✅ get_queue_status()メソッドがキュー状態の詳細情報を適切に返している
+- ✅ _process_loop()の出力キューバックプレッシャー処理が実装されている
+- ✅ メトリクス項目が適切に追加されている
+- ✅ テストケースが包括的に実装されており、6 passedを達成
+- ✅ pipelines.pyのカバレッジが81.70%と良好
+- ✅ 非同期処理が安定して動作している
+
+#### 改善点
+- ⚠️ コードフォーマットの問題（ruff --fixで修正済み）
+- 優先度: 低
+
+#### 評価総合点数
+- 91/100 (100点満点)
+
+#### 判定
+- [x] 合格（次へ進む）
+
+### コミット結果
+- Hash: 402ad4b
+- Message: feat: Step 4完了 - バックプレッシャー制御の実装
+
 ## 📍 現在の状態
-- ステップ: 4/7 完了 → Step 5 準備
+- ステップ: 5/7 完了 → Step 6 開始
 - 最終更新: 2025-08-26
-- 現在作業中: 完了
+- 現在作業中: Step 5 完了済み
+
+### Step 5 完了 ✅
+**遅延監視とアラート機能（1秒閾値）の実装**
+- ✅ `src/data_processing/pipelines.py` を更新
+- ✅ アラート管理システムの追加:
+  - _alert_history: アラート履歴を保持（最新100件）
+  - _alert_callback: カスタムアラート処理用コールバック
+  - _consecutive_alerts: 連続アラート数カウント
+  - _alert_escalation_threshold: エスカレーション閾値（5回）
+- ✅ _check_latency_alert()メソッドの実装:
+  - 遅延チェックとアラート発出
+  - アラート情報の記録（timestamp, latency, data_point, severity, consecutive_count）
+  - 重要度別ログ出力（medium/high/critical）
+  - エスカレーション判定と実行
+  - カスタムコールバック呼び出し
+- ✅ _get_alert_severity()メソッドの実装:
+  - 1秒超: medium
+  - 5秒超: high
+  - 10秒超: critical
+- ✅ _escalate_alert()メソッドの実装:
+  - 連続5回でエスカレーション警告
+  - 連続10回でauto_pause_triggeredフラグ設定
+- ✅ get_alert_statistics()メソッドの実装:
+  - アラート統計情報の取得
+  - 最新10件のアラート履歴
+  - 平均/最大遅延時間
+  - 重要度分布の計算
+- ✅ set_alert_callback()メソッドの実装:
+  - カスタムアラート処理のコールバック設定
+- ✅ _process_data()メソッドの更新:
+  - アラート機能の統合
+  - アラート解除時のログ出力
+- ✅ test_latency_alertテストの実装:
+  - 異なる重要度のアラート検証
+  - アラート履歴の記録確認
+  - エスカレーション動作確認
+  - カスタムコールバック実行確認
+- 📁 変更ファイル: 
+  - src/data_processing/pipelines.py（メソッド追加・更新）
+  - tests/integration/test_data_pipeline.py（テスト実装）
+- 📝 備考:
+  - 7/9テストがパス（残り2つは次のステップで実装）
+  - pipelines.pyのカバレッジ: 83.84%
+  - アラート重要度に応じたログレベル使い分け実装済み
+  - エスカレーション機能正常動作確認済み
+
+## 👁️ レビュー結果
+
+### Step 5 レビュー
+#### 良い点
+- ✅ 遅延監視機能が計画通り完全に実装されている（1秒閾値）
+- ✅ _check_latency_alert()メソッドが正確にアラートを発出し、連続アラート数をカウント
+- ✅ アラート履歴管理が正しく実装され、最新100件の保持が確認済み
+- ✅ アラート重要度判定が正確（medium: 1秒超、high: 5秒超、critical: 10秒超）
+- ✅ get_alert_statistics()メソッドが包括的な統計情報を提供
+  - total_alerts: 合計アラート数
+  - recent_alerts: 最新10件の詳細
+  - avg_latency/max_latency: 平均・最大遅延
+  - severity_distribution: 重要度別分布
+- ✅ エスカレーション機能が期待通り動作（連続5回で警告、10回で自動停止フラグ）
+- ✅ カスタムアラートコールバック機能が同期/非同期両対応
+- ✅ test_latency_alertテストが包括的で、7/9テストがパス
+- ✅ コードカバレッジ83.84%で目標の80%を達成
+- ✅ ruffによるコード品質チェックをクリア（フォーマット修正済み）
+
+#### 改善点
+- ⚠️ テストコードの空白行フォーマット問題（ruff --fixで修正済み）
+- 優先度: 低
+
+#### 評価総合点数
+- **95/100** (100点満点)
+
+#### 判定
+- [x] 合格（次へ進む）
+
+### コミット結果（Step 5）
+- Hash: [コミット実行予定]
+- Message: feat: Step 5完了 - 遅延監視とアラート機能の実装（1秒閾値）
 
 ## 次のステップ
 
-### Step 5 遅延監視とアラート機能の実装（次回実装予定）
-**1秒を超える遅延時のアラート機能強化**
+### Step 6 統合テストの実装（開始予定）
+**非同期処理とバックプレッシャーのテストケース実装**
 
 #### 📁 対象ファイル
 - `src/data_processing/pipelines.py`（既存ファイルを更新）
@@ -206,128 +312,156 @@
 
 #### 🎯 実装内容
 
-##### 1. **キューサイズ制限の実装**
+##### 1. **アラート管理システムの追加**
 ```python
-# __init__メソッドの更新
-self._input_queue = asyncio.Queue(maxsize=queue_size)  # 既に実装済み
-self._output_queue = asyncio.Queue(maxsize=queue_size)  # 既に実装済み
-
-# バックプレッシャー関連のメトリクス初期化
-self._metrics['backpressure_events'] = 0
-self._metrics['queue_full_count'] = 0
-self._metrics['max_queue_size'] = 0
-self._metrics['rejected_items'] = 0
+# __init__メソッドに追加
+self._alert_history = []  # アラート履歴を保持
+self._alert_callback = None  # カスタムアラート処理用コールバック
+self._consecutive_alerts = 0  # 連続アラート数カウント
+self._alert_escalation_threshold = 5  # エスカレーション閾値
 ```
 
-##### 2. **submitメソッドの更新（バックプレッシャー制御）**
+##### 2. **高度な遅延監視メソッドの実装**
 ```python
-async def submit(self, data_point: DataPoint) -> bool:
-    """
-    データをパイプラインに送信（バックプレッシャー制御付き）
-    
-    Returns:
-        bool: 送信成功時True、キューフル時False
-    """
-    try:
-        # キューフルチェック
-        if self._input_queue.full():
-            self._metrics['queue_full_count'] += 1
-            self._metrics['backpressure_events'] += 1
-            self._logger.warning(
-                f"Input queue is full ({self._input_queue.qsize()}/{self._input_queue.maxsize})"
-            )
-            
-            # タイムアウト付きの待機
-            await asyncio.wait_for(
-                self._input_queue.put(data_point),
-                timeout=0.1  # 100msタイムアウト
-            )
-            return True
+async def _check_latency_alert(self, latency: float, data_point: DataPoint) -> None:
+    """遅延をチェックしてアラートを発出"""
+    if latency > self._alert_threshold:
+        self._consecutive_alerts += 1
+        alert_info = {
+            'timestamp': datetime.now(),
+            'latency': latency,
+            'data_point': data_point,
+            'severity': self._get_alert_severity(latency),
+            'consecutive_count': self._consecutive_alerts
+        }
+        
+        # アラート履歴に追加（最新100件を保持）
+        self._alert_history.append(alert_info)
+        if len(self._alert_history) > 100:
+            self._alert_history.pop(0)
+        
+        # アラートメトリクス更新
+        self._metrics['alert_count'] += 1
+        self._metrics['last_alert_time'] = time.time()
+        self._metrics['max_consecutive_alerts'] = max(
+            self._metrics.get('max_consecutive_alerts', 0),
+            self._consecutive_alerts
+        )
+        
+        # ログ出力（重要度によって変更）
+        if alert_info['severity'] == 'critical':
+            self._logger.critical(f"CRITICAL: Latency {latency:.3f}s exceeds threshold")
+        elif alert_info['severity'] == 'high':
+            self._logger.error(f"HIGH: Latency alert - {latency:.3f}s")
         else:
-            # 通常の送信
-            await self._input_queue.put(data_point)
-            
-            # キューサイズメトリクス更新
-            current_size = self._input_queue.qsize()
-            self._metrics['max_queue_size'] = max(
-                self._metrics['max_queue_size'], 
-                current_size
-            )
-            return True
-            
-    except asyncio.TimeoutError:
-        self._metrics['rejected_items'] += 1
-        self._logger.error("Failed to submit data: queue timeout")
-        return False
-```
-
-##### 3. **バックプレッシャー状態監視メソッドの追加**
-```python
-def is_backpressure_active(self) -> bool:
-    """バックプレッシャーが発生しているかチェック"""
-    if not self._is_running:
-        return False
-    
-    # 入力キューが80%以上使用されている場合
-    threshold = self._input_queue.maxsize * 0.8
-    return self._input_queue.qsize() >= threshold
-
-async def get_queue_status(self) -> dict[str, Any]:
-    """キューの状態を取得"""
-    return {
-        'input_queue_size': self._input_queue.qsize(),
-        'input_queue_maxsize': self._input_queue.maxsize,
-        'output_queue_size': self._output_queue.qsize(),
-        'output_queue_maxsize': self._output_queue.maxsize,
-        'backpressure_active': self.is_backpressure_active(),
-        'backpressure_events': self._metrics.get('backpressure_events', 0),
-        'rejected_items': self._metrics.get('rejected_items', 0)
-    }
-```
-
-##### 4. **_process_loopメソッドの更新（出力キュー管理）**
-```python
-# _process_loopメソッドの更新部分
-try:
-    # 処理結果を出力キューへ送信（バックプレッシャー考慮）
-    if self._output_queue.full():
-        self._logger.warning("Output queue is full, waiting...")
+            self._logger.warning(f"Latency alert: {latency:.3f}s")
         
-    await asyncio.wait_for(
-        self._output_queue.put(result),
-        timeout=1.0  # 1秒タイムアウト
+        # エスカレーション処理
+        if self._consecutive_alerts >= self._alert_escalation_threshold:
+            await self._escalate_alert(alert_info)
+        
+        # カスタムコールバック実行
+        if self._alert_callback:
+            await self._alert_callback(alert_info)
+    else:
+        # アラート解除
+        if self._consecutive_alerts > 0:
+            self._logger.info(f"Latency returned to normal after {self._consecutive_alerts} alerts")
+            self._consecutive_alerts = 0
+```
+
+##### 3. **アラート重要度判定メソッド**
+```python
+def _get_alert_severity(self, latency: float) -> str:
+    """遅延時間に基づいてアラートの重要度を判定"""
+    if latency > 10.0:  # 10秒超
+        return 'critical'
+    elif latency > 5.0:  # 5秒超
+        return 'high'
+    elif latency > self._alert_threshold:  # 1秒超
+        return 'medium'
+    else:
+        return 'low'
+```
+
+##### 4. **アラートエスカレーション機能**
+```python
+async def _escalate_alert(self, alert_info: dict) -> None:
+    """アラートをエスカレーション（連続発生時の特別処理）"""
+    self._logger.critical(
+        f"ESCALATION: {self._consecutive_alerts} consecutive alerts detected! "
+        f"Latest latency: {alert_info['latency']:.3f}s"
     )
-except asyncio.TimeoutError:
-    self._logger.error("Output queue timeout, dropping result")
-    self._metrics['dropped_results'] = self._metrics.get('dropped_results', 0) + 1
+    
+    # パイプライン一時停止の検討
+    if self._consecutive_alerts >= 10:
+        self._logger.critical("Automatic pipeline pause triggered due to persistent high latency")
+        # 自動停止フラグを設定（オプション）
+        self._metrics['auto_pause_triggered'] = True
 ```
 
-##### 5. **動的スループット調整機能**
+##### 5. **アラート統計情報取得メソッド**
 ```python
-async def adjust_throughput(self):
-    """バックプレッシャー状態に基づいてスループットを調整"""
-    while self._is_running:
-        await asyncio.sleep(1.0)  # 1秒ごとにチェック
-        
-        if self.is_backpressure_active():
-            # 処理速度を下げる（将来的な実装）
-            self._logger.info("Backpressure detected, adjusting throughput")
-            # 必要に応じてワーカー数を調整するなど
+def get_alert_statistics(self) -> dict[str, Any]:
+    """アラート統計情報を取得"""
+    if not self._alert_history:
+        return {
+            'total_alerts': 0,
+            'recent_alerts': [],
+            'avg_latency': 0,
+            'max_latency': 0
+        }
+    
+    recent_alerts = self._alert_history[-10:]  # 最新10件
+    latencies = [a['latency'] for a in self._alert_history]
+    
+    return {
+        'total_alerts': self._metrics.get('alert_count', 0),
+        'recent_alerts': recent_alerts,
+        'avg_latency': sum(latencies) / len(latencies),
+        'max_latency': max(latencies),
+        'consecutive_alerts': self._consecutive_alerts,
+        'last_alert_time': self._metrics.get('last_alert_time'),
+        'severity_distribution': self._get_severity_distribution()
+    }
+
+def _get_severity_distribution(self) -> dict[str, int]:
+    """アラートの重要度分布を取得"""
+    distribution = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+    for alert in self._alert_history:
+        severity = alert.get('severity', 'medium')
+        distribution[severity] += 1
+    return distribution
+```
+
+##### 6. **_process_dataメソッドの更新**
+```python
+# 既存の_process_dataメソッドに統合
+if latency > self._alert_threshold:
+    await self._check_latency_alert(latency, data_point)
+```
+
+##### 7. **アラートコールバック設定機能**
+```python
+def set_alert_callback(self, callback: callable) -> None:
+    """カスタムアラート処理のコールバックを設定"""
+    self._alert_callback = callback
 ```
 
 #### ✅ 完了基準
-- [ ] キューの最大サイズ設定が機能する
-- [ ] キューフル時に適切な待機処理が実行される
-- [ ] バックプレッシャー発生時のメトリクスが記録される
-- [ ] is_backpressure_active()メソッドが正しく動作する
-- [ ] submitメソッドがタイムアウト処理を含む
-- [ ] test_backpressure_controlテストがパスする
+- [x] 1秒超の遅延時にアラートが発出される
+- [x] アラート履歴が保持される（最新100件）
+- [x] 重要度に応じたログレベルの使い分け
+- [x] 連続アラート時のエスカレーション機能
+- [x] アラート統計情報の取得機能
+- [x] test_latency_alertテストがパスする
 
 #### 🧪 テスト項目
-- [ ] キューサイズ制限が正しく機能する
-- [ ] バックプレッシャー発生時の待機動作
-- [ ] タイムアウト時のデータ拒否
-- [ ] メトリクス収集の正確性
+- [x] 1秒超遅延時のアラート発出確認
+- [x] アラート履歴の正確な記録
+- [x] 連続アラート時のエスカレーション動作
+- [x] アラート統計情報の正確性
+- [x] カスタムコールバックの実行確認
 
 ### Step 3 完了 ✅
 **非同期データフロー処理の実装（1分足データパススルー）**

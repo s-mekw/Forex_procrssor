@@ -105,43 +105,45 @@
     - ログ出力（error/warning/info）
 - 完了: [x] ✅ 2025-08-26 完了
 
-#### Step 4: バックプレッシャー制御の実装 🔄 **現在作業中**
+#### Step 4: バックプレッシャー制御の実装 ✅ **完了**
 - ファイル: `src/data_processing/pipelines.py`, `tests/integration/test_data_pipeline.py`
 - 作業: キューサイズ管理とバックプレッシャー機能を追加
 - 内容:
-  - **キューの最大サイズ設定**（既に__init__で実装済み）
-    - asyncio.Queue(maxsize=self.queue_size) ✅
-    - 入力/出力両方のキューにサイズ制限
-  - **submitメソッドの更新**
-    - キューフルチェック機能追加
-    - タイムアウト処理（100ms）の実装
-    - bool型の戻り値（成功/失敗）
-    - バックプレッシャーイベントのカウント
-  - **メトリクス収集の拡張**
-    - backpressure_events: バックプレッシャー発生回数
-    - queue_full_count: キューフル検出回数
-    - max_queue_size: 最大キューサイズ記録
-    - rejected_items: 拒否されたアイテム数
-    - dropped_results: ドロップされた結果数
-  - **新規メソッド追加**
-    - is_backpressure_active(): バックプレッシャー状態チェック（80%閾値）
-    - get_queue_status(): キューステータスの詳細情報取得
-  - **_process_loopの更新**
-    - 出力キューのバックプレッシャー処理
-    - タイムアウト時の結果ドロップ処理
-  - **テストの実装**
-    - test_backpressure_controlテストの有効化
-    - キューフル時の待機動作確認
-    - メトリクス記録の検証
-- 完了: [ ]
+  - ✅ キューの最大サイズ設定（asyncio.Queue(maxsize)）
+  - ✅ submitメソッドの更新（bool戻り値、100msタイムアウト）
+  - ✅ バックプレッシャー関連メトリクス追加
+  - ✅ is_backpressure_active()メソッド（80%閾値判定）
+  - ✅ get_queue_status()メソッド（キュー詳細情報）
+  - ✅ _process_loopの出力キューバックプレッシャー処理
+  - ✅ テスト実装（6/9 passed、カバレッジ81.70%）
+- 完了: [x] ✅ 2025-08-26 完了
 
-#### Step 5: 遅延監視とアラート機能の実装
-- ファイル: `src/data_processing/pipelines.py`
-- 作業: 1秒を超える遅延時のアラート機能を追加
+#### Step 5: 遅延監視とアラート機能の実装 🔄 **現在作業中**
+- ファイル: `src/data_processing/pipelines.py`, `tests/integration/test_data_pipeline.py`
+- 作業: 1秒を超える遅延時の高度なアラート機能を追加
 - 内容:
-  - タイムスタンプベースの遅延計測
-  - 閾値（1秒）を超えた場合のアラート発出
-  - ログとメトリクスへの記録
+  - **アラート管理システムの追加**
+    - アラート履歴の保持（最新100件）
+    - カスタムアラートコールバック機能
+    - 連続アラート数カウント
+  - **_check_latency_alertメソッドの実装**
+    - 遅延閾値（1秒）チェック
+    - アラート情報の記録
+    - 重要度判定（low/medium/high/critical）
+  - **アラート重要度判定機能**
+    - 1-5秒: medium
+    - 5-10秒: high
+    - 10秒超: critical
+  - **エスカレーション機能**
+    - 連続5回アラートでエスカレーション
+    - 連続10回で自動一時停止検討
+  - **アラート統計情報取得**
+    - get_alert_statistics()メソッド
+    - 重要度分布、平均遅延、最大遅延
+  - **テストの追加**
+    - test_latency_alertテストの有効化
+    - アラート発出検証
+    - エスカレーション動作確認
 - 完了: [ ]
 
 #### Step 6: 統合テストの実装

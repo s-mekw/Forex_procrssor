@@ -337,15 +337,125 @@ class TestRealtimePipeline:
             await pipeline.stop()
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Step 5以降で実装予定")
-    async def test_latency_alert(self, pipeline):
+    async def test_latency_alert(self):
         """遅延アラート機能のテスト
 
         検証項目:
         - 1秒を超える遅延が検出されること
         - アラートが適切に発出されること
+        - アラート履歴が記録されること
+        - エスカレーション機能が動作すること
         """
-        pass  # Step 5で実装
+        # パイプラインを作成
+        pipeline = RealtimePipeline(
+            queue_size=100,
+            alert_threshold=1.0,  # 1秒閾値
+            enable_metrics=True
+        )
+
+        # カスタムアラートコールバックを設定（検証用）
+        alerts_received = []
+        def alert_callback(alert_info):
+            alerts_received.append(alert_info)
+
+        pipeline.set_alert_callback(alert_callback)
+
+        await pipeline.start()
+
+        try:
+            # 1. 正常な遅延のデータ（アラートなし）
+            normal_data: DataPoint = {
+                'timestamp': datetime.now(),
+                'data': {'id': 0, 'type': 'normal'},
+                'metadata': None
+            }
+            await pipeline.submit(normal_data)
+
+            # 2. 遅延ありのデータを送信（1.5秒前のタイムスタンプ）
+            delayed_data: DataPoint = {
+                'timestamp': datetime.now() - timedelta(seconds=1.5),
+                'data': {'id': 1, 'type': 'delayed', 'delay': 1.5},
+                'metadata': None
+            }
+            await pipeline.submit(delayed_data)
+
+            # 3. より大きな遅延（5.5秒 - high severity）
+            high_delayed: DataPoint = {
+                'timestamp': datetime.now() - timedelta(seconds=5.5),
+                'data': {'id': 2, 'type': 'high_delayed', 'delay': 5.5},
+                'metadata': None
+            }
+            await pipeline.submit(high_delayed)
+
+            # 4. クリティカルな遅延（11秒 - critical severity）
+            critical_delayed: DataPoint = {
+                'timestamp': datetime.now() - timedelta(seconds=11),
+                'data': {'id': 3, 'type': 'critical', 'delay': 11},
+                'metadata': None
+            }
+            await pipeline.submit(critical_delayed)
+
+            # 処理完了を待つ
+            await asyncio.sleep(0.5)
+
+            # 結果を取得
+            results = []
+            for _ in range(4):
+                result = await asyncio.wait_for(pipeline.get_result(), timeout=1.0)
+                results.append(result)
+
+            # アラート統計を取得
+            alert_stats = pipeline.get_alert_statistics()
+
+            # 検証
+            assert alert_stats['total_alerts'] == 3  # 3つのアラート（1.5秒, 5.5秒, 11秒）
+            assert alert_stats['consecutive_alerts'] == 3
+            assert alert_stats['avg_latency'] > 1.0
+            assert alert_stats['max_latency'] >= 11.0
+
+            # 重要度分布の確認
+            severity_dist = alert_stats['severity_distribution']
+            assert severity_dist['medium'] >= 1  # 1.5秒のアラート
+            assert severity_dist['high'] >= 1    # 5.5秒のアラート
+            assert severity_dist['critical'] >= 1  # 11秒のアラート
+
+            # カスタムコールバックが呼ばれたことを確認
+            assert len(alerts_received) == 3
+            assert alerts_received[0]['severity'] == 'medium'
+            assert alerts_received[1]['severity'] == 'high'
+            assert alerts_received[2]['severity'] == 'critical'
+
+            # メトリクスの確認
+            metrics = pipeline.get_metrics()
+            assert metrics['alert_count'] == 3
+            assert metrics['last_alert_time'] is not None
+            assert metrics['max_consecutive_alerts'] >= 3
+
+            # エスカレーション確認用：追加の遅延データを送信
+            for i in range(3):
+                escalation_data: DataPoint = {
+                    'timestamp': datetime.now() - timedelta(seconds=2),
+                    'data': {'id': 4 + i, 'type': 'escalation'},
+                    'metadata': None
+                }
+                await pipeline.submit(escalation_data)
+
+            await asyncio.sleep(0.5)
+
+            # エスカレーション後の統計確認
+            final_stats = pipeline.get_alert_statistics()
+            assert final_stats['consecutive_alerts'] >= 5  # エスカレーション閾値を超えているはず
+
+            # メトリクスでエスカレーションを確認
+            final_metrics = pipeline.get_metrics()
+
+            # 連続10回でauto_pause_triggeredがTrueになることを確認
+            if final_stats['consecutive_alerts'] >= 10:
+                assert final_metrics['auto_pause_triggered'] is True
+
+        finally:
+            # パイプラインを停止
+            await pipeline.stop()
 
     @pytest.mark.asyncio
     @pytest.mark.skip(reason="Step 6以降で実装予定")
