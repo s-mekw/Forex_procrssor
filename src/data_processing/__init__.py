@@ -6,5 +6,25 @@ RCI計算、リアルタイム処理パイプラインを提供します。
 """
 
 from .processor import PolarsProcessingEngine
+from .rci import (
+    RCICalculatorEngine,
+    DifferentialRCICalculator,
+    RCIProcessor,
+    RCICalculationError,
+    InvalidPeriodError,
+    InsufficientDataError
+)
+from .pipeline import IndicatorPipeline
+from .indicators import TechnicalIndicatorEngine
 
-__all__ = ["PolarsProcessingEngine"]
+__all__ = [
+    "PolarsProcessingEngine",
+    "RCICalculatorEngine",
+    "DifferentialRCICalculator",
+    "RCIProcessor",
+    "RCICalculationError",
+    "InvalidPeriodError",
+    "InsufficientDataError",
+    "IndicatorPipeline",
+    "TechnicalIndicatorEngine"
+]

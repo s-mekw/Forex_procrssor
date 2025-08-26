@@ -72,6 +72,174 @@ class PolarsProcessingEngine:
         }
         logger.info(f"PolarsProcessingEngine initialized with chunk_size={chunk_size}")
 
+    def calculate_rci(
+        self,
+        df: pl.DataFrame,
+        periods: Optional[List[int]] = None,
+        column_name: str = 'close',
+        add_reliability: bool = True
+    ) -> pl.DataFrame:
+        """
+        Calculate RCI (Rank Correlation Index) indicators.
+        
+        This method integrates RCI calculation into the processing pipeline,
+        providing efficient computation of RCI values for multiple periods.
+        
+        Args:
+            df: Input DataFrame with price data
+            periods: List of RCI periods to calculate (default: [9, 13, 24, 33, 48, 66, 108])
+            column_name: Column name for price data (default: 'close')
+            add_reliability: Whether to add reliability flags (default: True)
+            
+        Returns:
+            DataFrame with RCI columns added
+            
+        Raises:
+            ValueError: If DataFrame is empty or column_name doesn't exist
+            RCICalculationError: If RCI calculation fails
+            
+        Example:
+            df = engine.calculate_rci(df, periods=[9, 13, 24])
+            # Adds columns: rci_9, rci_13, rci_24, rci_9_reliable, etc.
+        """
+        from .rci import RCIProcessor, RCICalculationError
+        
+        # Validate input
+        if df.is_empty():
+            raise ValueError("Cannot calculate RCI on empty DataFrame")
+        
+        if column_name not in df.columns:
+            raise ValueError(f"Column '{column_name}' not found in DataFrame")
+        
+        logger.info(f"Calculating RCI for periods: {periods}")
+        
+        try:
+            # Initialize RCI processor
+            rci_processor = RCIProcessor(use_float32=True)
+            
+            # Calculate RCI
+            result = rci_processor.apply_to_dataframe(
+                df,
+                periods=periods,
+                column_name=column_name,
+                add_reliability=add_reliability
+            )
+            
+            # Log statistics
+            if periods:
+                valid_counts = {
+                    f"rci_{p}": result[f"rci_{p}"].is_not_null().sum()
+                    for p in periods or [9, 13, 24, 33, 48, 66, 108]
+                    if f"rci_{p}" in result.columns
+                }
+                logger.info(f"RCI calculation complete. Valid values: {valid_counts}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"RCI calculation failed: {e}")
+            raise RCICalculationError(f"Failed to calculate RCI: {e}")
+    
+    def process_with_rci(
+        self,
+        df: pl.DataFrame,
+        rci_periods: Optional[List[int]] = None,
+        other_indicators: Optional[List[str]] = None,
+        price_column: str = 'close'
+    ) -> pl.DataFrame:
+        """
+        Process DataFrame with RCI and optionally other technical indicators.
+        
+        This method provides a unified interface for calculating multiple
+        indicators including RCI in a single pipeline.
+        
+        Args:
+            df: Input DataFrame
+            rci_periods: RCI periods to calculate
+            other_indicators: List of other indicators to calculate
+                            (e.g., ['rsi', 'macd', 'bollinger'])
+            price_column: Column name for price data
+            
+        Returns:
+            DataFrame with all requested indicators
+            
+        Example:
+            df = engine.process_with_rci(
+                df,
+                rci_periods=[9, 13, 24],
+                other_indicators=['rsi', 'macd']
+            )
+        """
+        result = df
+        
+        # Calculate RCI if periods specified
+        if rci_periods:
+            logger.info(f"Adding RCI indicators for periods: {rci_periods}")
+            result = self.calculate_rci(
+                result,
+                periods=rci_periods,
+                column_name=price_column
+            )
+        
+        # Calculate other indicators if specified
+        if other_indicators:
+            from .indicators import TechnicalIndicatorEngine
+            
+            logger.info(f"Adding technical indicators: {other_indicators}")
+            indicator_engine = TechnicalIndicatorEngine()
+            
+            # Map indicator names to methods
+            indicator_map = {
+                'rsi': lambda df: indicator_engine.calculate_rsi(df, price_column=price_column),
+                'macd': lambda df: indicator_engine.calculate_macd(df, price_column=price_column),
+                'bollinger': lambda df: indicator_engine.calculate_bollinger_bands(df, price_column=price_column),
+                'ema': lambda df: indicator_engine.calculate_ema(df, price_column=price_column)
+            }
+            
+            for indicator in other_indicators:
+                if indicator.lower() in indicator_map:
+                    result = indicator_map[indicator.lower()](result)
+                else:
+                    logger.warning(f"Unknown indicator: {indicator}")
+        
+        return result
+    
+    def calculate_rci_lazy(
+        self,
+        lf: pl.LazyFrame,
+        periods: Optional[List[int]] = None,
+        column_name: str = 'close',
+        add_reliability: bool = True
+    ) -> pl.LazyFrame:
+        """
+        Calculate RCI on LazyFrame for memory-efficient processing.
+        
+        Args:
+            lf: Input LazyFrame
+            periods: List of RCI periods
+            column_name: Column name for price data
+            add_reliability: Whether to add reliability flags
+            
+        Returns:
+            LazyFrame with RCI calculations (not yet computed)
+        """
+        from .rci import RCIProcessor
+        
+        logger.info("Setting up lazy RCI calculation")
+        
+        # Initialize RCI processor
+        rci_processor = RCIProcessor(use_float32=True)
+        
+        # Apply to LazyFrame
+        result = rci_processor.apply_to_lazyframe(
+            lf,
+            periods=periods,
+            column_name=column_name,
+            add_reliability=add_reliability
+        )
+        
+        return result
+
     def validate_datatypes(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Validate and fix data types in a DataFrame.

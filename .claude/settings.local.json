@@ -1,6 +1,8 @@
 {
   "env": {
-    "MAX_THINKING_TOKENS": "31999"
+    "MAX_THINKING_TOKENS": "31999",
+    "DISABLE_MICROCOMPACT": "true",
+    "DISABLE_INTERLEAVED_THINKING": "true"
   },
   "permissions": {
     "allow": [
@@ -31,7 +33,8 @@
       "Bash(timeout 30 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
       "Bash(git commit:*)",
       "Bash(pytest:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "mcp__serena__insert_before_symbol"
     ],
     "additionalDirectories": [
       "C:\\c\\Users\\shota\\repos"
