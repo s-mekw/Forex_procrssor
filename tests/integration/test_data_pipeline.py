@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-# テスト対象のインポート（まだ実装していないので、後でコメント解除）
-# from src.data_processing.pipelines import RealtimePipeline
+# テスト対象のインポート
+from src.data_processing.pipelines import RealtimePipeline, DataPoint, ProcessingResult
 
 # ログ設定
 logger = logging.getLogger(__name__)
@@ -79,20 +79,25 @@ class TestRealtimePipeline:
         - RealtimePipelineクラスが正しくインスタンス化できること
         - 初期化パラメータが正しく設定されること
         """
-        # TODO: Step 2実装後に実装
-        # pipeline = RealtimePipeline(
-        #     max_queue_size=50,
-        #     latency_threshold_seconds=0.5
-        # )
-        #
-        # assert pipeline is not None
-        # assert pipeline.max_queue_size == 50
-        # assert pipeline.latency_threshold_seconds == 0.5
-        #
-        # await pipeline.close()
-
-        # 仮のアサーション（Step 2以降で置き換え）
-        assert True, "パイプラインインスタンス作成テストは未実装"
+        # Step 2実装のテスト
+        pipeline = RealtimePipeline(
+            queue_size=50,
+            alert_threshold=0.5,
+            enable_metrics=True
+        )
+        
+        assert pipeline is not None
+        assert pipeline.queue_size == 50
+        assert pipeline.alert_threshold == 0.5
+        assert pipeline.enable_metrics == True
+        assert pipeline._is_running == False
+        
+        # メトリクスの初期値を確認
+        metrics = pipeline.get_metrics()
+        assert metrics['processed_count'] == 0
+        assert metrics['alert_count'] == 0
+        assert metrics['input_queue_size'] == 0
+        assert metrics['output_queue_size'] == 0
 
     @pytest.mark.asyncio
     async def test_basic_data_flow(self, pipeline, sample_data):

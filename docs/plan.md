@@ -40,8 +40,9 @@
 ## タスク10.1 実装計画
 
 ### 📍 現在の状態
-- ステップ: 0/7
+- ステップ: 1/7 完了
 - 最終更新: 2025-08-26
+- 現在作業中: Step 2（RealtimePipelineクラスの骨格実装）
 
 ### 📋 実装ステップ
 
@@ -52,7 +53,7 @@
   - pytest-asyncioの設定
   - RealtimePipelineのテストクラス作成
   - 基本的なセットアップ/ティアダウンメソッド
-- 完了: [ ]
+- 完了: [x] ✅ 2025-08-26 完了
 
 #### Step 2: RealtimePipelineクラスの骨格実装
 - ファイル: `src/data_processing/pipelines.py` (新規作成)
@@ -60,16 +61,40 @@
 - 内容:
   - asyncioベースの基本クラス定義
   - 初期化メソッド（__init__）
+    - queue_size: int = 1000（キューの最大サイズ）
+    - alert_threshold: float = 1.0（遅延アラート閾値、秒）
+    - enable_metrics: bool = True（メトリクス収集フラグ）
   - 基本的な型定義とプロトコル定義
+    - DataPoint: TypedDict（timestamp, data, metadata）
+    - ProcessingResult: TypedDict（processed_data, latency, status）
+  - インスタンス変数の定義
+    - self._input_queue: asyncio.Queue（入力キュー）
+    - self._output_queue: asyncio.Queue（出力キュー）
+    - self._metrics: Dict（メトリクス収集用）
+    - self._is_running: bool（実行状態フラグ）
+  - 基本メソッドのスタブ実装
+    - async def start() -> None
+    - async def stop() -> None
+    - async def submit(data: DataPoint) -> None
+    - async def get_result() -> ProcessingResult
 - 完了: [ ]
 
 #### Step 3: 非同期データフロー処理の実装
 - ファイル: `src/data_processing/pipelines.py`
 - 作業: 1分足データのパススルー処理を実装
 - 内容:
-  - async def process_data() メソッド実装
-  - asyncio.Queue を使用したデータフロー
+  - async def _process_loop() メソッド実装
+    - 入力キューからデータを取得
+    - タイムスタンプ情報を付与
+    - 簡単な変換処理（パススルー）
+    - 出力キューへ送信
+  - async def process_data(data: DataPoint) メソッド実装
+    - 単一データの処理ロジック
+    - 遅延計測の追加
   - 基本的なエラーハンドリング
+    - try-except による例外処理
+    - ログ出力
+  - asyncio.create_task()でのループ起動
 - 完了: [ ]
 
 #### Step 4: バックプレッシャー制御の実装
@@ -77,8 +102,16 @@
 - 作業: キューサイズ管理とバックプレッシャー機能を追加
 - 内容:
   - キューの最大サイズ設定（maxsize パラメータ）
+    - asyncio.Queue(maxsize=self.queue_size)
   - キューフル時の待機ロジック
+    - await queue.put() での自動待機
+    - タイムアウト処理の追加
   - メトリクス収集（キューサイズ、処理待ち件数）
+    - queue.qsize() での現在サイズ取得
+    - 最大/平均キューサイズの記録
+    - バックプレッシャー発生回数のカウント
+  - async def is_backpressure_active() メソッド追加
+    - キューの状態チェック
 - 完了: [ ]
 
 #### Step 5: 遅延監視とアラート機能の実装
