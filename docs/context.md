@@ -1,8 +1,8 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: 5/10 実行中
-- 最終更新: 2025-08-27 17:00
+- ステップ: 6/10 実行中
+- 最終更新: 2025-08-27 18:15
 - タスク: Task 10.3 パイプラインのリファクタリングと責務の明確化
 
 ## 📋 計画ステータス
@@ -175,6 +175,124 @@ RealtimePipelineとMultiTimeframeAnalyzerの責務を明確に分離し、以下
 3. テストカバレッジを段階的に向上（目標: 80%）
 
 ## 🔄 次のアクション
+### Step 6: バッファ管理機能のユニットテスト作成（完了 ✅）
+
+#### 実装結果
+**実装完了日時**: 2025-08-27 19:30
+
+**目的**: MultiTimeframeAnalyzerの新しいバッファ管理機能に対するユニットテストを実装し、テストカバレッジを向上させる
+
+**実装内容**:
+
+1. **✅ TestBufferManagementクラス（4テストケース）**
+   - test_add_new_bar_basic: バーの追加が正しく動作することを確認
+   - test_buffer_size_limit: バッファサイズが最大値を超えないことを確認
+   - test_buffer_size_management: 古いデータが適切に削除されることを確認
+   - test_get_buffer_size: バッファサイズが正しく取得できることを確認
+
+2. **✅ TestAnalysisReadinessクラス（3テストケース）**
+   - test_is_ready_with_sufficient_data: 十分なデータがある場合の判定を確認
+   - test_is_ready_with_insufficient_data: データ不足の場合の判定を確認
+   - test_is_ready_boundary_case: 境界値（ちょうど200バー）のテストを実施
+
+3. **✅ TestDataFrameConversionクラス（3テストケース）**
+   - test_get_buffer_as_dataframe_with_data: データがある場合の変換を確認
+   - test_get_buffer_as_dataframe_empty: 空バッファの場合の処理を確認
+   - test_dataframe_column_types: 変換後のカラム型を確認
+
+4. **✅ TestInternalBufferModeクラス（3テストケース）**
+   - test_analyze_streaming_internal_buffer: 内部バッファを使用した分析を確認
+   - test_analyze_streaming_not_ready: 準備未完了時の応答を確認
+   - test_analyze_streaming_backward_compatibility: 後方互換性を確認
+
+**技術的改善点**:
+- **テストカバレッジ向上**: analyzer.pyのカバレッジが26.04%から51.32%へ向上
+- **バグ修正**: テスト実装中にdatetime生成の問題を発見し修正
+- **データ型の一貫性**: numpy配列のデータ型を明示的に指定
+- **エラーハンドリング**: 各状態（準備完了、未完了、データなし）の適切なテスト
+
+**テスト実行結果**:
+```
+============================= 13 passed in 1.80s ==============================
+テストクラス: 4個
+テストケース: 13個（全て成功）
+カバレッジ: analyzer.py - 51.32% (26.04%から向上)
+```
+
+**次のステップへの推奨事項**:
+1. Step 7でエッジケースのテストを追加
+2. エラーハンドリングのテストを強化
+3. パフォーマンステストの追加
+
+### Step 7: エッジケース・エラーハンドリングテスト（実行中）
+
+#### 作業内容
+**目的**: MultiTimeframeAnalyzerの新しいバッファ管理機能に対するユニットテストを実装し、テストカバレッジを向上させる
+
+**作業対象ファイル**: `tests/unit/test_multiframe_analyzer.py`
+
+**テスト対象メソッド**:
+1. `add_new_bar()`: 新しいバーをバッファに追加
+2. `get_buffer_size()`: 現在のバッファサイズを取得
+3. `is_ready()`: 分析準備完了の判定
+4. `get_buffer_as_dataframe()`: バッファをDataFrame形式で取得
+5. `_manage_buffer_size()`: バッファサイズの管理（プライベート）
+6. `analyze_streaming()`: 内部バッファモード
+
+**テストケースの設計**:
+
+1. **バッファ管理の基本テスト（TestBufferManagement）**
+   - test_add_new_bar_basic: バーの追加が正しく動作すること
+   - test_buffer_size_limit: バッファサイズが最大値を超えないこと
+   - test_buffer_size_management: 古いデータが適切に削除されること
+   - test_get_buffer_size: バッファサイズが正しく取得できること
+
+2. **分析準備状態のテスト（TestAnalysisReadiness）**
+   - test_is_ready_with_sufficient_data: 十分なデータがある場合の判定
+   - test_is_ready_with_insufficient_data: データ不足の場合の判定
+   - test_is_ready_boundary_case: 境界値（ちょうど200バー）のテスト
+
+3. **DataFrame変換のテスト（TestDataFrameConversion）**
+   - test_get_buffer_as_dataframe_with_data: データがある場合の変換
+   - test_get_buffer_as_dataframe_empty: 空バッファの場合の処理
+   - test_dataframe_column_types: 変換後のカラム型の確認
+
+4. **内部バッファモードのテスト（TestInternalBufferMode）**
+   - test_analyze_streaming_internal_buffer: 内部バッファを使用した分析
+   - test_analyze_streaming_not_ready: 準備未完了時の応答
+   - test_analyze_streaming_backward_compatibility: 後方互換性の確認
+
+**実装の詳細仕様**:
+
+```python
+class TestBufferManagement:
+    """バッファ管理機能のテスト"""
+    
+    def test_add_new_bar_basic(self):
+        """基本的なバー追加のテスト"""
+        # 1. Analyzerインスタンスを作成
+        # 2. 新しいバーを追加
+        # 3. バッファサイズが増加することを確認
+        # 4. 追加したバーがバッファに存在することを確認
+    
+    def test_buffer_size_limit(self):
+        """バッファサイズ制限のテスト"""
+        # 1. max_history_bars=10で初期化
+        # 2. 15個のバーを追加
+        # 3. バッファサイズが10を超えないことを確認
+        # 4. 最新10個のバーが保持されていることを確認
+```
+
+**テスト実行環境**:
+- pytest フレームワークを使用
+- polarsライブラリでDataFrame操作
+- 既存のテストファイルに追加（test_multiframe_analyzer.py）
+
+**カバレッジ目標**:
+- 新機能のラインカバレッジ: 90%以上
+- ブランチカバレッジ: 80%以上
+- エッジケースの網羅
+
 ### Step 2: RealtimePipelineのリファクタリング準備（完了 ✅）
 
 #### 作業内容

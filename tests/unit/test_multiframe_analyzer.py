@@ -740,6 +740,408 @@ class TestEdgeCases:
         assert all(-100 <= v <= 100 for v in short_rci)
 
 
+class TestBufferManagement:
+    """バッファ管理機能のテスト"""
+    
+    def setup_method(self):
+        """各テストメソッドの前に実行"""
+        self.analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+    
+    def test_add_new_bar_basic(self):
+        """基本的なバー追加のテスト"""
+        # 初期状態の確認
+        assert self.analyzer.get_buffer_size() == 0
+        
+        # 新しいバーを追加
+        new_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        self.analyzer.add_new_bar(new_bar)
+        
+        # バッファサイズが増加することを確認
+        assert self.analyzer.get_buffer_size() == 1
+        
+        # 追加したバーがバッファに存在することを確認
+        buffer_df = self.analyzer.get_buffer_as_dataframe()
+        assert buffer_df is not None
+        assert len(buffer_df) == 1
+        assert buffer_df['close'][0] == 102.0
+    
+    def test_buffer_size_limit(self):
+        """バッファサイズ制限のテスト"""
+        # max_history_bars=10で再初期化
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=10)
+        
+        # 15個のバーを追加
+        for i in range(15):
+            bar = {
+                'timestamp': datetime(2024, 1, 1, 9, i, 0),
+                'open': 100.0 + i,
+                'high': 105.0 + i,
+                'low': 95.0 + i,
+                'close': 102.0 + i,
+                'volume': 1000 + i
+            }
+            analyzer.add_new_bar(bar)
+        
+        # バッファサイズが10を超えないことを確認
+        assert analyzer.get_buffer_size() == 10
+        
+        # 最新10個のバーが保持されていることを確認
+        buffer_df = analyzer.get_buffer_as_dataframe()
+        assert len(buffer_df) == 10
+        # 最初のバーがインデックス5のもの（0-4は削除された）
+        assert buffer_df['close'][0] == 107.0  # 102.0 + 5
+        # 最後のバーがインデックス14のもの
+        assert buffer_df['close'][9] == 116.0  # 102.0 + 14
+    
+    def test_buffer_size_management(self):
+        """古いデータが適切に削除されることのテスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=5)
+        
+        # 最初に5個のバーを追加
+        for i in range(5):
+            bar = {
+                'timestamp': datetime(2024, 1, 1, 9, i, 0),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 100.0 + i,  # 識別用に異なる値を設定
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        assert analyzer.get_buffer_size() == 5
+        
+        # 新しいバーを1つ追加
+        new_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 5, 0),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 105.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(new_bar)
+        
+        # サイズは5のまま
+        assert analyzer.get_buffer_size() == 5
+        
+        # 最初のバー（close=100.0）が削除され、新しいバーが追加されていることを確認
+        buffer_df = analyzer.get_buffer_as_dataframe()
+        assert buffer_df['close'][0] == 101.0  # 最も古いバーが削除された
+        assert buffer_df['close'][4] == 105.0  # 新しいバーが最後に
+    
+    def test_get_buffer_size(self):
+        """バッファサイズが正しく取得できることのテスト"""
+        assert self.analyzer.get_buffer_size() == 0
+        
+        # 複数のバーを追加してサイズを確認
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(50):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+            self.analyzer.add_new_bar(bar)
+            assert self.analyzer.get_buffer_size() == min(i + 1, 100)  # max_history_bars=100
+
+
+class TestAnalysisReadiness:
+    """分析準備状態のテスト"""
+    
+    def test_is_ready_with_sufficient_data(self):
+        """十分なデータがある場合の判定テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=500)
+        
+        # 初期状態では準備未完了
+        assert analyzer.is_ready() is False
+        
+        # 199個のバーを追加（まだ不足）
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(199):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        assert analyzer.is_ready() is False
+        
+        # 200個目のバーを追加（準備完了）
+        bar = {
+            'timestamp': base_time + timedelta(minutes=199),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(bar)
+        
+        assert analyzer.is_ready() is True
+    
+    def test_is_ready_with_insufficient_data(self):
+        """データ不足の場合の判定テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=1000)
+        
+        # 100個のバーを追加（不足）
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(100):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        # 200個未満なので準備未完了
+        assert analyzer.is_ready() is False
+        assert analyzer.get_buffer_size() == 100
+    
+    def test_is_ready_boundary_case(self):
+        """境界値（ちょうど200バー）のテスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=200)
+        
+        # ちょうど200個のバーを追加
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(200):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        # 境界値で準備完了
+        assert analyzer.is_ready() is True
+        assert analyzer.get_buffer_size() == 200
+        
+        # さらにバーを追加してもmax_history_barsで制限
+        analyzer.add_new_bar({
+            'timestamp': base_time + timedelta(minutes=200),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        })
+        
+        assert analyzer.is_ready() is True
+        assert analyzer.get_buffer_size() == 200  # サイズは200のまま
+
+
+class TestDataFrameConversion:
+    """DataFrame変換のテスト"""
+    
+    def test_get_buffer_as_dataframe_with_data(self):
+        """データがある場合の変換テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 10個のバーを追加
+        timestamps = []
+        closes = []
+        for i in range(10):
+            timestamp = datetime(2024, 1, 1, 9, i, 0)
+            close = 100.0 + i
+            bar = {
+                'timestamp': timestamp,
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': close,
+                'volume': 1000 + i
+            }
+            analyzer.add_new_bar(bar)
+            timestamps.append(timestamp)
+            closes.append(close)
+        
+        # DataFrameとして取得
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 10
+        
+        # データの内容を確認
+        assert df['timestamp'].to_list() == timestamps
+        assert df['close'].to_list() == closes
+    
+    def test_get_buffer_as_dataframe_empty(self):
+        """空バッファの場合の処理テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # バッファが空の場合
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is None
+    
+    def test_dataframe_column_types(self):
+        """変換後のカラム型の確認テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # サンプルバーを追加
+        bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(bar)
+        
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        
+        # カラムの存在確認
+        expected_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        for col in expected_columns:
+            assert col in df.columns
+        
+        # データ型の確認（timestampは日時型、その他は数値型）
+        assert df.dtypes[0] == pl.Datetime  # timestamp
+        for i in range(1, 6):
+            assert df.dtypes[i] in [pl.Float64, pl.Int64, pl.Int32, pl.Float32]  # 数値型
+
+
+class TestInternalBufferMode:
+    """内部バッファモードのテスト"""
+    
+    def test_analyze_streaming_internal_buffer(self):
+        """内部バッファを使用した分析テスト"""
+        analyzer = MultiTimeframeAnalyzer(
+            short_term_periods=[9, 13],
+            long_term_periods=[24, 33],
+            max_history_bars=500
+        )
+        
+        # 250個のバーを追加（分析可能な状態にする）
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(250):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0 + np.random.randn() * 0.5,
+                'high': 105.0 + np.random.randn() * 0.5,
+                'low': 95.0 + np.random.randn() * 0.5,
+                'close': 102.0 + i * 0.01,  # トレンド付き
+                'volume': 1000 + np.random.randint(0, 100)
+            }
+            analyzer.add_new_bar(bar)
+        
+        assert analyzer.is_ready() is True
+        
+        # 内部バッファモードで分析（historyパラメータなし）
+        result = analyzer.analyze_streaming()
+        
+        assert result is not None
+        # 'status'は正常時には含まれない（not_readyやno_dataの場合のみ）
+        assert 'timestamp' in result  # 代わりにtimestampをチェック
+        
+        # RCI結果の確認
+        assert 'short_rci' in result
+        assert 'long_rci' in result
+        assert isinstance(result['short_rci'], dict)
+        assert isinstance(result['long_rci'], dict)
+        
+        # 短期RCIが計算されていることを確認
+        assert len(result['short_rci']) > 0
+        for period in [9, 13]:
+            assert period in result['short_rci']
+            assert -100 <= result['short_rci'][period] <= 100
+    
+    def test_analyze_streaming_not_ready(self):
+        """準備未完了時の応答テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=500)
+        
+        # 少数のバーを追加（準備未完了）
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(50):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        assert analyzer.is_ready() is False
+        
+        # 内部バッファモードで分析
+        result = analyzer.analyze_streaming()
+        
+        assert result is not None
+        assert 'status' in result
+        assert result['status'] == 'not_ready'
+        assert 'buffer_size' in result
+        assert result['buffer_size'] == 50
+        assert 'required_bars' in result
+        assert result['required_bars'] == 200
+    
+    def test_analyze_streaming_backward_compatibility(self):
+        """後方互換性の確認テスト"""
+        analyzer = MultiTimeframeAnalyzer(
+            short_term_periods=[9],
+            long_term_periods=[24],
+            max_history_bars=500
+        )
+        
+        # 外部から履歴データを準備
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        n_minutes = 100
+        timestamps = [base_time + timedelta(minutes=i) for i in range(n_minutes)]
+        prices = np.random.randn(n_minutes).cumsum() + 100
+        
+        history = pl.DataFrame({
+            'timestamp': timestamps,
+            'open': prices,
+            'high': prices + np.random.rand(n_minutes),
+            'low': prices - np.random.rand(n_minutes),
+            'close': prices + np.random.randn(n_minutes) * 0.1,
+            'volume': np.random.randint(100, 1000, n_minutes).astype(np.int64)  # 明示的にInt64に変換
+        })
+        
+        new_bar = {
+            'timestamp': datetime(2024, 1, 1, 10, 40, 0),
+            'open': 105.0,
+            'high': 106.0,
+            'low': 104.5,
+            'close': 105.5,
+            'volume': 500
+        }
+        
+        # 外部履歴を使用した分析（後方互換性）
+        result = analyzer.analyze_streaming(new_bar, history, min_history_bars=50)
+        
+        assert result is not None
+        assert 'timestamp' in result
+        assert 'short_rci' in result
+        assert 'long_rci' in result
+        
+        # 短期RCIが計算されていることを確認
+        assert len(result['short_rci']) > 0
+        assert 9 in result['short_rci']
+
+
 if __name__ == "__main__":
     # テスト実行
     pytest.main([__file__, "-v", "-s"])

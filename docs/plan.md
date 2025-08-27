@@ -48,9 +48,13 @@
 - 完了: [x]
 
 ### Step 6: ユニットテストの作成（基本テスト）
-- ファイル: tests/unit/test_analyzer.py
-- 作業: MultiTimeframeAnalyzerの基本的な単体テスト実装
-- 完了: [ ]
+- ファイル: tests/unit/test_multiframe_analyzer.py
+- 作業: MultiTimeframeAnalyzerのバッファ管理機能に対する基本的な単体テスト実装
+  - TestBufferManagement: バッファ管理の基本機能テスト（4テストケース）
+  - TestAnalysisReadiness: 分析準備状態のテスト（3テストケース）
+  - TestDataFrameConversion: DataFrame変換のテスト（3テストケース）
+  - TestInternalBufferMode: 内部バッファモードのテスト（3テストケース）
+- 完了: [x]
 
 ### Step 7: ユニットテストの作成（エッジケース）
 - ファイル: tests/unit/test_analyzer.py
@@ -94,9 +98,9 @@
 
 ## 進捗メトリクス
 - 総ステップ数: 10
-- 完了ステップ: 5
+- 完了ステップ: 6
 - 実行中ステップ: 0
-- 進捗率: 50%
+- 進捗率: 60%
 
 ## Step 3 実装チェックリスト
 - [x] __init__メソッドにバッファ管理プロパティを追加
