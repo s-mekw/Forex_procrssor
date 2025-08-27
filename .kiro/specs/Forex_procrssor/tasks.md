@@ -77,7 +77,7 @@
   - Polars Expressionによる高速ランキング処理を実装
   - _要件: 2.3_
 
-- [ ] 10.1. リアルタイム処理パイプライン基盤の構築
+- [X] 10.1. リアルタイム処理パイプライン基盤の構築
   - tests/integration/test_data_pipeline.pyに非同期処理とバックプレッシャーのテストを作成
   - src/data_processing/pipelines.pyにRealtimePipelineクラスの骨格を実装
   - asyncioベースの非同期データフロー処理を実装（1分足データをパススルー）
