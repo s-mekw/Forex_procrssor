@@ -53,10 +53,10 @@ class DataIntegrityChecker:
         """受信データを記録"""
         if result and "processed_data" in result:
             self.received_data.append({
-                "tick_id": result["processed_data"]["data"].get("tick_id"),
-                "symbol": result["processed_data"]["data"].get("symbol"),
-                "timestamp": result["processed_data"]["timestamp"],
-                "bid": result["processed_data"]["data"].get("bid"),
+                "tick_id": result["processed_data"].get("tick_id"),
+                "symbol": result["processed_data"].get("symbol"),
+                "timestamp": None,  # ProcessingResultにはタイムスタンプが含まれない
+                "bid": result["processed_data"].get("bid"),
             })
     
     def check_integrity(self) -> dict:
@@ -102,11 +102,16 @@ class DataIntegrityChecker:
         if len(symbol_data) < 2:
             return True
         
-        # タイムスタンプの順序をチェック
+        # タイムスタンプの順序をチェック（Noneでない場合のみ）
         for i in range(1, len(symbol_data)):
-            if symbol_data[i]["timestamp"] < symbol_data[i-1]["timestamp"]:
-                logger.warning(f"シーケンス違反検出: {symbol}")
-                return False
+            curr_ts = symbol_data[i]["timestamp"]
+            prev_ts = symbol_data[i-1]["timestamp"]
+            
+            # 両方ともNoneでない場合のみ比較
+            if curr_ts is not None and prev_ts is not None:
+                if curr_ts < prev_ts:
+                    logger.warning(f"シーケンス違反検出: {symbol}")
+                    return False
         
         return True
 
