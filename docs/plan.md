@@ -1,42 +1,86 @@
-## 汎用実装計画（リンク集・導線テンプレート）
+# Task 10.3 実装計画
 
-このファイルは、../.kiro/specs/Forex_procrssor/tasks.md に定義された任意のタスクを実装するための最小限の導線です。具体的な設計・仕様は各ドキュメントへ直接リンクし、本ファイルには詳細を書きません。
+## 現在の対象タスク
+- [ ] 10.3. パイプラインのリファクタリングと責務の明確化
+  - src/data_processing/analyzer.py に MultiTimeframeAnalyzer クラス実装 ✅ (実装済み)
+  - RealtimePipeline からマルチタイムフレーム分析ロジックを MultiTimeframeAnalyzer に移譲
+  - RealtimePipeline はデータフロー管理に専念し、MultiTimeframeAnalyzer をコンポーネントとして利用する構成に変更
+  - Analyzer専門のユニットテスト(tests/unit/test_analyzer.py)を作成し、ロジックの堅牢性を保証
+  - _要件: 2.4, 2.5 (リファクタリング)_ of `../.kiro/specs/Forex_procrssor/requirements.md`
 
-### タスク選択
-- 対象タスクは `../.kiro/specs/Forex_procrssor/tasks.md` を参照し、対応するチェックリスト/説明/要件番号を確認してください。
-- 現在の対象タスク: 
-  - [ ] 10.3. パイプラインのリファクタリングと責務の明確化
-    - src/data_processing/analyzer.py に MultiFrameAnalyzer クラスを新設
-    - RealtimePipeline からマルチタイムフレーム分析ロジックを MultiFrameAnalyzer に移譲
-    - RealtimePipeline はデータフロー管理に専念し、MultiFrameAnalyzer をコンポーネントとして利用する構成に変更
-    - Analyzer専門のユニットテスト(tests/unit/test_analyzer.py)を作成し、ロジックの堅牢性を保証
-    - _要件: 2.4, 2.5 (リファクタリング)_ of `../.kiro/specs/Forex_procrssor/requirements.md`
-- 
-### 参照ドキュメント（必読）
-- 実装タスク一覧: `../.kiro/specs/Forex_procrssor/tasks.md`
-- 要件定義: `../.kiro/specs/Forex_procrssor/requirements.md`
-- 詳細設計: `../.kiro/specs/Forex_procrssor/design.md`
-- スペック概要: `../.kiro/specs/Forex_procrssor/spec.json`
-- 技術方針: `../.kiro/steering/tech.md`
-- 構造/モジュール方針: `../.kiro/steering/structure.md`
-- Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
-- プロダクト方針: `../.kiro/steering/product.md`
+## 実装ステップ
 
-task10_1, 10_2の実装レポート
-- `Archive_Docs\Phase3\task10_1\performance_report.md`
-- `Archive_Docs\Phase3\task10_2\multiframe_analysis.md`
+### Step 1: 現状分析と設計確認
+- ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py
+- 作業: 現在のコード構造を確認し、責務分離の境界を明確化
+- 完了: [x]
 
-### 実装の置き場所（指針のみ）
-- 実装するディレクトリ/モジュールは `../.kiro/steering/structure.md` の方針に従い選定してください。
-- 例: `src/common/`、`src/mt5_data_acquisition/`、`src/data_processing/`、`src/storage/`、`src/patchTST_model/`、`src/app/`、`src/production/` など（詳細は設計参照）。
-  
-### テストの置き場所（指針のみ）
-- `tests/unit/`（ユニット）、`tests/integration/`（統合）、`tests/e2e/`（E2E）配下に配置。
-- テスト観点・項目は各タスクの記述に従い、詳細は `../.kiro/specs/Forex_procrssor/design.md` および `requirements.md` を参照。
+### Step 2: RealtimePipelineのリファクタリング準備
+- ファイル: src/data_processing/pipelines.py
+- 作業: マルチタイムフレーム分析ロジックの抽出対象を特定
+- 完了: [ ]
 
-### 完了条件（DoD の参照）
-- 当該タスクのチェック項目が満たされ、関連する要件の受け入れ条件に適合していること。
-- ビルド/テストがグリーンであること（`pyproject.toml` の設定に準拠）。
-- 
-### 作業メモ欄（自由記述）
-- ここには「選択タスク」「対象ファイル」「追加の参照リンク」「決定事項」などを簡潔に記録してください。
+### Step 3: MultiTimeframeAnalyzerへの責務移譲
+- ファイル: src/data_processing/analyzer.py
+- 作業: RealtimePipelineから移譲するメソッドの実装・調整
+- 完了: [ ]
+
+### Step 4: RealtimePipelineの簡素化
+- ファイル: src/data_processing/pipelines.py
+- 作業: データフロー管理に特化した実装に変更
+- 完了: [ ]
+
+### Step 5: インターフェース設計の改善
+- ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py
+- 作業: 依存性注入パターンの適用、モジュール間の結合度低減
+- 完了: [ ]
+
+### Step 6: ユニットテストの作成（基本テスト）
+- ファイル: tests/unit/test_analyzer.py
+- 作業: MultiTimeframeAnalyzerの基本的な単体テスト実装
+- 完了: [ ]
+
+### Step 7: ユニットテストの作成（エッジケース）
+- ファイル: tests/unit/test_analyzer.py
+- 作業: エラーハンドリング、境界値テストの実装
+- 完了: [ ]
+
+### Step 8: 統合テストの更新
+- ファイル: tests/integration/test_data_pipeline.py
+- 作業: リファクタリング後の動作確認テスト
+- 完了: [ ]
+
+### Step 9: ドキュメント更新
+- ファイル: src/data_processing/README.md（必要に応じて）
+- 作業: アーキテクチャ変更の記録
+- 完了: [ ]
+
+### Step 10: 最終検証とクリーンアップ
+- ファイル: 全体
+- 作業: コードレビュー、不要なコードの削除、最終動作確認
+- 完了: [ ]
+
+## 技術的な注意点
+
+### 現在の実装状況
+- `MultiTimeframeAnalyzer`クラスは既に`analyzer.py`に実装済み
+- `RealtimePipeline`は既に`MultiTimeframeAnalyzer`を使用している（`_multiframe_analyzer`として）
+- しかし、分析ロジックの一部がまだ`RealtimePipeline`に残っている
+
+### リファクタリングの焦点
+1. **責務の明確化**
+   - RealtimePipeline: データフロー管理、キューイング、バックプレッシャー制御
+   - MultiTimeframeAnalyzer: マルチタイムフレームRCI計算、データ変換
+
+2. **重複コードの削除**
+   - データバッファリングロジックの統一
+   - RCI計算の一元化
+
+3. **テスタビリティの向上**
+   - 各コンポーネントの独立性を高める
+   - モックしやすい設計にする
+
+## 進捗メトリクス
+- 総ステップ数: 10
+- 完了ステップ: 0
+- 進捗率: 0%
