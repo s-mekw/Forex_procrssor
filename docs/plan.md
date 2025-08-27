@@ -22,8 +22,13 @@
 
 ### Step 3: MultiTimeframeAnalyzerへの責務移譲
 - ファイル: src/data_processing/analyzer.py
-- 作業: RealtimePipelineから移譲するメソッドの実装・調整
-- 完了: [ ]
+- 作業: バッファ管理機能をMultiTimeframeAnalyzerに実装
+  - バッファ管理プロパティの追加（_data_buffer, _max_history_bars）
+  - add_new_bar()メソッドの実装
+  - _manage_buffer_size()メソッドの実装
+  - get_buffer_size(), is_ready(), get_buffer_as_dataframe()メソッドの実装
+  - analyze_streaming()メソッドの改良（内部バッファ対応）
+- 完了: [x]
 
 ### Step 4: RealtimePipelineの簡素化
 - ファイル: src/data_processing/pipelines.py
@@ -82,5 +87,18 @@
 
 ## 進捗メトリクス
 - 総ステップ数: 10
-- 完了ステップ: 2
-- 進捗率: 20%
+- 完了ステップ: 3
+- 実行中ステップ: 0
+- 進捗率: 30%
+
+## Step 3 実装チェックリスト
+- [x] __init__メソッドにバッファ管理プロパティを追加
+- [x] add_new_bar()メソッドの実装
+- [x] _manage_buffer_size()メソッドの実装
+- [x] get_buffer_size()メソッドの実装
+- [x] is_ready()メソッドの実装
+- [x] get_buffer_as_dataframe()メソッドの実装
+- [x] analyze_streaming()メソッドのリファクタリング
+- [x] _analyze_with_external_history()メソッドの実装
+- [x] _calculate_rci_metrics()メソッドの抽出
+- [ ] 実装後の動作確認

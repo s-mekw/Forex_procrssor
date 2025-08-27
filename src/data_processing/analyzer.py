@@ -74,6 +74,7 @@ class MultiTimeframeAnalyzer:
         incomplete_bar_handling: str = "drop",
         use_parallel: bool = True,
         max_workers: int | None = None,
+        max_history_bars: int = 5000,
     ):
         """
         マルチタイムフレーム分析エンジンを初期化します。
@@ -85,6 +86,7 @@ class MultiTimeframeAnalyzer:
             incomplete_bar_handling: 不完全バーの処理方法（"drop", "keep", "preview"）
             use_parallel: 並列処理を使用するか
             max_workers: 並列処理の最大ワーカー数（Noneで自動設定）
+            max_history_bars: 保持する最大履歴バー数（デフォルト: 5000）
 
         Raises:
             AnalysisConfigurationError: 無効な設定パラメータの場合
@@ -95,6 +97,11 @@ class MultiTimeframeAnalyzer:
         self.incomplete_bar_handling = incomplete_bar_handling
         self.use_parallel = use_parallel
         self.max_workers = max_workers
+
+        # バッファ管理プロパティの追加
+        self._data_buffer: list[dict[str, Any]] = []
+        self._max_history_bars = max_history_bars
+        self._min_required_bars = 200  # 分析に必要な最小バー数
 
         # コンポーネントの初期化
         try:
@@ -114,7 +121,8 @@ class MultiTimeframeAnalyzer:
             f"MultiTimeframeAnalyzer initialized: "
             f"short_periods={self.short_term_periods}, "
             f"long_periods={self.long_term_periods}, "
-            f"long_timeframe={self.long_timeframe}"
+            f"long_timeframe={self.long_timeframe}, "
+            f"max_history_bars={self._max_history_bars}"
         )
 
     def _validate_periods(self) -> None:
@@ -125,8 +133,7 @@ class MultiTimeframeAnalyzer:
         invalid_periods = [
             p
             for p in all_periods
-            if p < RCICalculatorEngine.MIN_PERIOD
-            or p > RCICalculatorEngine.MAX_PERIOD
+            if p < RCICalculatorEngine.MIN_PERIOD or p > RCICalculatorEngine.MAX_PERIOD
         ]
 
         if invalid_periods:
@@ -276,9 +283,7 @@ class MultiTimeframeAnalyzer:
         )
 
         # カラム名をプレフィックス付きに変更
-        rename_map = {
-            f"rci_{p}": f"short_rci_{p}" for p in self.short_term_periods
-        }
+        rename_map = {f"rci_{p}": f"short_rci_{p}" for p in self.short_term_periods}
         rci_results = rci_results.rename(rename_map)
 
         logger.debug(f"短期RCI計算完了: shape={rci_results.shape}")
@@ -396,9 +401,11 @@ class MultiTimeframeAnalyzer:
             長期RCIが結合された結果
         """
         # 長期RCIのカラムだけを抽出（timestamp含む）
-        long_rci_cols = ["timestamp"] + [col for col in long_term_rci.columns if "long_rci" in col]
+        long_rci_cols = ["timestamp"] + [
+            col for col in long_term_rci.columns if "long_rci" in col
+        ]
         long_term_rci_only = long_term_rci.select(long_rci_cols)
-        
+
         # 各1分足タイムスタンプに対応する5分足期間を特定
         # 1分足のタイムスタンプを5分足の期間に切り下げ
         # Polarsのtruncateは"5T"形式を受け付けないため変換
@@ -438,18 +445,106 @@ class MultiTimeframeAnalyzer:
 
         # タイムスタンプがソートされているか確認
         if not data["timestamp"].is_sorted():
-            logger.warning("タイムスタンプがソートされていません。自動的にソートします。")
+            logger.warning(
+                "タイムスタンプがソートされていません。自動的にソートします。"
+            )
+
+    def add_new_bar(self, bar: dict[str, Any]) -> None:
+        """
+        新しいバーをバッファに追加し、サイズを管理します。
+
+        Args:
+            bar: 追加するバーデータ（timestamp, open, high, low, close, volume）
+        """
+        self._data_buffer.append(bar)
+        self._manage_buffer_size()
+
+    def _manage_buffer_size(self) -> None:
+        """
+        バッファサイズを最大値以内に維持します。
+        """
+        if len(self._data_buffer) > self._max_history_bars:
+            self._data_buffer = self._data_buffer[-self._max_history_bars :]
+
+    def get_buffer_size(self) -> int:
+        """
+        現在のバッファサイズを返します。
+
+        Returns:
+            バッファ内のバー数
+        """
+        return len(self._data_buffer)
+
+    def is_ready(self) -> bool:
+        """
+        分析準備が完了しているかを返します。
+
+        Returns:
+            最小バー数以上のデータがある場合True
+        """
+        return len(self._data_buffer) >= self._min_required_bars
+
+    def get_buffer_as_dataframe(self) -> pl.DataFrame | None:
+        """
+        バッファをDataFrameとして取得します。
+
+        Returns:
+            バッファのDataFrame形式、バッファが空の場合はNone
+        """
+        if not self._data_buffer:
+            return None
+        return pl.DataFrame(self._data_buffer)
 
     def analyze_streaming(
         self,
-        new_bar: dict[str, Any],
-        history: pl.DataFrame,
+        new_bar: dict[str, Any] | None = None,
+        history: pl.DataFrame | None = None,
         min_history_bars: int = 200,
     ) -> dict[str, Any]:
         """
         ストリーミングデータのマルチタイムフレーム分析を実行します。
 
         新しい1分足バーを受信するたびに、短期・長期のRCIを更新します。
+        後方互換性のため、外部履歴データも引き続きサポートします。
+
+        Args:
+            new_bar: 新しい1分足バー（dict形式）（内部バッファ使用時は省略可）
+            history: 過去のOHLCVデータ（外部履歴使用時）
+            min_history_bars: 最小履歴バー数（外部履歴使用時）
+
+        Returns:
+            最新のRCI値を含む辞書、または準備未完了ステータス
+
+        Raises:
+            MultiTimeframeAnalysisError: 分析処理エラー
+        """
+        # 後方互換性の維持：外部履歴が提供された場合
+        if history is not None:
+            return self._analyze_with_external_history(
+                new_bar, history, min_history_bars
+            )
+
+        # 新しい動作：内部バッファを使用
+        if not self.is_ready():
+            return {
+                "timestamp": new_bar.get("timestamp") if new_bar else None,
+                "status": "not_ready",
+                "buffer_size": self.get_buffer_size(),
+                "required_bars": self._min_required_bars,
+            }
+
+        history_df = self.get_buffer_as_dataframe()
+        if history_df is None:
+            return {"status": "no_data"}
+
+        # 既存のRCI計算ロジックを利用
+        return self._calculate_rci_metrics(history_df)
+
+    def _analyze_with_external_history(
+        self, new_bar: dict[str, Any], history: pl.DataFrame, min_history_bars: int
+    ) -> dict[str, Any]:
+        """
+        既存の外部履歴を使用した分析（後方互換性）。
 
         Args:
             new_bar: 新しい1分足バー（dict形式）
@@ -457,16 +552,7 @@ class MultiTimeframeAnalyzer:
             min_history_bars: 最小履歴バー数
 
         Returns:
-            最新のRCI値を含む辞書:
-            {
-                "timestamp": datetime,
-                "short_rci": {9: value, 13: value, ...},
-                "long_rci": {24: value, 33: value, ...},
-                "is_new_long_bar": bool  # 新しい5分足バーが確定したか
-            }
-
-        Raises:
-            MultiTimeframeAnalysisError: 分析処理エラー
+            最新のRCI値を含む辞書
         """
         # 新しいバーを履歴に追加
         new_row = pl.DataFrame([new_bar])
@@ -496,8 +582,7 @@ class MultiTimeframeAnalyzer:
             if is_new_long_bar:
                 # 5分足データに変換（convert_streamingはタプルを返すが、完成バーのみ使用）
                 long_term_data, _ = self.timeframe_converter.convert_streaming(
-                    df=updated_history,
-                    incomplete_bar_handling="drop"
+                    df=updated_history, incomplete_bar_handling="drop"
                 )
 
                 for period in self.long_term_periods:
@@ -516,8 +601,62 @@ class MultiTimeframeAnalyzer:
             }
 
         except Exception as e:
-            logger.error(f"ストリーミング分析エラー: {e}")
-            raise MultiTimeframeAnalysisError(f"ストリーミング分析に失敗: {e}") from e
+            logger.error(f"外部履歴分析エラー: {e}")
+            raise MultiTimeframeAnalysisError(f"外部履歴分析に失敗: {e}") from e
+
+    def _calculate_rci_metrics(self, history_df: pl.DataFrame) -> dict[str, Any]:
+        """
+        RCIメトリクスの計算（内部バッファ用）。
+
+        Args:
+            history_df: 履歴データのDataFrame
+
+        Returns:
+            最新のRCI値を含む辞書
+        """
+        try:
+            # 最新のタイムスタンプを取得
+            latest_timestamp = history_df["timestamp"][-1]
+
+            # 短期RCI計算（最新値のみ）
+            short_rci = {}
+            for period in self.short_term_periods:
+                if len(history_df) >= period:
+                    recent_data = history_df[-period:]
+                    rci_value = self._calculate_single_rci(
+                        recent_data["close"].to_numpy(), period
+                    )
+                    short_rci[period] = rci_value
+
+            # 5分足バーが完成したかチェック
+            is_new_long_bar = self._is_new_long_bar_complete(latest_timestamp)
+
+            # 長期RCI計算（5分足バー完成時のみ）
+            long_rci = {}
+            if is_new_long_bar:
+                # 5分足データに変換
+                long_term_data, _ = self.timeframe_converter.convert_streaming(
+                    df=history_df, incomplete_bar_handling="drop"
+                )
+
+                for period in self.long_term_periods:
+                    if len(long_term_data) >= period:
+                        recent_data = long_term_data[-period:]
+                        rci_value = self._calculate_single_rci(
+                            recent_data["close"].to_numpy(), period
+                        )
+                        long_rci[period] = rci_value
+
+            return {
+                "timestamp": latest_timestamp,
+                "short_rci": short_rci,
+                "long_rci": long_rci,
+                "is_new_long_bar": is_new_long_bar,
+            }
+
+        except Exception as e:
+            logger.error(f"RCI計算エラー: {e}")
+            raise MultiTimeframeAnalysisError(f"RCI計算に失敗: {e}") from e
 
     def _is_new_long_bar_complete(self, timestamp: datetime) -> bool:
         """
@@ -564,10 +703,10 @@ class MultiTimeframeAnalyzer:
     def _convert_timeframe_for_truncate(self, timeframe: str) -> str:
         """
         タイムフレーム形式をPolarsのtruncate用に変換します。
-        
+
         Args:
             timeframe: 元のタイムフレーム形式（例: "5T", "15T", "1H"）
-        
+
         Returns:
             Polars truncate用の形式（例: "5m", "15m", "1h"）
         """
@@ -580,7 +719,7 @@ class MultiTimeframeAnalyzer:
             "1D": "1d",
         }
         return mapping.get(timeframe, "5m")  # デフォルトは5分
-    
+
     def get_analyzer_info(self) -> dict[str, Any]:
         """
         アナライザーの設定情報を返します。
