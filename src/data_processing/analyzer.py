@@ -456,6 +456,11 @@ class MultiTimeframeAnalyzer:
         Args:
             bar: 追加するバーデータ（timestamp, open, high, low, close, volume）
         """
+        # None値のチェック
+        if bar is None:
+            logger.warning("None値のバーが渡されました。スキップします。")
+            return
+
         self._data_buffer.append(bar)
         self._manage_buffer_size()
 

@@ -57,9 +57,21 @@
 - 完了: [x]
 
 ### Step 7: ユニットテストの作成（エッジケース）
-- ファイル: tests/unit/test_analyzer.py
-- 作業: エラーハンドリング、境界値テストの実装
-- 完了: [ ]
+- ファイル: tests/unit/test_multiframe_analyzer.py
+- 作業: エッジケース、エラーハンドリングテストの追加
+  - TestEdgeCasesExtendedクラス：
+    - test_add_bar_with_none: None値のバー追加テスト ✅
+    - test_add_bar_with_invalid_data: 無効データ型のテスト ✅
+    - test_negative_values_in_bar: 負の価格データテスト ✅
+    - test_nan_values_handling: NaN値処理テスト ✅
+    - test_infinity_values_handling: 無限大値処理テスト ✅
+  - TestErrorHandlingExtendedクラス：
+    - test_buffer_overflow_protection: バッファオーバーフロー保護 ✅
+    - test_corrupt_data_handling: 破損データ処理 ✅
+    - test_type_mismatch_handling: データ型不一致処理 ✅
+    - test_memory_efficiency_large_buffer: 巨大バッファのメモリ効率 ✅
+    - test_timestamp_validation: タイムスタンプ検証 ✅
+- 完了: [x]
 
 ### Step 8: 統合テストの更新
 - ファイル: tests/integration/test_data_pipeline.py
@@ -98,9 +110,9 @@
 
 ## 進捗メトリクス
 - 総ステップ数: 10
-- 完了ステップ: 6
+- 完了ステップ: 7
 - 実行中ステップ: 0
-- 進捗率: 60%
+- 進捗率: 70%
 
 ## Step 3 実装チェックリスト
 - [x] __init__メソッドにバッファ管理プロパティを追加

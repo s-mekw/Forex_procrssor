@@ -239,20 +239,20 @@ class TechnicalIndicatorEngine:
         # データ検証
         if df.is_empty():
             raise ValueError("空のDataFrameが渡されました")
-        
+
         if price_column not in df.columns:
             raise ValueError(f"{price_column}列が必要です")
-        
+
         if period <= 0:
             raise ValueError("期間は正の整数である必要があります")
-        
+
         # Float32への変換
         if df[price_column].dtype != pl.Float32:
             df = df.with_columns(pl.col(price_column).cast(pl.Float32))
-        
+
         result = df
         col_name = f"rsi_{period}"
-        
+
         if group_by:
             # グループごとにRSIを計算
             # 価格変化を計算
@@ -262,30 +262,30 @@ class TechnicalIndicatorEngine:
                 .over(group_by)
                 .alias("price_change")
             )
-            
+
             # 上昇幅と下落幅を分離
             result = result.with_columns([
                 pl.when(pl.col("price_change") > 0)
                 .then(pl.col("price_change"))
                 .otherwise(0.0)
                 .alias("gain"),
-                
+
                 pl.when(pl.col("price_change") < 0)
                 .then(-pl.col("price_change"))  # 絶対値
                 .otherwise(0.0)
                 .alias("loss"),
             ])
-            
+
             # EMA（指数移動平均）で平均上昇幅と平均下落幅を計算
             # alpha = 1 / period （RSIの標準的な計算方法）
             alpha = 1.0 / period
-            
+
             result = result.with_columns([
                 pl.col("gain")
                 .ewm_mean(alpha=alpha, adjust=False)
                 .over(group_by)
                 .alias("avg_gain"),
-                
+
                 pl.col("loss")
                 .ewm_mean(alpha=alpha, adjust=False)
                 .over(group_by)
@@ -297,33 +297,33 @@ class TechnicalIndicatorEngine:
             result = result.with_columns(
                 pl.col(price_column).diff().alias("price_change")
             )
-            
+
             # 上昇幅と下落幅を分離
             result = result.with_columns([
                 pl.when(pl.col("price_change") > 0)
                 .then(pl.col("price_change"))
                 .otherwise(0.0)
                 .alias("gain"),
-                
+
                 pl.when(pl.col("price_change") < 0)
                 .then(-pl.col("price_change"))  # 絶対値
                 .otherwise(0.0)
                 .alias("loss"),
             ])
-            
+
             # EMA（指数移動平均）で平均上昇幅と平均下落幅を計算
             alpha = 1.0 / period
-            
+
             result = result.with_columns([
                 pl.col("gain")
                 .ewm_mean(alpha=alpha, adjust=False)
                 .alias("avg_gain"),
-                
+
                 pl.col("loss")
                 .ewm_mean(alpha=alpha, adjust=False)
                 .alias("avg_loss"),
             ])
-        
+
         # RSIを計算
         # RS = avg_gain / avg_loss
         # RSI = 100 - (100 / (1 + RS))
@@ -341,12 +341,12 @@ class TechnicalIndicatorEngine:
             .cast(pl.Float32)
             .alias(col_name)
         )
-        
+
         # 一時列を削除
         result = result.drop(["price_change", "gain", "loss", "avg_gain", "avg_loss"])
-        
+
         logger.debug(f"Calculated RSI with period {period}")
-        
+
         # メタデータの更新
         self._update_metadata(
             "rsi",
@@ -357,7 +357,7 @@ class TechnicalIndicatorEngine:
             },
             len(df),
         )
-        
+
         return result
 
     def calculate_macd(
@@ -399,22 +399,22 @@ class TechnicalIndicatorEngine:
         # データ検証
         if df.is_empty():
             raise ValueError("空のDataFrameが渡されました")
-        
+
         if price_column not in df.columns:
             raise ValueError(f"{price_column}列が必要です")
-        
+
         if fast_period <= 0 or slow_period <= 0 or signal_period <= 0:
             raise ValueError("期間は正の整数である必要があります")
-        
+
         if fast_period >= slow_period:
             raise ValueError("短期期間は長期期間より小さい必要があります")
-        
+
         # Float32への変換
         if df[price_column].dtype != pl.Float32:
             df = df.with_columns(pl.col(price_column).cast(pl.Float32))
-        
+
         result = df
-        
+
         if group_by:
             # グループごとにMACDを計算
             # 短期EMAと長期EMAを計算
@@ -424,21 +424,21 @@ class TechnicalIndicatorEngine:
                 .over(group_by)
                 .cast(pl.Float32)
                 .alias("ema_fast"),
-                
+
                 pl.col(price_column)
                 .ewm_mean(span=slow_period, adjust=False)
                 .over(group_by)
                 .cast(pl.Float32)
                 .alias("ema_slow"),
             ])
-            
+
             # MACD Lineを計算
             result = result.with_columns(
                 (pl.col("ema_fast") - pl.col("ema_slow"))
                 .cast(pl.Float32)
                 .alias("macd_line")
             )
-            
+
             # Signal Line（MACD LineのEMA）を計算
             result = result.with_columns(
                 pl.col("macd_line")
@@ -455,20 +455,20 @@ class TechnicalIndicatorEngine:
                 .ewm_mean(span=fast_period, adjust=False)
                 .cast(pl.Float32)
                 .alias("ema_fast"),
-                
+
                 pl.col(price_column)
                 .ewm_mean(span=slow_period, adjust=False)
                 .cast(pl.Float32)
                 .alias("ema_slow"),
             ])
-            
+
             # MACD Lineを計算
             result = result.with_columns(
                 (pl.col("ema_fast") - pl.col("ema_slow"))
                 .cast(pl.Float32)
                 .alias("macd_line")
             )
-            
+
             # Signal Line（MACD LineのEMA）を計算
             result = result.with_columns(
                 pl.col("macd_line")
@@ -476,22 +476,22 @@ class TechnicalIndicatorEngine:
                 .cast(pl.Float32)
                 .alias("macd_signal")
             )
-        
+
         # MACD Histogramを計算
         result = result.with_columns(
             (pl.col("macd_line") - pl.col("macd_signal"))
             .cast(pl.Float32)
             .alias("macd_histogram")
         )
-        
+
         # 一時列を削除
         result = result.drop(["ema_fast", "ema_slow"])
-        
+
         logger.debug(
             f"Calculated MACD with periods: fast={fast_period}, "
             f"slow={slow_period}, signal={signal_period}"
         )
-        
+
         # メタデータの更新
         self._update_metadata(
             "macd",
@@ -506,7 +506,7 @@ class TechnicalIndicatorEngine:
             },
             len(df),
         )
-        
+
         return result
 
     def calculate_bollinger_bands(
@@ -555,11 +555,11 @@ class TechnicalIndicatorEngine:
             raise ValueError(f"標準偏差倍数は正の値である必要があります: {num_std}")
         if price_column not in df.columns:
             raise ValueError(f"価格列が見つかりません: {price_column}")
-        
+
         # Float32への変換
         if df[price_column].dtype != pl.Float32:
             df = df.with_columns(pl.col(price_column).cast(pl.Float32))
-        
+
         # グループ化が必要な場合
         if group_by and group_by in df.columns:
             # グループごとに計算
@@ -570,7 +570,7 @@ class TechnicalIndicatorEngine:
                 .over(group_by)
                 .alias("bb_middle")
                 .cast(pl.Float32),
-                
+
                 # 標準偏差
                 pl.col(price_column)
                 .rolling_std(window_size=period)
@@ -586,54 +586,54 @@ class TechnicalIndicatorEngine:
                 .rolling_mean(window_size=period)
                 .alias("bb_middle")
                 .cast(pl.Float32),
-                
+
                 # 標準偏差
                 pl.col(price_column)
                 .rolling_std(window_size=period)
                 .alias("bb_std")
                 .cast(pl.Float32),
             ])
-        
+
         # 上部バンドと下部バンドを計算
         result = result.with_columns([
             # 上部バンド
             (pl.col("bb_middle") + (pl.col("bb_std") * num_std))
             .alias("bb_upper")
             .cast(pl.Float32),
-            
+
             # 下部バンド
             (pl.col("bb_middle") - (pl.col("bb_std") * num_std))
             .alias("bb_lower")
             .cast(pl.Float32),
         ])
-        
+
         # バンド幅と%Bを計算
         result = result.with_columns([
             # バンド幅
             (pl.col("bb_upper") - pl.col("bb_lower"))
             .alias("bb_width")
             .cast(pl.Float32),
-            
+
             # %B（バンド内での価格位置）
             # 0 = 下部バンド、0.5 = 中央バンド、1 = 上部バンド
             pl.when(pl.col("bb_upper") != pl.col("bb_lower"))
             .then(
-                (pl.col(price_column) - pl.col("bb_lower")) / 
+                (pl.col(price_column) - pl.col("bb_lower")) /
                 (pl.col("bb_upper") - pl.col("bb_lower"))
             )
             .otherwise(0.5)  # バンド幅が0の場合は中央
             .alias("bb_percent")
             .cast(pl.Float32),
         ])
-        
+
         # 一時列を削除
         result = result.drop("bb_std")
-        
+
         logger.debug(
             f"Calculated Bollinger Bands with period={period}, "
             f"num_std={num_std}, group_by={group_by}"
         )
-        
+
         # メタデータの更新
         self._update_metadata(
             "bollinger",
@@ -647,7 +647,7 @@ class TechnicalIndicatorEngine:
             },
             len(df),
         )
-        
+
         return result
 
     def calculate_all_indicators(
@@ -688,48 +688,48 @@ class TechnicalIndicatorEngine:
         """
         # 開始時刻を記録
         start_time = time.time()
-        
+
         # データ検証
         if df.is_empty():
             raise ValueError("空のDataFrameが渡されました")
-        
+
         if price_column not in df.columns:
             raise ValueError(f"{price_column}列が必要です")
-        
+
         # Float32への変換（メモリ効率）
         if df[price_column].dtype != pl.Float32:
             df = df.with_columns(pl.col(price_column).cast(pl.Float32))
-        
+
         # デフォルト値の設定
         if include_indicators is None:
             include_indicators = ["ema", "rsi", "macd", "bollinger"]
-        
+
         if ema_periods is None:
             ema_periods = self.ema_periods
-        
+
         if macd_params is None:
             macd_params = {"fast": 12, "slow": 26, "signal": 9}
-        
+
         if bollinger_params is None:
             bollinger_params = {"period": 20, "num_std": 2.0}
-        
+
         # 結果DataFrame（最初はコピー）
         result = df.clone()
-        
+
         # ===== 共通計算の最適化 =====
         # EMAの事前計算（他の指標でも使用される可能性があるため）
         ema_cache = {}
-        
+
         # EMA計算が必要な全ての期間を収集
         required_ema_periods = set()
-        
+
         if "ema" in include_indicators:
             required_ema_periods.update(ema_periods)
-        
+
         if "macd" in include_indicators:
             required_ema_periods.add(macd_params["fast"])
             required_ema_periods.add(macd_params["slow"])
-        
+
         # 必要なEMAを一括計算してキャッシュ
         if group_by:
             # グループ処理の場合、partition_byを使用して各グループごとに処理
@@ -755,9 +755,9 @@ class TechnicalIndicatorEngine:
                 )
                 ema_cache[period] = ema_expr
                 logger.debug(f"Pre-calculated EMA for period {period}")
-        
+
         # ===== 各指標の計算（最適化済み） =====
-        
+
         # 1. EMA（指数移動平均）
         if "ema" in include_indicators:
             ema_columns = {}
@@ -783,10 +783,10 @@ class TechnicalIndicatorEngine:
                             .cast(pl.Float32)
                             .alias(col_name)
                         )
-            
+
             # 一括で列を追加（効率的）
             result = result.with_columns(list(ema_columns.values()))
-            
+
             # メタデータ更新
             self._update_metadata(
                 "ema",
@@ -798,44 +798,44 @@ class TechnicalIndicatorEngine:
                 len(df),
             )
             logger.info(f"Calculated EMA for {len(ema_periods)} periods")
-        
+
         # 2. RSI（相対力指数）
         if "rsi" in include_indicators:
             # RSI計算
             alpha = 1.0 / rsi_period
-            
+
             if group_by:
                 # グループごとに価格変化を計算
                 result = result.with_columns(
                     pl.col(price_column).diff().over(group_by).alias("_price_change")
                 )
-                
+
                 # 上昇幅と下落幅を分離
                 result = result.with_columns([
                     pl.when(pl.col("_price_change") > 0)
                     .then(pl.col("_price_change"))
                     .otherwise(0.0)
                     .alias("_gain"),
-                    
+
                     pl.when(pl.col("_price_change") < 0)
                     .then(-pl.col("_price_change"))
                     .otherwise(0.0)
                     .alias("_loss"),
                 ])
-                
+
                 # EMAでの平均を計算
                 result = result.with_columns([
                     pl.col("_gain")
                     .ewm_mean(alpha=alpha, adjust=False)
                     .over(group_by)
                     .alias("_avg_gain"),
-                    
+
                     pl.col("_loss")
                     .ewm_mean(alpha=alpha, adjust=False)
                     .over(group_by)
                     .alias("_avg_loss"),
                 ])
-                
+
                 # 一時列を削除
                 result = result.drop(["_price_change", "_gain", "_loss"])
             else:
@@ -843,34 +843,34 @@ class TechnicalIndicatorEngine:
                 result = result.with_columns(
                     pl.col(price_column).diff().alias("_price_change")
                 )
-                
+
                 # 上昇幅と下落幅を分離
                 result = result.with_columns([
                     pl.when(pl.col("_price_change") > 0)
                     .then(pl.col("_price_change"))
                     .otherwise(0.0)
                     .alias("_gain"),
-                    
+
                     pl.when(pl.col("_price_change") < 0)
                     .then(-pl.col("_price_change"))
                     .otherwise(0.0)
                     .alias("_loss"),
                 ])
-                
+
                 # EMAでの平均を計算
                 result = result.with_columns([
                     pl.col("_gain")
                     .ewm_mean(alpha=alpha, adjust=False)
                     .alias("_avg_gain"),
-                    
+
                     pl.col("_loss")
                     .ewm_mean(alpha=alpha, adjust=False)
                     .alias("_avg_loss"),
                 ])
-                
+
                 # 一時列を削除
                 result = result.drop(["_price_change", "_gain", "_loss"])
-            
+
             result = result.with_columns([
                 pl.when(pl.col("_avg_loss") != 0)
                 .then(100 - (100 / (1 + (pl.col("_avg_gain") / pl.col("_avg_loss")))))
@@ -878,10 +878,10 @@ class TechnicalIndicatorEngine:
                 .alias(f"rsi_{rsi_period}")
                 .cast(pl.Float32)
             ])
-            
+
             # 一時列を削除（メモリ最適化）
             result = result.drop(["_avg_gain", "_avg_loss"])
-            
+
             # メタデータ更新
             self._update_metadata(
                 "rsi",
@@ -893,13 +893,13 @@ class TechnicalIndicatorEngine:
                 len(df),
             )
             logger.info(f"Calculated RSI with period {rsi_period}")
-        
+
         # 3. MACD（移動平均収束拡散）
         if "macd" in include_indicators:
             fast_period = macd_params["fast"]
             slow_period = macd_params["slow"]
             signal_period = macd_params["signal"]
-            
+
             # キャッシュからEMAを取得または計算
             if fast_period in ema_cache:
                 ema_fast = ema_cache[fast_period]
@@ -917,7 +917,7 @@ class TechnicalIndicatorEngine:
                         .ewm_mean(span=fast_period, adjust=False)
                         .cast(pl.Float32)
                     )
-            
+
             if slow_period in ema_cache:
                 ema_slow = ema_cache[slow_period]
             else:
@@ -934,12 +934,12 @@ class TechnicalIndicatorEngine:
                         .ewm_mean(span=slow_period, adjust=False)
                         .cast(pl.Float32)
                     )
-            
+
             # MACD計算
             result = result.with_columns([
                 (ema_fast - ema_slow).alias("macd_line").cast(pl.Float32)
             ])
-            
+
             # Signal Line計算
             if group_by:
                 result = result.with_columns([
@@ -956,14 +956,14 @@ class TechnicalIndicatorEngine:
                     .cast(pl.Float32)
                     .alias("macd_signal")
                 ])
-            
+
             # Histogram計算
             result = result.with_columns([
                 (pl.col("macd_line") - pl.col("macd_signal"))
                 .alias("macd_histogram")
                 .cast(pl.Float32)
             ])
-            
+
             # メタデータ更新
             self._update_metadata(
                 "macd",
@@ -979,12 +979,12 @@ class TechnicalIndicatorEngine:
                 len(df),
             )
             logger.info(f"Calculated MACD with periods {fast_period}/{slow_period}/{signal_period}")
-        
+
         # 4. ボリンジャーバンド
         if "bollinger" in include_indicators:
             period = bollinger_params["period"]
             num_std = bollinger_params["num_std"]
-            
+
             # 中央バンドと標準偏差を同時に計算
             if group_by:
                 result = result.with_columns([
@@ -993,7 +993,7 @@ class TechnicalIndicatorEngine:
                     .over(group_by)
                     .cast(pl.Float32)
                     .alias("bb_middle"),
-                    
+
                     pl.col(price_column)
                     .rolling_std(window_size=period)
                     .over(group_by)
@@ -1006,42 +1006,42 @@ class TechnicalIndicatorEngine:
                     .rolling_mean(window_size=period)
                     .cast(pl.Float32)
                     .alias("bb_middle"),
-                    
+
                     pl.col(price_column)
                     .rolling_std(window_size=period)
                     .cast(pl.Float32)
                     .alias("_bb_std")
                 ])
-            
+
             # 上部・下部バンド、バンド幅、%Bを一括計算
             result = result.with_columns([
                 (pl.col("bb_middle") + (pl.col("_bb_std") * num_std))
                 .alias("bb_upper")
                 .cast(pl.Float32),
-                
+
                 (pl.col("bb_middle") - (pl.col("_bb_std") * num_std))
                 .alias("bb_lower")
                 .cast(pl.Float32),
             ])
-            
+
             result = result.with_columns([
                 (pl.col("bb_upper") - pl.col("bb_lower"))
                 .alias("bb_width")
                 .cast(pl.Float32),
-                
+
                 pl.when(pl.col("bb_upper") != pl.col("bb_lower"))
                 .then(
-                    (pl.col(price_column) - pl.col("bb_lower")) / 
+                    (pl.col(price_column) - pl.col("bb_lower")) /
                     (pl.col("bb_upper") - pl.col("bb_lower"))
                 )
                 .otherwise(0.5)
                 .alias("bb_percent")
                 .cast(pl.Float32),
             ])
-            
+
             # 一時列を削除（メモリ最適化）
             result = result.drop("_bb_std")
-            
+
             # メタデータ更新
             self._update_metadata(
                 "bollinger",
@@ -1056,26 +1056,26 @@ class TechnicalIndicatorEngine:
                 len(df),
             )
             logger.info(f"Calculated Bollinger Bands with period {period}")
-        
+
         # EMAキャッシュ列を削除（メモリ最適化）
         cache_columns = [col for col in result.columns if col.startswith("_ema_cache_")]
         if cache_columns:
             result = result.drop(cache_columns)
             logger.debug(f"Dropped {len(cache_columns)} EMA cache columns")
-        
+
         # 処理時間を記録
         elapsed_time = time.time() - start_time
         self._last_process_time = elapsed_time
-        
+
         # 統計情報の更新
         stats = self._metadata["statistics"]
         stats["total_processing_time"] += elapsed_time
-        
+
         logger.info(
             f"Batch calculation completed: {len(include_indicators)} indicators, "
             f"{len(df)} rows, {elapsed_time:.4f} seconds"
         )
-        
+
         return result
 
     def calculate_multiple_indicators(
@@ -1177,18 +1177,18 @@ class TechnicalIndicatorEngine:
         """
         # 既に計算されている指標を確認
         calculated_indicators = self.get_calculated_indicators()
-        
+
         # 各指標を増分更新
         result = df
-        
+
         if "ema" in calculated_indicators:
             # EMAの増分更新（全体を再計算 - 簡易実装）
             result = self.calculate_ema(result, price_column, group_by)
-        
+
         if "rsi" in calculated_indicators:
             # RSIの増分更新
             result = self.calculate_rsi(result, price_column=price_column, group_by=group_by)
-        
+
         if "macd" in calculated_indicators:
             # MACDの増分更新
             params = self.get_indicator_params("macd")
@@ -1201,7 +1201,7 @@ class TechnicalIndicatorEngine:
                     slow_period=params.get("slow", 26),
                     signal_period=params.get("signal", 9),
                 )
-        
+
         if "bollinger" in calculated_indicators:
             # ボリンジャーバンドの増分更新
             params = self.get_indicator_params("bollinger")
@@ -1213,9 +1213,9 @@ class TechnicalIndicatorEngine:
                     period=params.get("period", 20),
                     num_std=params.get("num_std", 2.0),
                 )
-        
+
         logger.debug(f"Updated indicators for last {last_n_rows} rows")
-        
+
         return result
 
     def _update_metadata(

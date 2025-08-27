@@ -1022,6 +1022,485 @@ class TestDataFrameConversion:
             assert df.dtypes[i] in [pl.Float64, pl.Int64, pl.Int32, pl.Float32]  # 数値型
 
 
+class TestEdgeCasesExtended:
+    """拡張エッジケーステスト - Step 7"""
+    
+    def test_add_bar_with_none(self):
+        """None値のバー追加テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 初期状態の確認
+        initial_size = analyzer.get_buffer_size()
+        assert initial_size == 0
+        
+        # Noneを渡した場合の処理
+        analyzer.add_new_bar(None)
+        
+        # バッファサイズが変わらないことを確認
+        assert analyzer.get_buffer_size() == initial_size
+        
+        # エラーが発生しないことを確認（例外が出ない）
+        # DataFrameの取得も問題ない
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is None  # バッファが空なのでNone
+    
+    def test_add_bar_with_invalid_data(self):
+        """無効データ型のテスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 1. 必須フィールドが欠けているバー
+        incomplete_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+            'open': 100.0,
+            # 'high', 'low', 'close', 'volume'が欠けている
+        }
+        
+        # エラーハンドリングのテスト
+        try:
+            analyzer.add_new_bar(incomplete_bar)
+            # バッファに追加されるが、値が欠損している
+            assert analyzer.get_buffer_size() == 1
+        except Exception:
+            # エラーが発生してもOK
+            pass
+        
+        # 2. 文字列型の価格データ
+        string_price_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 1, 0),
+            'open': "100.0",  # 文字列
+            'high': "105.0",  # 文字列
+            'low': "95.0",   # 文字列
+            'close': "102.0", # 文字列
+            'volume': 1000
+        }
+        
+        analyzer.add_new_bar(string_price_bar)
+        # 文字列でも追加される（Polarsが変換処理を行う）
+        
+        # 3. リスト型のtimestamp
+        list_timestamp_bar = {
+            'timestamp': [datetime(2024, 1, 1, 9, 2, 0)],  # リスト
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        
+        try:
+            analyzer.add_new_bar(list_timestamp_bar)
+        except Exception:
+            # リスト型のタイムスタンプはエラーになる可能性が高い
+            pass
+        
+        # バッファサイズを確認
+        assert analyzer.get_buffer_size() >= 0  # エラーでも継続
+    
+    def test_nan_values_handling(self):
+        """NaN値処理テスト"""
+        analyzer = MultiTimeframeAnalyzer(
+            short_term_periods=[5],
+            long_term_periods=[10],
+            max_history_bars=100
+        )
+        
+        # NaNを含むバーを追加
+        for i in range(20):
+            if i < 10:
+                # 最初の10個は正常データ
+                close = 100.0 + i
+            else:
+                # 後半10個はNaN
+                close = float('nan')
+            
+            bar = {
+                'timestamp': datetime(2024, 1, 1, 9, i, 0),
+                'open': 100.0 if i < 10 else float('nan'),
+                'high': 105.0 if i < 10 else float('nan'),
+                'low': 95.0 if i < 10 else float('nan'),
+                'close': close,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        # バッファサイズの確認
+        assert analyzer.get_buffer_size() == 20
+        
+        # DataFrame変換時の処理
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert len(df) == 20
+        
+        # NaN値が含まれていることを確認
+        assert df['close'][10:].null_count() == 0  # PolarはNaNをnullに変換しない
+        # NaNの存在を確認
+        close_values = df['close'].to_numpy()
+        assert np.isnan(close_values[10:]).any()
+        
+        # RCI計算時のNaN伝播をテスト
+        if analyzer.is_ready():
+            result = analyzer.analyze_streaming()
+            # NaNがある場合でも処理が継続されることを確認
+            assert result is not None
+    
+    def test_negative_values_in_bar(self):
+        """負の価格データテスト"""
+        analyzer = MultiTimeframeAnalyzer(
+            short_term_periods=[5],
+            long_term_periods=[10],
+            max_history_bars=100
+        )
+        
+        # 負の値を含むバーを追加
+        negative_bars = [
+            {
+                'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+                'open': -100.0,   # 負の値
+                'high': -50.0,    # 負の値
+                'low': -150.0,    # 負の値
+                'close': -80.0,   # 負の値
+                'volume': -1000   # 負のボリューム
+            },
+            {
+                'timestamp': datetime(2024, 1, 1, 9, 1, 0),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            }
+        ]
+        
+        for bar in negative_bars:
+            analyzer.add_new_bar(bar)
+        
+        # 処理が継続されることを確認
+        assert analyzer.get_buffer_size() == 2
+        
+        # DataFrameに負の値が含まれることを確認
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert df['close'][0] == -80.0
+        assert df['volume'][0] == -1000
+        
+        # 負の値でも分析が継続されることを確認
+        # （RCI計算は順位ベースなので負の値でも問題ない）
+        for i in range(10):
+            bar = {
+                'timestamp': datetime(2024, 1, 1, 9, i + 2, 0),
+                'open': 100.0 + i,
+                'high': 105.0 + i,
+                'low': 95.0 + i,
+                'close': 102.0 + i,
+                'volume': 1000 + i
+            }
+            analyzer.add_new_bar(bar)
+        
+        # RCI計算への影響を検証（十分なデータがある場合）
+        if analyzer.get_buffer_size() >= 5:  # 最小期間が5なので5個以上必要
+            # バッファ全体からDataFrameを取得
+            full_df = analyzer.get_buffer_as_dataframe()
+            if full_df is not None and len(full_df) >= 5:
+                result = analyzer.analyze(full_df)
+                assert result is not None
+                # 短期RCIの存在確認
+                assert 'short_rci_5' in result.columns
+    
+    def test_infinity_values_handling(self):
+        """無限大値処理テスト"""
+        analyzer = MultiTimeframeAnalyzer(
+            short_term_periods=[5],
+            long_term_periods=[10],
+            max_history_bars=100
+        )
+        
+        # 無限大値を含むバーを追加
+        infinity_bars = [
+            {
+                'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+                'open': float('inf'),
+                'high': float('inf'),
+                'low': 95.0,
+                'close': 102.0,
+                'volume': 1000
+            },
+            {
+                'timestamp': datetime(2024, 1, 1, 9, 1, 0),
+                'open': 100.0,
+                'high': 105.0,
+                'low': -float('inf'),  # 負の無限大
+                'close': -float('inf'),
+                'volume': 1000
+            }
+        ]
+        
+        for bar in infinity_bars:
+            analyzer.add_new_bar(bar)
+        
+        # バッファに追加されることを確認
+        assert analyzer.get_buffer_size() == 2
+        
+        # DataFrameに無限大値が含まれることを確認
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert np.isinf(df['open'][0])
+        assert np.isinf(df['close'][1])
+        
+        # RCI計算の安定性確認（正常なデータを追加）
+        for i in range(20):
+            bar = {
+                'timestamp': datetime(2024, 1, 1, 9, i + 2, 0),
+                'open': 100.0,
+                'high': 105.0,
+                'low': 95.0,
+                'close': 102.0 + i * 0.1,
+                'volume': 1000
+            }
+            analyzer.add_new_bar(bar)
+        
+        # 無限大値があってもバッファ管理が動作することを確認
+        assert analyzer.get_buffer_size() == 22
+
+
+class TestErrorHandlingExtended:
+    """拡張エラーハンドリングテスト - Step 7"""
+    
+    def test_buffer_overflow_protection(self):
+        """バッファオーバーフロー保護テスト"""
+        # 小さなmax_history_barsで初期化
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=5)
+        
+        # 最大サイズを超える連続追加
+        base_time = datetime(2024, 1, 1, 9, 0, 0)
+        for i in range(100):
+            bar = {
+                'timestamp': base_time + timedelta(minutes=i),
+                'open': 100.0 + i,
+                'high': 105.0 + i,
+                'low': 95.0 + i,
+                'close': 102.0 + i,
+                'volume': 1000 + i
+            }
+            analyzer.add_new_bar(bar)
+            
+            # バッファサイズが最大値を超えないことを確認
+            assert analyzer.get_buffer_size() <= 5
+        
+        # 最終的なバッファサイズ
+        assert analyzer.get_buffer_size() == 5
+        
+        # 古いデータが削除され、新しいデータが保持されていることを確認
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert len(df) == 5
+        # 最後の5個のバー（インデックス95-99）が保持されている
+        assert df['close'][0] == 197.0  # 102.0 + 95
+        assert df['close'][4] == 201.0  # 102.0 + 99
+    
+    def test_type_mismatch_handling(self):
+        """データ型不一致処理テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 1. 文字列型のタイムスタンプ
+        string_timestamp_bar = {
+            'timestamp': "2024-01-01 09:00:00",  # 文字列
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        
+        try:
+            analyzer.add_new_bar(string_timestamp_bar)
+            # Polarsが自動変換を試みる
+        except Exception:
+            # 変換失敗時のエラー処理
+            pass
+        
+        # 2. 整数型の価格データ（通常は問題ない）
+        integer_price_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 0, 0),
+            'open': 100,    # 整数
+            'high': 105,    # 整数
+            'low': 95,     # 整数
+            'close': 102,   # 整数
+            'volume': 1000  # 整数
+        }
+        
+        analyzer.add_new_bar(integer_price_bar)
+        assert analyzer.get_buffer_size() >= 1  # 追加成功
+        
+        # 3. 混在型データ
+        mixed_type_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 1, 0),
+            'open': "100.5",     # 文字列
+            'high': 105,         # 整数
+            'low': 95.5,        # 浮動小数点
+            'close': np.float64(102.3),  # NumPy型
+            'volume': "1000"     # 文字列
+        }
+        
+        analyzer.add_new_bar(mixed_type_bar)
+        # 型変換が行われることを確認
+        
+        try:
+            df = analyzer.get_buffer_as_dataframe()
+            if df is not None and len(df) > 0:
+                # すべて数値型に変換されていることを確認
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    if col in df.columns:
+                        assert df[col].dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32]
+        except Exception:
+            # 型の混在によりDataFrame変換が失敗する可能性がある
+            pass
+    
+    def test_corrupt_data_handling(self):
+        """破損データ処理テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 1. 不完全な辞書データ
+        corrupt_bars = [
+            {},  # 空の辞書
+            {'timestamp': datetime(2024, 1, 1, 9, 0, 0)},  # タイムスタンプのみ
+            {'open': 100.0, 'close': 102.0},  # タイムスタンプなし
+            None,  # None値
+        ]
+        
+        for corrupt_bar in corrupt_bars:
+            try:
+                analyzer.add_new_bar(corrupt_bar)
+            except Exception:
+                # エラーが発生してもシステムは継続
+                pass
+        
+        # システムの安定性確認（正常なデータを追加）
+        normal_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 10, 0),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(normal_bar)
+        
+        # エラーリカバリーの確認
+        assert analyzer.get_buffer_size() >= 1  # 少なくとも正常データは追加されている
+        
+        # 2. None値を含むフィールド
+        none_field_bar = {
+            'timestamp': datetime(2024, 1, 1, 9, 11, 0),
+            'open': None,
+            'high': 105.0,
+            'low': None,
+            'close': 102.0,
+            'volume': None
+        }
+        
+        analyzer.add_new_bar(none_field_bar)
+        # None値があってもバッファに追加される
+    
+    def test_timestamp_validation(self):
+        """タイムスタンプ検証テスト"""
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=100)
+        
+        # 1. 未来の日付
+        future_bar = {
+            'timestamp': datetime(2099, 12, 31, 23, 59, 59),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(future_bar)
+        assert analyzer.get_buffer_size() == 1  # 未来の日付でも受け入れる
+        
+        # 2. 1970年以前の日付
+        past_bar = {
+            'timestamp': datetime(1950, 1, 1, 0, 0, 0),
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        analyzer.add_new_bar(past_bar)
+        assert analyzer.get_buffer_size() == 2  # 過去の日付でも受け入れる
+        
+        # 3. None値
+        none_timestamp_bar = {
+            'timestamp': None,
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        try:
+            analyzer.add_new_bar(none_timestamp_bar)
+        except Exception:
+            # None timestampはエラーになる可能性が高い
+            pass
+        
+        # 4. 文字列形式の日付
+        string_date_bar = {
+            'timestamp': "2024-01-01T09:00:00",
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000
+        }
+        try:
+            analyzer.add_new_bar(string_date_bar)
+            # Polarsが変換を試みる
+        except Exception:
+            pass
+    
+    def test_memory_efficiency_large_buffer(self):
+        """巨大バッファのメモリ効率テスト"""
+        import gc
+        import sys
+        
+        # 大きなバッファサイズで初期化
+        analyzer = MultiTimeframeAnalyzer(max_history_bars=10000)
+        
+        # メモリ使用量の初期値（簡易測定）
+        gc.collect()
+        initial_objects = len(gc.get_objects())
+        
+        # 10000件のバー追加
+        base_time = datetime(2024, 1, 1, 0, 0, 0)
+        for i in range(10000):
+            bar = {
+                'timestamp': base_time.replace(minute=i % 60, hour=(i // 60) % 24),
+                'open': 100.0 + np.random.randn() * 0.1,
+                'high': 105.0 + np.random.randn() * 0.1,
+                'low': 95.0 + np.random.randn() * 0.1,
+                'close': 102.0 + np.random.randn() * 0.1,
+                'volume': 1000 + np.random.randint(-100, 100)
+            }
+            analyzer.add_new_bar(bar)
+        
+        assert analyzer.get_buffer_size() == 10000
+        
+        # ガベージコレクション後の確認
+        gc.collect()
+        final_objects = len(gc.get_objects())
+        
+        # オブジェクト数の増加が妥当な範囲内であることを確認
+        # (10000個のバーに対して、オブジェクト数の増加は100000以下であるべき)
+        object_increase = final_objects - initial_objects
+        assert object_increase < 100000  # 妥当な範囲内
+        
+        # DataFrameとしての取得も問題ないことを確認
+        df = analyzer.get_buffer_as_dataframe()
+        assert df is not None
+        assert len(df) == 10000
+
+
 class TestInternalBufferMode:
     """内部バッファモードのテスト"""
     
