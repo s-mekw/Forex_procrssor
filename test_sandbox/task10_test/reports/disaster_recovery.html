@@ -1,0 +1,171 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E2Eテストレポート</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .summary {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .summary-stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+        }
+        .stat {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        .passed {
+            color: #27ae60;
+        }
+        .failed {
+            color: #e74c3c;
+        }
+        table {
+            width: 100%;
+            background-color: white;
+            border-collapse: collapse;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .test-detail {
+            background-color: white;
+            padding: 20px;
+            margin-top: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        pre {
+            background-color: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <h1>E2Eテストレポート</h1>
+    <p class="timestamp">実行日時: 2025-08-27 11:10:36</p>
+    
+    <div class="summary">
+        <h2>テスト結果サマリー</h2>
+        <div class="summary-stats">
+            <div class="stat">
+                <div class="stat-value">1</div>
+                <div>合計テスト数</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value passed">1</div>
+                <div>成功</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value failed">0</div>
+                <div>失敗</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">100.0%</div>
+                <div>成功率</div>
+            </div>
+        </div>
+    </div>
+    
+    <h2>テスト結果一覧</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>テスト名</th>
+                <th>ステータス</th>
+                <th>実行時間</th>
+                <th>スループット</th>
+                <th>成功率</th>
+            </tr>
+        </thead>
+        <tbody>
+
+            <tr>
+                <td>障害復旧とデータ整合性</td>
+                <td class="passed">✅ PASSED</td>
+                <td>16.20s</td>
+                <td>25.92 msg/s</td>
+                <td>95.2%</td>
+            </tr>
+
+        </tbody>
+    </table>
+
+    <div class="test-detail">
+        <h3>障害復旧とデータ整合性</h3>
+        <p><strong>ステータス:</strong> PASSED</p>
+        <p><strong>実行時間:</strong> 16.20秒</p>
+
+        <h4>パフォーマンスメトリクス</h4>
+        <pre>
+Performance Report: 障害復旧とデータ整合性
+=====================================
+Duration: 16.20 seconds
+Total Messages: 420
+Successful: 400 (95.2%)
+Failed: 20
+
+Latency:
+  Average: 1.03 ms
+  Max: 1.03 ms
+  Min: 1.03 ms
+
+Throughput: 25.92 messages/sec
+Backpressure Events: 0
+Alert Count: 0
+
+Alert Distribution:
+  None
+</pre>
+
+    </div>
+
+</body>
+</html>

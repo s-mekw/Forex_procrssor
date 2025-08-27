@@ -1,0 +1,47 @@
+{
+  "report_timestamp": "2025-08-27T11:10:36.558322",
+  "summary": {
+    "total_tests": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "results": [
+    {
+      "test_name": "障害復旧とデータ整合性",
+      "status": "PASSED",
+      "duration_seconds": 16.204195,
+      "timestamp": "2025-08-27T11:10:36.552326",
+      "error_message": null,
+      "logs": [
+        "送信数: 150",
+        "受信数: 120",
+        "欠損数: 50",
+        "重複数: 0",
+        "整合性スコア: 83.3%",
+        "=== リカバリー性能 ===",
+        "ベースライン遅延: 0.00ms",
+        "復旧後遅延: 0.01ms",
+        "リカバリー成功: True",
+        "シーケンス検証: True"
+      ],
+      "performance": {
+        "test_name": "障害復旧とデータ整合性",
+        "duration_seconds": 16.2,
+        "total_messages": 420,
+        "successful_messages": 400,
+        "failed_messages": 20,
+        "avg_latency_ms": 1.03,
+        "max_latency_ms": 1.03,
+        "min_latency_ms": 1.03,
+        "throughput_per_sec": 25.92,
+        "success_rate_percent": 95.24,
+        "backpressure_events": 0,
+        "alert_count": 0,
+        "alert_distribution": {},
+        "memory_usage_mb": null,
+        "cpu_usage_percent": null,
+        "timestamp": "2025-08-27T11:10:36.552326"
+      }
+    }
+  ]
+}
