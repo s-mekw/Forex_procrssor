@@ -40,12 +40,12 @@
   - analyze_streaming()の呼び出しをパラメータなしに変更（L216-220）
   - MultiTimeframeAnalyzerのadd_new_bar()とis_ready()を使用
   - ログメッセージをget_buffer_size()を使用するように更新（L238-241）
-- 完了: [ ]
+- 完了: [x]
 
 ### Step 5: インターフェース設計の改善
 - ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py
 - 作業: 依存性注入パターンの適用、モジュール間の結合度低減
-- 完了: [ ]
+- 完了: [x]
 
 ### Step 6: ユニットテストの作成（基本テスト）
 - ファイル: tests/unit/test_analyzer.py
@@ -94,9 +94,9 @@
 
 ## 進捗メトリクス
 - 総ステップ数: 10
-- 完了ステップ: 3
-- 実行中ステップ: 1 (Step 4)
-- 進捗率: 35%
+- 完了ステップ: 5
+- 実行中ステップ: 0
+- 進捗率: 50%
 
 ## Step 3 実装チェックリスト
 - [x] __init__メソッドにバッファ管理プロパティを追加
