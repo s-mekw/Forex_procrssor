@@ -369,7 +369,7 @@ class TimeframeConverter:
 
         # タイムスタンプの重複チェック
         if timestamp_col in df.columns:
-            duplicates = df.filter(df.duplicated(subset=[timestamp_col]))
+            duplicates = df.filter(df.is_duplicated(subset=[timestamp_col]))
             if len(duplicates) > 0:
                 errors.append(f"Found {len(duplicates)} duplicate timestamps")
 
