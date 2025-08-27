@@ -73,11 +73,11 @@ class RealtimePipeline:
         # Initialize queues
         self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
         self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
-        
+
         # Initialize multi-timeframe analyzer if enabled
         self._multiframe_analyzer: MultiTimeframeAnalyzer | None = None
         self._data_buffer: list[dict[str, Any]] = []  # バッファ for historical data
-        
+
         if enable_multiframe:
             multiframe_config = multiframe_config or {}
             self._multiframe_analyzer = MultiTimeframeAnalyzer(**multiframe_config)
@@ -171,7 +171,7 @@ class RealtimePipeline:
 
         # 遅延計測 (timestampをdatetimeからfloatに変換)
         start_time = time.time()
-        
+
         # timestampからの遅延計算は実際のタイムスタンプでのみ行う
         if isinstance(data_point["timestamp"], datetime):
             # 現在時刻とtimestampの差を計算（リアルタイムデータ用）
@@ -190,7 +190,7 @@ class RealtimePipeline:
         if self._enable_multiframe and self._multiframe_analyzer:
             try:
                 multiframe_start = time.time()
-                
+
                 # データバッファに新しいバーを追加
                 new_bar = {
                     "timestamp": data_point["timestamp"],
@@ -201,24 +201,24 @@ class RealtimePipeline:
                     "volume": processed_data.get("volume", 0),
                 }
                 self._data_buffer.append(new_bar)
-                
+
                 # バッファサイズ制限
                 if len(self._data_buffer) > self._max_history_bars:
                     self._data_buffer = self._data_buffer[-self._max_history_bars:]
-                
+
                 # 最小バー数のチェック
                 min_required_bars = 200  # デフォルト最小要求バー数
                 if len(self._data_buffer) >= min_required_bars:
                     # PolarsDataFrameに変換
                     history_df = pl.DataFrame(self._data_buffer)
-                    
+
                     # ストリーミング分析の実行
                     multiframe_rci = self._multiframe_analyzer.analyze_streaming(
                         new_bar=new_bar,
                         history=history_df[:-1],  # 最後のバーは新しいバーなので除外
                         min_history_bars=min_required_bars,
                     )
-                    
+
                     # マルチタイムフレーム処理のメトリクス更新
                     multiframe_latency = time.time() - multiframe_start
                     if self._enable_metrics:
@@ -228,7 +228,7 @@ class RealtimePipeline:
                             self._metrics["multiframe_max_latency"],
                             multiframe_latency
                         )
-                    
+
                     # ログ出力（デバッグ用）
                     if multiframe_rci.get("is_new_long_bar"):
                         self._logger.debug(
@@ -239,7 +239,7 @@ class RealtimePipeline:
                         f"Insufficient history for multi-timeframe analysis: "
                         f"{len(self._data_buffer)}/{min_required_bars}"
                     )
-                    
+
             except Exception as e:
                 self._logger.error(f"Multi-timeframe analysis error: {e}")
                 # エラーが発生してもパイプラインは継続

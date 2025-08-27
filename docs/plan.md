@@ -18,7 +18,7 @@
 ### Step 2: RealtimePipelineのリファクタリング準備
 - ファイル: src/data_processing/pipelines.py
 - 作業: マルチタイムフレーム分析ロジックの抽出対象を特定
-- 完了: [ ]
+- 完了: [x]
 
 ### Step 3: MultiTimeframeAnalyzerへの責務移譲
 - ファイル: src/data_processing/analyzer.py
@@ -82,5 +82,5 @@
 
 ## 進捗メトリクス
 - 総ステップ数: 10
-- 完了ステップ: 0
-- 進捗率: 0%
+- 完了ステップ: 2
+- 進捗率: 20%
