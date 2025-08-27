@@ -14,8 +14,8 @@ description: ワークフローループ実行（計画→実装→レビュー�
 2. @agent-executor → 1 ステップのみ実装（前処理: `docs/context.md` と `docs/plan.md` を読み込む）
 3. @agent-reviewer → 実装をレビュー（前処理: `docs/context.md` と `docs/plan.md` を読み込む）
 4. レビュー結果判定：
-   - 修正あり → @agent-executorで修正 → 3へ
-   - 修正なし → 次へ
+   - 修正あり（評価総合点数が89/100点以下） → @agent-executorで修正 → 3へ
+   - 修正なし（評価総合点数が90/100点以上） → 次へ
 5. 進捗確認：
    - 未完了 → 1へ戻る
    - 完了 → 終了
