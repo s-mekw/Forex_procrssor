@@ -271,7 +271,7 @@ class MultiTimeframeAnalyzer:
         rci_results = self.short_term_engine.calculate_multiple(
             data=data,
             periods=self.short_term_periods,
-            price_column="close",
+            column_name="close",
             mode="batch",
         )
 
@@ -302,7 +302,7 @@ class MultiTimeframeAnalyzer:
 
         # タイムフレーム変換（1分足→5分足）
         long_term_data = self.timeframe_converter.convert(
-            data=data,
+            df=data,
             incomplete_bar_handling=self.incomplete_bar_handling,
         )
 
@@ -324,7 +324,7 @@ class MultiTimeframeAnalyzer:
         rci_results = self.long_term_engine.calculate_multiple(
             data=long_term_data,
             periods=self.long_term_periods,
-            price_column="close",
+            column_name="close",
             mode="batch",
         )
 
@@ -395,23 +395,22 @@ class MultiTimeframeAnalyzer:
         Returns:
             長期RCIが結合された結果
         """
-        # 5分足のタイムスタンプとRCIを結合
-        long_term_with_rci = long_term_data.select("timestamp").join(
-            long_term_rci, on="timestamp", how="left"
-        )
-
+        # 長期RCIのカラムだけを抽出（timestamp含む）
+        long_rci_cols = ["timestamp"] + [col for col in long_term_rci.columns if "long_rci" in col]
+        long_term_rci_only = long_term_rci.select(long_rci_cols)
+        
         # 各1分足タイムスタンプに対応する5分足期間を特定
         # 1分足のタイムスタンプを5分足の期間に切り下げ
+        # Polarsのtruncateは"5T"形式を受け付けないため変換
+        truncate_arg = self._convert_timeframe_for_truncate(self.long_timeframe)
         base_with_period = base_df.with_columns(
-            (pl.col("timestamp").dt.truncate(self.long_timeframe)).alias(
-                "long_period"
-            )
+            (pl.col("timestamp").dt.truncate(truncate_arg)).alias("long_period")
         )
 
         # 5分足RCIを1分足データに結合
         # 各5分足期間のRCI値が、その期間内のすべての1分足バーに割り当てられる
         result = base_with_period.join(
-            long_term_with_rci.rename({"timestamp": "long_period"}),
+            long_term_rci_only.rename({"timestamp": "long_period"}),
             on="long_period",
             how="left",
         ).drop("long_period")
@@ -495,9 +494,10 @@ class MultiTimeframeAnalyzer:
             # 長期RCI計算（5分足バー完成時のみ）
             long_rci = {}
             if is_new_long_bar:
-                # 5分足データに変換
-                long_term_data = self.timeframe_converter.convert_streaming(
-                    updated_history, incomplete_bar_handling="drop"
+                # 5分足データに変換（convert_streamingはタプルを返すが、完成バーのみ使用）
+                long_term_data, _ = self.timeframe_converter.convert_streaming(
+                    df=updated_history,
+                    incomplete_bar_handling="drop"
                 )
 
                 for period in self.long_term_periods:
@@ -561,6 +561,26 @@ class MultiTimeframeAnalyzer:
         # RCIに変換（-100 to 100）
         return rho * 100
 
+    def _convert_timeframe_for_truncate(self, timeframe: str) -> str:
+        """
+        タイムフレーム形式をPolarsのtruncate用に変換します。
+        
+        Args:
+            timeframe: 元のタイムフレーム形式（例: "5T", "15T", "1H"）
+        
+        Returns:
+            Polars truncate用の形式（例: "5m", "15m", "1h"）
+        """
+        mapping = {
+            "5T": "5m",
+            "15T": "15m",
+            "30T": "30m",
+            "1H": "1h",
+            "4H": "4h",
+            "1D": "1d",
+        }
+        return mapping.get(timeframe, "5m")  # デフォルトは5分
+    
     def get_analyzer_info(self) -> dict[str, Any]:
         """
         アナライザーの設定情報を返します。

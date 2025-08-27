@@ -11,6 +11,10 @@ import time
 from datetime import datetime
 from typing import Any, TypedDict
 
+import polars as pl
+
+from src.data_processing.analyzer import MultiTimeframeAnalyzer
+
 
 # Type definitions
 class DataPoint(TypedDict):
@@ -27,6 +31,7 @@ class ProcessingResult(TypedDict):
     processed_data: dict[str, Any]
     latency: float
     status: str
+    multiframe_rci: dict[str, Any] | None  # マルチタイムフレームRCI結果
 
 
 class RealtimePipeline:
@@ -44,6 +49,9 @@ class RealtimePipeline:
         queue_size: int = 1000,
         alert_threshold: float = 1.0,
         enable_metrics: bool = True,
+        enable_multiframe: bool = False,
+        multiframe_config: dict[str, Any] | None = None,
+        max_history_bars: int = 1440,  # 24時間分の1分足データ
     ):
         """
         Initialize RealtimePipeline.
@@ -52,14 +60,31 @@ class RealtimePipeline:
             queue_size: Maximum size of input/output queues (default: 1000)
             alert_threshold: Latency threshold in seconds for alerts (default: 1.0)
             enable_metrics: Enable/disable metrics collection (default: True)
+            enable_multiframe: Enable multi-timeframe analysis (default: False)
+            multiframe_config: Configuration for multi-timeframe analyzer (optional)
+            max_history_bars: Maximum number of historical bars to keep (default: 1440)
         """
         self.queue_size = queue_size
         self.alert_threshold = alert_threshold
         self._enable_metrics = enable_metrics
+        self._enable_multiframe = enable_multiframe
+        self._max_history_bars = max_history_bars
 
         # Initialize queues
         self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
         self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+        
+        # Initialize multi-timeframe analyzer if enabled
+        self._multiframe_analyzer: MultiTimeframeAnalyzer | None = None
+        self._data_buffer: list[dict[str, Any]] = []  # バッファ for historical data
+        
+        if enable_multiframe:
+            multiframe_config = multiframe_config or {}
+            self._multiframe_analyzer = MultiTimeframeAnalyzer(**multiframe_config)
+            self._logger = logging.getLogger(__name__)
+            self._logger.info(
+                f"Multi-timeframe analysis enabled with config: {multiframe_config}"
+            )
 
         # Initialize metrics
         self._metrics: dict[str, Any] = {
@@ -76,6 +101,10 @@ class RealtimePipeline:
             "last_alert_time": None,
             "max_consecutive_alerts": 0,
             "auto_pause_triggered": False,
+            # Multi-timeframe specific metrics
+            "multiframe_processing_count": 0,
+            "multiframe_total_latency": 0.0,
+            "multiframe_max_latency": 0.0,
         }
 
         # Alert management
@@ -128,25 +157,92 @@ class RealtimePipeline:
                 self._logger.error(f"Processing error: {e}")
 
     async def _process_data(self, data_point: DataPoint) -> ProcessingResult:
-        """1分足データの処理（現在はパススルー）
+        """1分足データの処理（マルチタイムフレーム分析対応）
 
         Args:
             data_point: 処理対象のデータポイント
 
         Returns:
-            ProcessingResult: 処理結果
+            ProcessingResult: 処理結果（マルチタイムフレームRCI含む）
         """
 
         # 1分足データをそのままパススルー（将来的に変換処理を追加）
         processed_data = data_point["data"]
 
         # 遅延計測 (timestampをdatetimeからfloatに変換)
+        start_time = time.time()
+        
+        # timestampからの遅延計算は実際のタイムスタンプでのみ行う
         if isinstance(data_point["timestamp"], datetime):
-            timestamp = data_point["timestamp"].timestamp()
+            # 現在時刻とtimestampの差を計算（リアルタイムデータ用）
+            current_time = datetime.now()
+            if data_point["timestamp"] > current_time:
+                # 未来のタイムスタンプの場合は処理時間のみ計測
+                latency = 0.001  # デフォルト値
+            else:
+                latency = (current_time - data_point["timestamp"]).total_seconds()
         else:
-            timestamp = data_point["timestamp"]
+            # タイムスタンプがfloat型の場合
+            latency = time.time() - data_point["timestamp"]
 
-        latency = time.time() - timestamp
+        # マルチタイムフレーム分析の実行（有効な場合）
+        multiframe_rci: dict[str, Any] | None = None
+        if self._enable_multiframe and self._multiframe_analyzer:
+            try:
+                multiframe_start = time.time()
+                
+                # データバッファに新しいバーを追加
+                new_bar = {
+                    "timestamp": data_point["timestamp"],
+                    "open": processed_data.get("open", 0),
+                    "high": processed_data.get("high", 0),
+                    "low": processed_data.get("low", 0),
+                    "close": processed_data.get("close", 0),
+                    "volume": processed_data.get("volume", 0),
+                }
+                self._data_buffer.append(new_bar)
+                
+                # バッファサイズ制限
+                if len(self._data_buffer) > self._max_history_bars:
+                    self._data_buffer = self._data_buffer[-self._max_history_bars:]
+                
+                # 最小バー数のチェック
+                min_required_bars = 200  # デフォルト最小要求バー数
+                if len(self._data_buffer) >= min_required_bars:
+                    # PolarsDataFrameに変換
+                    history_df = pl.DataFrame(self._data_buffer)
+                    
+                    # ストリーミング分析の実行
+                    multiframe_rci = self._multiframe_analyzer.analyze_streaming(
+                        new_bar=new_bar,
+                        history=history_df[:-1],  # 最後のバーは新しいバーなので除外
+                        min_history_bars=min_required_bars,
+                    )
+                    
+                    # マルチタイムフレーム処理のメトリクス更新
+                    multiframe_latency = time.time() - multiframe_start
+                    if self._enable_metrics:
+                        self._metrics["multiframe_processing_count"] += 1
+                        self._metrics["multiframe_total_latency"] += multiframe_latency
+                        self._metrics["multiframe_max_latency"] = max(
+                            self._metrics["multiframe_max_latency"],
+                            multiframe_latency
+                        )
+                    
+                    # ログ出力（デバッグ用）
+                    if multiframe_rci.get("is_new_long_bar"):
+                        self._logger.debug(
+                            f"New 5-minute bar completed. Long-term RCI: {multiframe_rci.get('long_rci')}"
+                        )
+                else:
+                    self._logger.debug(
+                        f"Insufficient history for multi-timeframe analysis: "
+                        f"{len(self._data_buffer)}/{min_required_bars}"
+                    )
+                    
+            except Exception as e:
+                self._logger.error(f"Multi-timeframe analysis error: {e}")
+                # エラーが発生してもパイプラインは継続
 
         # 1秒を超える遅延をチェック（アラート機能統合）
         if latency > self.alert_threshold:
@@ -167,6 +263,7 @@ class RealtimePipeline:
             "processed_data": processed_data,
             "latency": latency,
             "status": "success",
+            "multiframe_rci": multiframe_rci,
         }
 
     def _update_metrics(self, latency: float) -> None:
@@ -300,6 +397,8 @@ class RealtimePipeline:
             - min_latency: Minimum observed latency
             - alert_count: Number of latency alerts triggered
             - backpressure_events: Number of backpressure events
+            - multiframe_processing_count: Number of multi-timeframe analyses
+            - multiframe_avg_latency: Average multi-timeframe processing latency
         """
         if not self._enable_metrics:
             return {}
@@ -317,6 +416,18 @@ class RealtimePipeline:
             )
         else:
             metrics["avg_latency"] = 0.0
+
+        # Calculate multi-timeframe average latency
+        if self._enable_multiframe and metrics.get("multiframe_processing_count", 0) > 0:
+            metrics["multiframe_avg_latency"] = (
+                metrics["multiframe_total_latency"] / metrics["multiframe_processing_count"]
+            )
+        else:
+            metrics["multiframe_avg_latency"] = 0.0
+
+        # Add buffer size if multi-timeframe is enabled
+        if self._enable_multiframe:
+            metrics["data_buffer_size"] = len(self._data_buffer)
 
         return metrics
 
@@ -492,3 +603,14 @@ class RealtimePipeline:
             callback: アラート発生時に呼び出されるコールバック関数
         """
         self._alert_callback = callback
+
+    def get_multiframe_config(self) -> dict[str, Any] | None:
+        """
+        Get multi-timeframe analyzer configuration.
+
+        Returns:
+            Multi-timeframe analyzer configuration if enabled, None otherwise
+        """
+        if self._enable_multiframe and self._multiframe_analyzer:
+            return self._multiframe_analyzer.get_analyzer_info()
+        return None
