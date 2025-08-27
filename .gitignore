@@ -207,3 +207,8 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Task 10.2 specific temporary files
+# チャート出力HTMLファイル（Plotlyが生成する大容量ファイル）
+test_sandbox/task10_2_test/*.html
+test_sandbox/task10_2_test/sample_img/
