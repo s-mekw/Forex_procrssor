@@ -32,6 +32,8 @@ max_bars_m5 = 10000   # M5の最大保存バー数
 update_interval = 1.0  # 更新間隔（秒）
 realtime_enabled = true  # リアルタイム更新の有効化
 show_grid = true  # グリッド表示フラグ
+display_bars_m1 = 100  # M1チャート表示バー数
+display_bars_m5 = 100  # M5チャート表示バー数
 
 [chart.m1]
 # M1（1分足）タイムフレーム設定

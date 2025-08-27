@@ -147,7 +147,9 @@ class RCIMultiframeChart:
                 max_bars_m1=10000,  # M1の最大保存バー数
                 max_bars_m5=2000,   # M5の最大保存バー数
                 update_interval=1.0,
-                show_grid=True
+                show_grid=True,
+                display_bars_m1=100,  # M1チャート表示バー数
+                display_bars_m5=100   # M5チャート表示バー数
             ),
             mt5=SimpleNamespace(
                 timeout=60000,
@@ -545,6 +547,26 @@ class RCIMultiframeChart:
                 if self.m5_data.ohlc_data is not None:
                     m5_ohlc = self.m5_data.ohlc_data.clone()
                     m5_rci = {k: v.copy() for k, v in self.m5_data.rci_data.items()}
+                
+                # 表示バー数制限を適用
+                display_bars_m1 = getattr(self.config.chart, 'display_bars_m1', 100)
+                display_bars_m5 = getattr(self.config.chart, 'display_bars_m5', 100)
+                
+                # M1データの表示制限
+                if m1_ohlc is not None:
+                    m1_ohlc = m1_ohlc.tail(display_bars_m1)
+                    # RCIデータも同じ期間に制限
+                    for period in m1_rci:
+                        if len(m1_rci[period]) > display_bars_m1:
+                            m1_rci[period] = m1_rci[period][-display_bars_m1:]
+                
+                # M5データの表示制限
+                if m5_ohlc is not None:
+                    m5_ohlc = m5_ohlc.tail(display_bars_m5)
+                    # RCIデータも同じ期間に制限
+                    for period in m5_rci:
+                        if len(m5_rci[period]) > display_bars_m5:
+                            m5_rci[period] = m5_rci[period][-display_bars_m5:]
                 
             except Exception as e:
                 print(f"Error preparing chart data: {e}")
