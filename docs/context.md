@@ -1,8 +1,8 @@
 # ワークフローコンテキスト
 
 ## 📍 現在の状態
-- ステップ: 3/10 実行中
-- 最終更新: 2025-08-27 14:30
+- ステップ: 5/10 準備中
+- 最終更新: 2025-08-27 15:30
 - タスク: Task 10.3 パイプラインのリファクタリングと責務の明確化
 
 ## 📋 計画ステータス
@@ -47,6 +47,44 @@ RealtimePipelineとMultiTimeframeAnalyzerの責務を明確に分離し、以下
   - データバッファリング
   - タイムフレーム変換
   - RCI計算
+
+## 👁️ Step 4 レビュー結果
+
+### Step 4 レビュー
+#### 良い点
+- ✅ バッファ管理コードが計画通り完全に削除されている（L79の_data_buffer削除）
+- ✅ MultiTimeframeAnalyzerへの初期化パラメータ渡しが適切に実装（L83-85）
+- ✅ 新しいAPI（add_new_bar, is_ready）の使用が正しく実装されている
+- ✅ analyze_streaming()の呼び出しがパラメータなしに正しく変更
+- ✅ ログメッセージがget_buffer_size()を使用するように適切に更新
+- ✅ 責務分離が明確になり、コードの可読性が向上
+- ✅ 統合テストが全て合格（13 passed）
+- ✅ エラーハンドリングが維持され、パイプラインの継続性が保証されている
+
+#### 改善点
+- ⚠️ 不要なimport文（polars）が残っている - 優先度: 低（簡単に修正可能）
+- ⚠️ 未使用の変数（start_time）が残っている - 優先度: 低（簡単に修正可能）  
+- ⚠️ カバレッジが低い（7.53%） - 優先度: 中（Step 6-7でテスト追加予定のため現時点では許容）
+
+#### 評価総合点数
+- 実装の完成度、責務分離の明確化、後方互換性の維持から、評価総合点数をつけます
+- 93/100 (100点満点)
+
+#### 判定
+- [x] 合格（次へ進む）
+- [ ] 要修正
+
+### 実装の技術的評価
+- **責務分離**: 完璧に実装。RealtimePipelineはデータフロー管理、MultiTimeframeAnalyzerはバッファ管理と分析を担当
+- **コード削減**: 約20行のバッファ管理コードを適切に削除
+- **メンテナンス性**: 大幅に向上。各コンポーネントの役割が明確
+- **後方互換性**: 完全に維持。既存のテストが全て通過
+- **パフォーマンス**: 影響なし。ロジックの移動のみで計算量は変わらない
+
+### 次のステップへの推奨事項
+1. Step 5実施前にLintエラーを修正（polarsインポート削除、start_time削除）
+2. Step 5でインターフェース設計の改善を実施
+3. Step 6-7でユニットテストを充実させてカバレッジを向上
 
 ## 🔄 次のアクション
 ### Step 2: RealtimePipelineのリファクタリング準備（完了 ✅）
@@ -297,3 +335,161 @@ RealtimePipelineとMultiTimeframeAnalyzerの責務を明確に分離し、以下
 - バッファサイズが最大値を超えないこと
 - is_ready()が最小バー数を正しく判定すること
 - analyze_streaming()が両方のモード（内部/外部）で動作すること
+
+### Step 4: RealtimePipelineの簡素化（完了 ✅）
+
+#### 作業内容
+**目的**: RealtimePipelineからバッファ管理を削除し、MultiTimeframeAnalyzerの新しいAPIを使用
+
+**作業対象ファイル**: `src/data_processing/pipelines.py`
+
+**削除するコード**:
+
+1. **L79: データバッファの宣言を削除**
+   ```python
+   # 削除対象
+   self._data_buffer: list[dict[str, Any]] = []
+   ```
+
+2. **L194-207: バッファ管理ロジック全体を削除**
+   ```python
+   # 削除対象（new_bar作成は保持、バッファ追加・管理は削除）
+   new_bar = {...}  # これは保持
+   self._data_buffer.append(new_bar)  # 削除
+   if len(self._data_buffer) > self._max_history_bars:  # 削除
+       self._data_buffer = self._data_buffer[-self._max_history_bars:]  # 削除
+   ```
+
+3. **L210-213: 最小バー数チェックとDataFrame変換を削除**
+   ```python
+   # 削除対象
+   min_required_bars = 200
+   if len(self._data_buffer) >= min_required_bars:
+       history_df = pl.DataFrame(self._data_buffer)
+   ```
+
+**変更するコード**:
+
+1. **MultiTimeframeAnalyzerの初期化を修正（L83）**
+   ```python
+   # 変更前
+   self._multiframe_analyzer = MultiTimeframeAnalyzer(**multiframe_config)
+   
+   # 変更後
+   # max_history_barsパラメータを渡す
+   analyzer_config = multiframe_config.copy()
+   analyzer_config['max_history_bars'] = self._max_history_bars
+   self._multiframe_analyzer = MultiTimeframeAnalyzer(**analyzer_config)
+   ```
+
+2. **新しいAPIを使用するように変更（L194-220を置き換え）**
+   ```python
+   # 変更後のコード
+   # new_barの作成（既存のコードを維持）
+   new_bar = {
+       "timestamp": data_point["timestamp"],
+       "open": processed_data.get("open", 0),
+       "high": processed_data.get("high", 0),
+       "low": processed_data.get("low", 0),
+       "close": processed_data.get("close", 0),
+       "volume": processed_data.get("volume", 0),
+   }
+   
+   # MultiTimeframeAnalyzerにバーを追加
+   self._multiframe_analyzer.add_new_bar(new_bar)
+   
+   # 分析準備チェック
+   if self._multiframe_analyzer.is_ready():
+       # 内部バッファを使用して分析実行
+       multiframe_rci = self._multiframe_analyzer.analyze_streaming()
+       
+       # メトリクス更新（既存コードを維持）
+       multiframe_latency = time.time() - multiframe_start
+       if self._enable_metrics:
+           ...
+   else:
+       # 準備未完了のログ
+       self._logger.debug(
+           f"Insufficient history for multi-timeframe analysis: "
+           f"{self._multiframe_analyzer.get_buffer_size()}/200"
+       )
+   ```
+
+3. **L238-241: ログメッセージの更新**
+   ```python
+   # 変更前
+   f"{len(self._data_buffer)}/{min_required_bars}"
+   
+   # 変更後
+   f"{self._multiframe_analyzer.get_buffer_size()}/200"
+   ```
+
+**リファクタリング後の構造**:
+- RealtimePipeline: データフロー管理に専念
+  - キューの管理
+  - メトリクス収集
+  - アラート管理
+  - MultiTimeframeAnalyzerの呼び出し
+- MultiTimeframeAnalyzer: 分析ロジックに専念
+  - バッファ管理（新規）
+  - タイムフレーム変換（既存）
+  - RCI計算（既存）
+
+**実装の詳細手順**:
+1. まず__init__メソッドでmax_history_barsをMultiTimeframeAnalyzerに渡すように修正
+2. _data_bufferの宣言を削除（L79）
+3. _process_messageメソッド内のバッファ管理コードを削除（L194-207）
+4. 最小バー数チェックとDataFrame変換を削除（L210-213）
+5. MultiTimeframeAnalyzerの新しいAPIを使用するように変更（add_new_bar, is_ready）
+6. analyze_streaming()の呼び出しをパラメータなしに変更
+7. ログメッセージでget_buffer_size()を使用するように更新
+
+**エラーハンドリングとロギング**:
+- 既存のtry-exceptブロック（L191, L243-244）は維持
+- ログメッセージは新しいAPIに合わせて更新
+- MultiTimeframeAnalyzerからの例外は既存の処理で対応
+
+**テスト確認事項**:
+- パイプラインが正常に起動すること
+- データバッファリングがMultiTimeframeAnalyzer側で正しく動作すること
+- RCI計算が従来通り実行されること
+- メトリクス収集が正常に機能すること
+- アラート機能が影響を受けないこと
+
+#### 実装結果
+**実装完了日時**: 2025-08-27 15:30
+
+**実装内容**:
+1. ✅ MultiTimeframeAnalyzerの初期化を修正（L81-85）
+   - multiframe_configをコピーし、max_history_barsパラメータを追加
+   - analyzer_configとして渡すようにリファクタリング
+
+2. ✅ バッファ管理コードの削除（L79）
+   - `self._data_buffer: list[dict[str, Any]] = []`の宣言を削除
+
+3. ✅ バッファ操作ロジックの削除と新API使用への変更（L194-213）
+   - バッファへの追加処理（append）を削除
+   - バッファサイズ制限ロジックを削除
+   - DataFrame変換処理を削除
+   - MultiTimeframeAnalyzerのadd_new_bar()メソッドを使用
+   - is_ready()メソッドで準備状態をチェック
+   - analyze_streaming()をパラメータなしで呼び出し
+
+4. ✅ ログメッセージの更新（L230-233）
+   - バッファサイズ取得をget_buffer_size()メソッド使用に変更
+   - 最小バー数の表示を200で固定
+
+**技術的詳細**:
+- 責務の明確化: RealtimePipelineはデータフロー管理に特化、MultiTimeframeAnalyzerはバッファ管理と分析を担当
+- 後方互換性: MultiTimeframeAnalyzerのanalyze_streaming()メソッドは内部/外部バッファ両対応のため、既存テストが動作
+- エラーハンドリング: try-exceptブロックを維持し、エラー時もパイプライン継続
+- メトリクス収集: multiframe_latencyの計測とメトリクス更新処理は変更なし
+
+**コードの簡素化効果**:
+- RealtimePipelineから約20行のバッファ管理コードを削除
+- 責務が明確になり、メンテナンス性が向上
+- MultiTimeframeAnalyzerが独立したコンポーネントとして再利用可能に
+
+**次のステップへの準備**:
+- Step 5でインターフェース設計の改善を実施
+- Step 6でユニットテストの作成を開始

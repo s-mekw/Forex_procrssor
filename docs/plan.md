@@ -33,6 +33,13 @@
 ### Step 4: RealtimePipelineの簡素化
 - ファイル: src/data_processing/pipelines.py
 - 作業: データフロー管理に特化した実装に変更
+  - __init__メソッド: max_history_barsをMultiTimeframeAnalyzerに渡すように修正（L83）
+  - _data_bufferの削除（L79）
+  - バッファ管理コードの削除（L203, L205-207）
+  - 最小バー数チェックとDataFrame変換の削除（L210-213）
+  - analyze_streaming()の呼び出しをパラメータなしに変更（L216-220）
+  - MultiTimeframeAnalyzerのadd_new_bar()とis_ready()を使用
+  - ログメッセージをget_buffer_size()を使用するように更新（L238-241）
 - 完了: [ ]
 
 ### Step 5: インターフェース設計の改善
@@ -88,8 +95,8 @@
 ## 進捗メトリクス
 - 総ステップ数: 10
 - 完了ステップ: 3
-- 実行中ステップ: 0
-- 進捗率: 30%
+- 実行中ステップ: 1 (Step 4)
+- 進捗率: 35%
 
 ## Step 3 実装チェックリスト
 - [x] __init__メソッドにバッファ管理プロパティを追加

@@ -76,11 +76,13 @@ class RealtimePipeline:
 
         # Initialize multi-timeframe analyzer if enabled
         self._multiframe_analyzer: MultiTimeframeAnalyzer | None = None
-        self._data_buffer: list[dict[str, Any]] = []  # バッファ for historical data
 
         if enable_multiframe:
             multiframe_config = multiframe_config or {}
-            self._multiframe_analyzer = MultiTimeframeAnalyzer(**multiframe_config)
+            # max_history_barsパラメータをMultiTimeframeAnalyzerに渡す
+            analyzer_config = multiframe_config.copy()
+            analyzer_config['max_history_bars'] = self._max_history_bars
+            self._multiframe_analyzer = MultiTimeframeAnalyzer(**analyzer_config)
             self._logger = logging.getLogger(__name__)
             self._logger.info(
                 f"Multi-timeframe analysis enabled with config: {multiframe_config}"
@@ -191,7 +193,7 @@ class RealtimePipeline:
             try:
                 multiframe_start = time.time()
 
-                # データバッファに新しいバーを追加
+                # 新しいバーの作成
                 new_bar = {
                     "timestamp": data_point["timestamp"],
                     "open": processed_data.get("open", 0),
@@ -200,24 +202,14 @@ class RealtimePipeline:
                     "close": processed_data.get("close", 0),
                     "volume": processed_data.get("volume", 0),
                 }
-                self._data_buffer.append(new_bar)
 
-                # バッファサイズ制限
-                if len(self._data_buffer) > self._max_history_bars:
-                    self._data_buffer = self._data_buffer[-self._max_history_bars:]
+                # MultiTimeframeAnalyzerにバーを追加
+                self._multiframe_analyzer.add_new_bar(new_bar)
 
-                # 最小バー数のチェック
-                min_required_bars = 200  # デフォルト最小要求バー数
-                if len(self._data_buffer) >= min_required_bars:
-                    # PolarsDataFrameに変換
-                    history_df = pl.DataFrame(self._data_buffer)
-
-                    # ストリーミング分析の実行
-                    multiframe_rci = self._multiframe_analyzer.analyze_streaming(
-                        new_bar=new_bar,
-                        history=history_df[:-1],  # 最後のバーは新しいバーなので除外
-                        min_history_bars=min_required_bars,
-                    )
+                # 分析準備チェック
+                if self._multiframe_analyzer.is_ready():
+                    # 内部バッファを使用して分析実行
+                    multiframe_rci = self._multiframe_analyzer.analyze_streaming()
 
                     # マルチタイムフレーム処理のメトリクス更新
                     multiframe_latency = time.time() - multiframe_start
@@ -237,7 +229,7 @@ class RealtimePipeline:
                 else:
                     self._logger.debug(
                         f"Insufficient history for multi-timeframe analysis: "
-                        f"{len(self._data_buffer)}/{min_required_bars}"
+                        f"{self._multiframe_analyzer.get_buffer_size()}/200"
                     )
 
             except Exception as e:
