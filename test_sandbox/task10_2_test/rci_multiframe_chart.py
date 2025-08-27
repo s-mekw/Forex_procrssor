@@ -235,11 +235,15 @@ class RCIMultiframeChart:
         })
         
         # M5データ取得
+        # 設定ファイルからM5の初期バー数を取得（デフォルト120本）
+        m5_bars_needed = getattr(self.config.chart, 'initial_bars_m5', 120)
+        # M5のRCI最大期間が108なので、最低120本は必要
+        m5_bars_needed = max(120, m5_bars_needed)
         rates_m5 = mt5.copy_rates_from_pos(
             self.config.chart.symbol,
             mt5.TIMEFRAME_M5,
             0,
-            self.config.chart.initial_bars // 5  # M1の1/5のバー数
+            m5_bars_needed
         )
         
         if rates_m5 is not None and len(rates_m5) > 0:
@@ -548,10 +552,11 @@ class RCIMultiframeChart:
         
         # サブプロットの作成（2列×4行）
         # 左列：M1、右列：M5
+        # specs を明示的に設定して、各サブプロットのタイプを定義
         fig = make_subplots(
             rows=4, cols=2,
             shared_xaxes=True,
-            vertical_spacing=0.02,
+            vertical_spacing=0.03,  # 垂直スペースを増やして分離を強化
             horizontal_spacing=0.05,
             row_heights=[0.4, 0.2, 0.2, 0.2],  # メイン40%、RCI各20%
             column_widths=[0.5, 0.5],  # 均等分割
@@ -560,7 +565,13 @@ class RCIMultiframeChart:
                 "M1 RCI [9, 13]", "M5 RCI [24, 33, 48]",
                 "M1 RCI [24, 33, 48]", "M5 RCI [66, 108]",
                 "M1 RCI [66, 108]", ""  # M5は2つのサブウィンドウのみ
-            )
+            ),
+            specs=[
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # Row 1: ローソク足用
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # Row 2: RCI用
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # Row 3: RCI用
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}]   # Row 4: RCI用
+            ]
         )
         
         # M1チャート（左列）
@@ -578,7 +589,8 @@ class RCIMultiframeChart:
                     increasing_line_color='black',
                     increasing_fillcolor='white',
                     decreasing_line_color='black',
-                    decreasing_fillcolor='black'
+                    decreasing_fillcolor='black',
+                    zorder=1  # レイヤー順序を低く設定
                 ),
                 row=1, col=1
             )
@@ -633,24 +645,6 @@ class RCIMultiframeChart:
         
         # M5チャート（右列）
         if m5_ohlc is not None:
-            # ローソク足
-            fig.add_trace(
-                go.Candlestick(
-                    x=m5_ohlc["time"].to_list(),
-                    open=m5_ohlc["open"].to_list(),
-                    high=m5_ohlc["high"].to_list(),
-                    low=m5_ohlc["low"].to_list(),
-                    close=m5_ohlc["close"].to_list(),
-                    name="M5 OHLC",
-                    showlegend=False,
-                    increasing_line_color='black',
-                    increasing_fillcolor='white',
-                    decreasing_line_color='black',
-                    decreasing_fillcolor='black'
-                ),
-                row=1, col=2
-            )
-            
             # M5 RCI サブウィンドウ1 [24, 33, 48]
             colors_m5_sw1 = ['green', 'purple', 'orange']
             for i, period in enumerate(self.m5_data.rci_periods_subwindow1):
@@ -662,7 +656,8 @@ class RCIMultiframeChart:
                             mode='lines',
                             name=f'M5 RCI {period}',
                             line=dict(color=colors_m5_sw1[i % len(colors_m5_sw1)], width=1.5),
-                            showlegend=True
+                            showlegend=True,
+                            zorder=2  # レイヤー順序を高く設定
                         ),
                         row=2, col=2
                     )
@@ -682,6 +677,25 @@ class RCIMultiframeChart:
                         ),
                         row=3, col=2
                     )
+            
+            # M5のローソク足を最後に追加（RCIの後）
+            fig.add_trace(
+                go.Candlestick(
+                    x=m5_ohlc["time"].to_list(),
+                    open=m5_ohlc["open"].to_list(),
+                    high=m5_ohlc["high"].to_list(),
+                    low=m5_ohlc["low"].to_list(),
+                    close=m5_ohlc["close"].to_list(),
+                    name="M5 OHLC",
+                    showlegend=False,
+                    increasing_line_color='black',
+                    increasing_fillcolor='white',
+                    decreasing_line_color='black',
+                    decreasing_fillcolor='black',
+                    zorder=1  # レイヤー順序を低く設定
+                ),
+                row=1, col=2
+            )
         
         # RCI基準線を追加（すべてのRCIサブウィンドウ）
         # M1のRCIサブウィンドウ（行2,3,4の列1）
@@ -696,9 +710,16 @@ class RCIMultiframeChart:
         fig.update_layout(
             height=1200,  # 高さを増やして4行に対応
             xaxis_rangeslider_visible=False,
+            xaxis2_rangeslider_visible=False,  # M5のレンジスライダーも無効化
+            xaxis3_rangeslider_visible=False,
+            xaxis4_rangeslider_visible=False,
+            xaxis5_rangeslider_visible=False,
+            xaxis6_rangeslider_visible=False,
+            xaxis7_rangeslider_visible=False,
+            xaxis8_rangeslider_visible=False,
             showlegend=True,
             hovermode='x unified',
-            margin=dict(l=0, r=0, t=40, b=0),
+            margin=dict(l=50, r=50, t=40, b=40),  # マージンを調整
             plot_bgcolor=self.config.theme.background,
             paper_bgcolor=self.config.theme.background,
             font=dict(color=self.config.theme.text)
@@ -711,11 +732,25 @@ class RCIMultiframeChart:
         fig.update_yaxes(title_text="Price", row=1, col=1)
         fig.update_yaxes(title_text="Price", row=1, col=2)
         
-        # RCI軸の範囲設定
+        # RCI軸の範囲設定と固定
         for row in [2, 3, 4]:
-            fig.update_yaxes(title_text="RCI", row=row, col=1, range=[-105, 105])
+            fig.update_yaxes(
+                title_text="RCI", 
+                row=row, 
+                col=1, 
+                range=[-105, 105],
+                fixedrange=True,  # 軸の範囲を固定
+                constrain="domain"  # ドメイン内に制限
+            )
         for row in [2, 3]:
-            fig.update_yaxes(title_text="RCI", row=row, col=2, range=[-105, 105])
+            fig.update_yaxes(
+                title_text="RCI", 
+                row=row, 
+                col=2, 
+                range=[-105, 105],
+                fixedrange=True,  # 軸の範囲を固定
+                constrain="domain"  # ドメイン内に制限
+            )
         
         # グリッドの設定
         if self.config.chart.show_grid:

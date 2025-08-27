@@ -25,9 +25,10 @@ retry_delay = 1.0  # リトライ間隔（秒）
 # チャート共通設定
 # ----------------------------------------
 symbol = "EURJPY#"  # 取引シンボル
-initial_bars = 200  # 初期表示バー数（M1）
-max_bars_m1 = 10000  # M1の最大保存バー数
-max_bars_m5 = 2000   # M5の最大保存バー数
+initial_bars = 600  # 初期表示バー数（M1）- M5のRCI計算に必要な本数を確保
+initial_bars_m5 = 200  # M5の初期表示バー数（RCI[108]計算に必要な最小本数）
+max_bars_m1 = 15000  # M1の最大保存バー数
+max_bars_m5 = 10000   # M5の最大保存バー数
 update_interval = 1.0  # 更新間隔（秒）
 realtime_enabled = true  # リアルタイム更新の有効化
 show_grid = true  # グリッド表示フラグ
