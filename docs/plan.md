@@ -76,6 +76,21 @@
 ### Step 8: 統合テストの更新
 - ファイル: tests/integration/test_data_pipeline.py
 - 作業: リファクタリング後の動作確認テスト
+  - TestMultiframeIntegration: RealtimePipelineとMultiTimeframeAnalyzerの連携テスト（4テストケース）
+    - test_pipeline_multiframe_data_flow: データフロー全体の検証
+    - test_buffer_synchronization: バッファ管理の同期確認
+    - test_analyzer_state_consistency: 分析器の状態一貫性
+    - test_pipeline_restart_recovery: パイプライン再起動時の復旧
+  - TestEndToEndIntegration: エンドツーエンドの検証（4テストケース）
+    - test_realtime_data_processing: リアルタイムデータ処理の検証
+    - test_large_volume_processing: 大量データ処理のパフォーマンス
+    - test_multiframe_analysis_accuracy: マルチタイムフレーム分析精度
+    - test_error_recovery_flow: エラー復旧フローの確認
+  - TestPerformanceIntegration: パフォーマンス検証（4テストケース）
+    - test_throughput_measurement: スループット測定
+    - test_latency_monitoring: レイテンシー監視
+    - test_memory_efficiency: メモリ効率検証
+    - test_cpu_utilization: CPU使用率測定
 - 完了: [ ]
 
 ### Step 9: ドキュメント更新
@@ -111,8 +126,17 @@
 ## 進捗メトリクス
 - 総ステップ数: 10
 - 完了ステップ: 7
-- 実行中ステップ: 0
-- 進捗率: 70%
+- 実行中ステップ: 1 (Step 8)
+- 進捗率: 75%
+
+## Step 8 実装チェックリスト
+- [ ] test_data_pipeline.pyの既存テスト確認
+- [ ] TestMultiframeIntegrationクラスの実装
+- [ ] TestEndToEndIntegrationクラスの実装
+- [ ] TestPerformanceIntegrationクラスの実装
+- [ ] 新テストの実行と検証
+- [ ] パフォーマンス測定結果の記録
+- [ ] 既存13テストとの互換性確認
 
 ## Step 3 実装チェックリスト
 - [x] __init__メソッドにバッファ管理プロパティを追加
