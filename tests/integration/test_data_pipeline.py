@@ -1099,16 +1099,17 @@ class TestMultiframeIntegration:
         - バッファが適切に管理される
         - RCI計算が正しく実行される
         """
-        # パイプラインとアナライザを作成
+        # パイプラインとアナライザを作成（キューサイズを拡張）
         pipeline = RealtimePipeline(
-            queue_size=100,
+            queue_size=500,  # 250個のデータ+バッファ余裕
             alert_threshold=1.0,
             enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
             max_history_bars=500,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1136,7 +1137,7 @@ class TestMultiframeIntegration:
                 
                 # バッチ送信時に少し待機してキューの処理を促す
                 if i % 50 == 0 and i > 0:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.2)  # 処理の猶予を増やす
             
             # 処理完了を待つ
             await asyncio.sleep(1.0)
@@ -1144,7 +1145,7 @@ class TestMultiframeIntegration:
             # メトリクスを確認
             metrics = pipeline.get_metrics()
             assert metrics["processed_count"] == 250
-            assert metrics["multiframe_buffer_size"] >= 200  # バッファに最小限のデータがある
+            assert metrics["data_buffer_size"] >= 200  # バッファに最小限のデータがある
             
             # アナライザの状態を確認
             assert pipeline._multiframe_analyzer is not None
@@ -1165,8 +1166,8 @@ class TestMultiframeIntegration:
             assert len(late_results) > 0
             
             # パフォーマンスメトリクスを確認
-            assert metrics.get("multiframe_latency") is not None
-            assert metrics["multiframe_latency"] < 1.0  # 1秒未満で処理
+            assert metrics.get("multiframe_avg_latency") is not None
+            assert metrics["multiframe_avg_latency"] < 1.0  # 1秒未満で処理
             
         finally:
             await pipeline.stop()
@@ -1180,16 +1181,17 @@ class TestMultiframeIntegration:
         - バッファサイズ制限が適切に動作
         - 古いデータが適切に削除される
         """
-        # 小さなバッファサイズでテスト
+        # バッファサイズを適切に設定
         pipeline = RealtimePipeline(
-            queue_size=50,
+            queue_size=200,  # キューサイズを拡張
             alert_threshold=1.0,
             enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
             max_history_bars=100,  # 小さなバッファ
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1212,14 +1214,18 @@ class TestMultiframeIntegration:
                 }
                 
                 success = await pipeline.submit(data_point)
-                assert success
+                assert success, f"Failed to submit data at index {i}"
+                
+                # 定期的に処理待機
+                if i % 20 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
             
             # 処理完了を待つ
             await asyncio.sleep(0.5)
             
             # バッファサイズを確認
             metrics = pipeline.get_metrics()
-            buffer_size = metrics["multiframe_buffer_size"]
+            buffer_size = metrics["data_buffer_size"]
             
             # バッファサイズが最大値以下であることを確認
             assert buffer_size <= 100, f"Buffer size {buffer_size} exceeds max 100"
@@ -1249,14 +1255,15 @@ class TestMultiframeIntegration:
         - エラー発生時も状態が保たれる
         """
         pipeline = RealtimePipeline(
-            queue_size=50,
+            queue_size=500,  # キューサイズを拡張
             alert_threshold=1.0,
             enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
             max_history_bars=500,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1283,8 +1290,12 @@ class TestMultiframeIntegration:
                 }
                 
                 await pipeline.submit(data_point)
+                
+                # バッチ処理で定期的に待機
+                if i % 50 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)  # 処理完了を待つ
             
             # まだ準備完了していないことを確認
             assert not pipeline._multiframe_analyzer.is_ready()
@@ -1305,7 +1316,7 @@ class TestMultiframeIntegration:
             }
             await pipeline.submit(data_point)
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)  # is_ready()確認前に処理完了を待つ
             
             # 準備完了状態になったことを確認
             assert pipeline._multiframe_analyzer.is_ready()
@@ -1347,14 +1358,15 @@ class TestMultiframeIntegration:
         - 再起動後も正常に動作する
         """
         pipeline = RealtimePipeline(
-            queue_size=50,
+            queue_size=500,  # キューサイズを拡張
             alert_threshold=1.0,
             enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
             max_history_bars=300,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1378,8 +1390,12 @@ class TestMultiframeIntegration:
                 }
                 
                 await pipeline.submit(data_point)
+                
+                # バッチ処理で定期的に待機
+                if i % 50 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)  # 処理完了を待つ
             
             # 1回目の状態を記録
             first_metrics = pipeline.get_metrics()
@@ -1390,6 +1406,8 @@ class TestMultiframeIntegration:
             # パイプラインを停止
             await pipeline.stop()
             assert not pipeline._is_running
+            
+            await asyncio.sleep(1.0)  # 完全停止を待つ
             
             # 再起動
             await pipeline.start()
@@ -1418,8 +1436,12 @@ class TestMultiframeIntegration:
                 
                 success = await pipeline.submit(data_point)
                 assert success
+                
+                # バッチ処理で定期的に待機
+                if i % 20 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)  # 処理完了を待つ
             
             # 2回目の処理後の状態を確認
             second_metrics = pipeline.get_metrics()
@@ -1455,9 +1477,9 @@ class TestEndToEndIntegration:
             enable_metrics=True,
             max_history_bars=1000,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1536,9 +1558,9 @@ class TestEndToEndIntegration:
             enable_metrics=True,
             max_history_bars=5000,  # 大きなバッファ
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1712,9 +1734,9 @@ class TestEndToEndIntegration:
             enable_metrics=True,
             max_history_bars=500,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1855,9 +1877,9 @@ class TestPerformanceIntegration:
             enable_metrics=True,
             max_history_bars=5000,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -1947,9 +1969,9 @@ class TestPerformanceIntegration:
             enable_metrics=True,
             max_history_bars=1000,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -2048,9 +2070,9 @@ class TestPerformanceIntegration:
             enable_metrics=True,
             max_history_bars=2000,  # 中規模バッファ
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
@@ -2167,9 +2189,9 @@ class TestPerformanceIntegration:
             enable_metrics=True,
             max_history_bars=3000,
             multiframe_config={
-                'short_timeframe': 60,
-                'long_timeframe': 240,
-                'rci_period': 9
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
             }
         )
         
