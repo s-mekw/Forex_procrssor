@@ -21,33 +21,37 @@ logger = logging.getLogger(__name__)
 
 class RCICalculationError(Exception):
     """RCI計算固有のエラー"""
+
     pass
 
 
 class InvalidPeriodError(RCICalculationError):
     """無効な期間パラメータエラー"""
+
     pass
 
 
 class InsufficientDataError(RCICalculationError):
     """データ不足エラー"""
+
     pass
+
 
 class DifferentialRCICalculator:
     """単一期間のストリーミングRCI計算クラス
-    
+
     差分更新アルゴリズムによる高速RCI計算を実装。
     dequeによるスライディングウィンドウとFloat32精度により、
     メモリ効率的かつ高速な計算を実現します。
-    
+
     Attributes:
         period (int): RCI計算期間（3〜200）
         prices (deque): 価格データのスライディングウィンドウ
         time_ranks (np.ndarray): 時間順位（事前計算）
         denominator (float): RCI式の分母（事前計算）
-    
+
     Methods:
-        add(price: float) -> Optional[float]: 
+        add(price: float) -> Optional[float]:
             新価格を追加してRCIを計算
         _optimized_ranking(prices: np.ndarray) -> np.ndarray:
             Float32精度での最適化ランキング計算
@@ -58,21 +62,17 @@ class DifferentialRCICalculator:
 
     def __init__(self, period: int):
         """Initialize the calculator for a specific period.
-        
+
         Args:
             period: RCI計算期間（MIN_PERIOD以上、MAX_PERIOD以下）
-            
+
         Raises:
             ValueError: 期間が有効範囲外の場合
         """
         if period < self.MIN_PERIOD:
-            raise ValueError(
-                f"Period must be at least {self.MIN_PERIOD}, got {period}"
-            )
+            raise ValueError(f"Period must be at least {self.MIN_PERIOD}, got {period}")
         if period > self.MAX_PERIOD:
-            raise ValueError(
-                f"Period must be at most {self.MAX_PERIOD}, got {period}"
-            )
+            raise ValueError(f"Period must be at most {self.MAX_PERIOD}, got {period}")
 
         self.period = period
         self.prices = deque(maxlen=period)
@@ -97,13 +97,13 @@ class DifferentialRCICalculator:
 
     def add(self, price: float) -> float | None:
         """新しい価格を追加してRCIを計算
-        
+
         Args:
             price: 新しい価格値
-            
+
         Returns:
             ウィンドウがフルの場合はRCI値、そうでない場合はNone
-            
+
         Note:
             RCI値は-100から+100の範囲に正規化されます。
             +100に近いほど上昇トレンド、-100に近いほど下降トレンドを示します。
@@ -134,10 +134,7 @@ class DifferentialRCICalculator:
         # RCI計算（Float32精度）
         # RCI = (1 - 6 * Σd²/(n(n²-1))) * 100
         # d = 時間順位 - 価格順位
-        d_squared_sum = np.sum(
-            (self.time_ranks - price_ranks) ** 2,
-            dtype=np.float32
-        )
+        d_squared_sum = np.sum((self.time_ranks - price_ranks) ** 2, dtype=np.float32)
         rci = (1.0 - (6.0 * d_squared_sum) / self.denominator) * 100.0
 
         # 統計情報の更新
@@ -148,14 +145,14 @@ class DifferentialRCICalculator:
 
     def _optimized_ranking(self, prices: np.ndarray) -> np.ndarray:
         """Float32精度での最適化ランキング計算
-        
+
         scipy.stats.rankdataを使用して正確なランキングを計算。
         同値（タイ）の場合は平均順位を割り当てます。
         scipyが利用できない場合はNumPyベースの実装にフォールバック。
-        
+
         Args:
             prices: ランク付けする価格配列（Float32）
-            
+
         Returns:
             0ベースのランク配列（Float32）
             最小価格が0、最大価格がperiod-1
@@ -166,7 +163,7 @@ class DifferentialRCICalculator:
 
             # rankdataは1ベースのランクを返すので、0ベースに変換
             # method='average'により、同値には平均順位を割り当て
-            ranks = rankdata(prices, method='average') - 1
+            ranks = rankdata(prices, method="average") - 1
             return ranks.astype(np.float32)
 
         except ImportError:
@@ -178,14 +175,14 @@ class DifferentialRCICalculator:
 
     def _numpy_ranking_with_ties(self, prices: np.ndarray) -> np.ndarray:
         """NumPyベースの同値対応ランキング実装（メモリ最適化版）
-        
+
         scipyが利用できない場合の高精度フォールバック実装。
         同値（タイ）に対して平均順位を割り当てます。
         in-place操作を活用してメモリ使用量を最小化。
-        
+
         Args:
             prices: ランク付けする価格配列（Float32）
-            
+
         Returns:
             0ベースのランク配列（Float32）、同値には平均順位
         """
@@ -220,13 +217,13 @@ class DifferentialRCICalculator:
 
     def _fast_ranking_no_ties(self, prices: np.ndarray) -> np.ndarray:
         """同値がない場合の高速ランキング
-        
+
         FX価格では同値は稀なため、このケースに最適化。
         同値チェックを省略して高速化。
-        
+
         Args:
             prices: ランク付けする価格配列（Float32）
-            
+
         Returns:
             0ベースのランク配列（Float32）
         """
@@ -238,10 +235,10 @@ class DifferentialRCICalculator:
 
     def _check_for_ties(self, prices: np.ndarray) -> bool:
         """価格配列に同値があるかチェック
-        
+
         Args:
             prices: チェックする価格配列
-            
+
         Returns:
             同値が存在する場合True
         """
@@ -253,10 +250,10 @@ class DifferentialRCICalculator:
 
     def _get_price_hash(self, prices: np.ndarray) -> str:
         """価格配列のハッシュ値を計算
-        
+
         Args:
             prices: ハッシュ化する価格配列
-            
+
         Returns:
             価格配列のハッシュ値（文字列）
         """
@@ -266,13 +263,13 @@ class DifferentialRCICalculator:
 
     def _cached_ranking(self, prices: np.ndarray) -> np.ndarray:
         """キャッシュ付きランキング計算
-        
+
         頻出パターンの結果をキャッシュして再利用。
         キャッシュがない場合は通常のランキングを実行。
-        
+
         Args:
             prices: ランク付けする価格配列（Float32）
-            
+
         Returns:
             0ベースのランク配列（Float32）
         """
@@ -317,7 +314,7 @@ class DifferentialRCICalculator:
     @property
     def is_ready(self) -> bool:
         """RCI計算の準備ができているかを確認
-        
+
         Returns:
             ウィンドウがフルで計算可能な場合True
         """
@@ -335,14 +332,14 @@ class DifferentialRCICalculator:
 
     def preview(self, temp_price: float) -> float | None:
         """未完成バーの一時的なRCI値を計算（内部状態は変更しない）
-        
+
         リアルタイム表示用に、未完成バーの価格でRCIを計算します。
         ウィンドウがフルの場合は、最古のバーを削除して未完成バーを追加。
         内部のself.pricesは変更されません。
-        
+
         Args:
             temp_price: 未完成バーの現在価格
-            
+
         Returns:
             一時的なRCI値、またはウィンドウが不足の場合None
         """
@@ -368,55 +365,53 @@ class DifferentialRCICalculator:
             price_ranks = self._fast_ranking_no_ties(prices_array)
 
         # RCI計算
-        d_squared_sum = np.sum(
-            (self.time_ranks - price_ranks) ** 2,
-            dtype=np.float32
-        )
+        d_squared_sum = np.sum((self.time_ranks - price_ranks) ** 2, dtype=np.float32)
         rci = (1.0 - (6.0 * d_squared_sum) / self.denominator) * 100.0
 
         return float(rci)
 
     def get_buffer_state(self) -> dict[str, Any]:
         """内部バッファの状態を取得（デバッグ用）
-        
+
         Returns:
             バッファ状態を含む辞書
         """
         cache_hit_rate = (
             self._cache_hits / (self._cache_hits + self._cache_misses)
-            if (self._cache_hits + self._cache_misses) > 0 else 0
+            if (self._cache_hits + self._cache_misses) > 0
+            else 0
         )
 
         return {
-            'period': self.period,
-            'buffer_size': len(self.prices),
-            'is_ready': self.is_ready,
-            'calculation_count': self._calculation_count,
-            'last_rci': self._last_rci,
-            'current_prices': list(self.prices) if self.prices else [],
-            'cache_stats': {
-                'cache_size': len(self._ranking_cache),
-                'cache_hits': self._cache_hits,
-                'cache_misses': self._cache_misses,
-                'cache_hit_rate': cache_hit_rate,
-                'max_cache_size': self._max_cache_size
-            }
+            "period": self.period,
+            "buffer_size": len(self.prices),
+            "is_ready": self.is_ready,
+            "calculation_count": self._calculation_count,
+            "last_rci": self._last_rci,
+            "current_prices": list(self.prices) if self.prices else [],
+            "cache_stats": {
+                "cache_size": len(self._ranking_cache),
+                "cache_hits": self._cache_hits,
+                "cache_misses": self._cache_misses,
+                "cache_hit_rate": cache_hit_rate,
+                "max_cache_size": self._max_cache_size,
+            },
         }
 
 
 class RCICalculatorEngine:
     """複数期間対応の汎用RCI計算エンジン
-    
+
     複数期間のRCI計算を並列または逐次的に実行し、
     バッチ処理とストリーミング処理の両方をサポートします。
     DifferentialRCICalculatorを内部で使用し、効率的な計算を実現。
-    
+
     Attributes:
         DEFAULT_PERIODS: デフォルトのRCI計算期間リスト
         MIN_PERIOD: 最小計算期間
         MAX_PERIOD: 最大計算期間
         calculators: 各期間用のDifferentialRCICalculatorインスタンス
-    
+
     Methods:
         calculate_multiple: 複数期間のRCI計算（メインインターフェース）
         validate_periods: 期間パラメータのバリデーション
@@ -431,34 +426,36 @@ class RCICalculatorEngine:
 
     def __init__(self, chunk_size: int | None = None):
         """エンジンを初期化
-        
+
         Args:
             chunk_size: バッチ処理時のチャンクサイズ（デフォルト: 100,000行）
         """
         self.calculators: dict[int, DifferentialRCICalculator] = {}
         self.chunk_size = chunk_size or self.DEFAULT_CHUNK_SIZE
         self._statistics = {
-            'batch_calculations': 0,
-            'streaming_calculations': 0,
-            'total_periods_calculated': 0,
-            'validation_errors': 0,
-            'chunked_calculations': 0,
-            'parallel_calculations': 0,
-            'auto_mode_selections': 0
+            "batch_calculations": 0,
+            "streaming_calculations": 0,
+            "total_periods_calculated": 0,
+            "validation_errors": 0,
+            "chunked_calculations": 0,
+            "parallel_calculations": 0,
+            "auto_mode_selections": 0,
         }
         # メモリ監視用
         self._process = psutil.Process(os.getpid())
-        logger.info(f"RCICalculatorEngine initialized with chunk_size={self.chunk_size}")
+        logger.info(
+            f"RCICalculatorEngine initialized with chunk_size={self.chunk_size}"
+        )
 
     def validate_periods(self, periods: list[int]) -> list[int]:
         """期間パラメータのバリデーション
-        
+
         Args:
             periods: 検証する期間リスト
-            
+
         Returns:
             検証済みの期間リスト（重複除去・ソート済み）
-            
+
         Raises:
             InvalidPeriodError: 無効な期間が含まれる場合
         """
@@ -480,7 +477,7 @@ class RCICalculatorEngine:
                 invalid_periods.append(period)
 
         if invalid_periods:
-            self._statistics['validation_errors'] += 1
+            self._statistics["validation_errors"] += 1
             raise InvalidPeriodError(
                 f"Invalid periods: {invalid_periods}. "
                 f"Periods must be integers between {self.MIN_PERIOD} and {self.MAX_PERIOD}"
@@ -501,22 +498,22 @@ class RCICalculatorEngine:
         self,
         data: pl.DataFrame,
         periods: list[int] | None = None,
-        column_name: str = 'close',
-        mode: Literal['batch', 'streaming', 'auto'] = 'auto',
-        add_reliability: bool = True
+        column_name: str = "close",
+        mode: Literal["batch", "streaming", "auto"] = "auto",
+        add_reliability: bool = True,
     ) -> pl.DataFrame:
         """複数期間のRCI計算（メインインターフェース）
-        
+
         Args:
             data: 入力データフレーム
             periods: 計算する期間リスト（Noneの場合はDEFAULT_PERIODS使用）
             column_name: 価格データのカラム名
             mode: 計算モード（'batch' または 'streaming'）
             add_reliability: 信頼性フラグを追加するか
-            
+
         Returns:
             RCI値と信頼性フラグが追加されたDataFrame
-            
+
         Raises:
             InvalidPeriodError: 無効な期間が指定された場合
             InsufficientDataError: データが不足している場合
@@ -541,47 +538,46 @@ class RCICalculatorEngine:
             )
 
         # モードの自動選択
-        if mode == 'auto':
+        if mode == "auto":
             mode = self._determine_best_mode(data_length, len(periods))
-            self._statistics['auto_mode_selections'] += 1
+            self._statistics["auto_mode_selections"] += 1
             logger.info(f"Auto mode selected: {mode} for {data_length} rows")
 
         # モードに応じた処理
-        if mode == 'batch':
+        if mode == "batch":
             # 大規模データの場合はチャンク処理を使用
             if data_length > self.chunk_size:
                 result = self._process_batch_chunked(data, periods, column_name)
-                self._statistics['chunked_calculations'] += 1
+                self._statistics["chunked_calculations"] += 1
             else:
                 result = self._process_batch(data, periods, column_name)
-                self._statistics['batch_calculations'] += 1
-        elif mode == 'streaming':
+                self._statistics["batch_calculations"] += 1
+        elif mode == "streaming":
             result = self._process_streaming(data, periods, column_name)
-            self._statistics['streaming_calculations'] += 1
+            self._statistics["streaming_calculations"] += 1
         else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'batch', 'streaming', or 'auto'")
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'batch', 'streaming', or 'auto'"
+            )
 
         # 信頼性フラグの追加
         if add_reliability:
             result = self._add_reliability_flags(result, periods, data_length)
 
-        self._statistics['total_periods_calculated'] += len(periods)
+        self._statistics["total_periods_calculated"] += len(periods)
 
         return result
 
     def _process_batch(
-        self,
-        data: pl.DataFrame,
-        periods: list[int],
-        column_name: str
+        self, data: pl.DataFrame, periods: list[int], column_name: str
     ) -> pl.DataFrame:
         """バッチモードでのRCI計算（Polars最適化）
-        
+
         Args:
             data: 入力データフレーム
             periods: 計算する期間リスト
             column_name: 価格データのカラム名
-            
+
         Returns:
             RCI値が追加されたDataFrame
         """
@@ -591,10 +587,7 @@ class RCICalculatorEngine:
             logger.debug(f"Calculating RCI for period {period} in batch mode")
 
             # Polars式を使用したRCI計算
-            rci_values = self._calculate_rci_batch(
-                data[column_name].to_numpy(),
-                period
-            )
+            rci_values = self._calculate_rci_batch(data[column_name].to_numpy(), period)
 
             # 結果をDataFrameに追加
             rci_column_name = f"rci_{period}"
@@ -605,18 +598,15 @@ class RCICalculatorEngine:
         return result
 
     def _process_streaming(
-        self,
-        data: pl.DataFrame,
-        periods: list[int],
-        column_name: str
+        self, data: pl.DataFrame, periods: list[int], column_name: str
     ) -> pl.DataFrame:
         """ストリーミングモードでのRCI計算
-        
+
         Args:
             data: 入力データフレーム
             periods: 計算する期間リスト
             column_name: 価格データのカラム名
-            
+
         Returns:
             RCI値が追加されたDataFrame
         """
@@ -643,9 +633,7 @@ class RCICalculatorEngine:
             rci_column_name = f"rci_{period}"
             result = result.with_columns(
                 pl.Series(
-                    name=rci_column_name,
-                    values=rci_results[period],
-                    dtype=pl.Float32
+                    name=rci_column_name, values=rci_results[period], dtype=pl.Float32
                 )
             )
             logger.debug(f"Added RCI column for period {period} in streaming mode")
@@ -653,16 +641,14 @@ class RCICalculatorEngine:
         return result
 
     def _calculate_rci_batch(
-        self,
-        prices: np.ndarray,
-        period: int
+        self, prices: np.ndarray, period: int
     ) -> list[float | None]:
         """バッチ処理用のRCI計算
-        
+
         Args:
             prices: 価格配列
             period: RCI計算期間
-            
+
         Returns:
             RCI値のリスト（初期値はNone）
         """
@@ -678,12 +664,13 @@ class RCICalculatorEngine:
 
         # スライディングウィンドウでRCI計算
         for i in range(period - 1, n):
-            window_prices = prices_float32[i - period + 1:i + 1]
+            window_prices = prices_float32[i - period + 1 : i + 1]
 
             # ランキング計算（scipy使用を試みる）
             try:
                 from scipy.stats import rankdata
-                price_ranks = rankdata(window_prices, method='average') - 1
+
+                price_ranks = rankdata(window_prices, method="average") - 1
             except ImportError:
                 # NumPyベースの実装
                 order = np.argsort(window_prices)
@@ -698,18 +685,15 @@ class RCICalculatorEngine:
         return rci_values
 
     def _add_reliability_flags(
-        self,
-        data: pl.DataFrame,
-        periods: list[int],
-        data_length: int
+        self, data: pl.DataFrame, periods: list[int], data_length: int
     ) -> pl.DataFrame:
         """信頼性フラグを追加
-        
+
         Args:
             data: RCI値が計算されたDataFrame
             periods: 計算された期間リスト
             data_length: データの長さ
-            
+
         Returns:
             信頼性フラグが追加されたDataFrame
         """
@@ -722,16 +706,22 @@ class RCICalculatorEngine:
             # 信頼性の判定
             # - 最初のperiod-1個はNoneなので信頼性なし
             # - それ以降は信頼性あり
-            reliability_values = [False] * (period - 1) + [True] * (data_length - period + 1)
+            reliability_values = [False] * (period - 1) + [True] * (
+                data_length - period + 1
+            )
 
             # 長さ調整（念のため）
             if len(reliability_values) < data_length:
-                reliability_values.extend([False] * (data_length - len(reliability_values)))
+                reliability_values.extend(
+                    [False] * (data_length - len(reliability_values))
+                )
             elif len(reliability_values) > data_length:
                 reliability_values = reliability_values[:data_length]
 
             result = result.with_columns(
-                pl.Series(name=reliability_column, values=reliability_values, dtype=pl.Boolean)
+                pl.Series(
+                    name=reliability_column, values=reliability_values, dtype=pl.Boolean
+                )
             )
 
             logger.debug(f"Added reliability flag for RCI period {period}")
@@ -740,19 +730,19 @@ class RCICalculatorEngine:
 
     def get_statistics(self) -> dict[str, Any]:
         """エンジンの統計情報を取得
-        
+
         Returns:
             統計情報を含む辞書
         """
         stats = self._statistics.copy()
-        stats['active_calculators'] = list(self.calculators.keys())
-        stats['calculator_details'] = {}
+        stats["active_calculators"] = list(self.calculators.keys())
+        stats["calculator_details"] = {}
 
         for period, calc in self.calculators.items():
-            stats['calculator_details'][period] = {
-                'is_ready': calc.is_ready,
-                'calculation_count': calc.calculation_count,
-                'last_rci': calc.last_rci
+            stats["calculator_details"][period] = {
+                "is_ready": calc.is_ready,
+                "calculation_count": calc.calculation_count,
+                "last_rci": calc.last_rci,
             }
 
         return stats
@@ -763,23 +753,23 @@ class RCICalculatorEngine:
             calc.reset()
         self.calculators.clear()
         self._statistics = {
-            'batch_calculations': 0,
-            'streaming_calculations': 0,
-            'total_periods_calculated': 0,
-            'validation_errors': 0,
-            'chunked_calculations': 0,
-            'parallel_calculations': 0,
-            'auto_mode_selections': 0
+            "batch_calculations": 0,
+            "streaming_calculations": 0,
+            "total_periods_calculated": 0,
+            "validation_errors": 0,
+            "chunked_calculations": 0,
+            "parallel_calculations": 0,
+            "auto_mode_selections": 0,
         }
         logger.info("RCICalculatorEngine reset")
 
     def _determine_best_mode(self, data_length: int, num_periods: int) -> str:
         """データサイズと期間数に基づいて最適なモードを決定
-        
+
         Args:
             data_length: データの行数
             num_periods: 計算する期間の数
-            
+
         Returns:
             'batch' または 'streaming'
         """
@@ -789,32 +779,32 @@ class RCICalculatorEngine:
         # 決定ロジック
         if data_length < self.AUTO_MODE_THRESHOLD:
             # 小規模データはストリーミングが効率的
-            return 'streaming'
+            return "streaming"
         elif memory_usage > 70:
             # メモリ使用率が高い場合はチャンク処理を伴うバッチ
-            return 'batch'
+            return "batch"
         elif num_periods > 5:
             # 多数の期間を計算する場合はバッチ（並列処理可能）
-            return 'batch'
+            return "batch"
         else:
             # デフォルトはバッチ
-            return 'batch'
+            return "batch"
 
     def _process_batch_chunked(
         self,
         data: pl.DataFrame,
         periods: list[int],
         column_name: str,
-        chunk_size: int | None = None
+        chunk_size: int | None = None,
     ) -> pl.DataFrame:
         """チャンク処理による大規模データ対応バッチ処理
-        
+
         Args:
             data: 入力データフレーム
             periods: 計算する期間リスト
             column_name: 価格データのカラム名
             chunk_size: カスタムチャンクサイズ
-            
+
         Returns:
             RCI値が追加されたDataFrame
         """
@@ -843,8 +833,7 @@ class RCICalculatorEngine:
 
             # チャンクでRCI計算（並列処理）
             chunk_rci = self._calculate_rci_parallel(
-                chunk_data[column_name].to_numpy(),
-                periods
+                chunk_data[column_name].to_numpy(), periods
             )
 
             # オーバーラップ部分を除いて結果を保存
@@ -858,7 +847,9 @@ class RCICalculatorEngine:
                 memory_usage = self._monitor_memory_usage()
                 if memory_usage > 80:
                     chunk_size = self._adjust_chunk_size_dynamically(memory_usage)
-                    logger.warning(f"Adjusted chunk size to {chunk_size:,} due to memory pressure")
+                    logger.warning(
+                        f"Adjusted chunk size to {chunk_size:,} due to memory pressure"
+                    )
 
             # 進捗ログ
             if chunk_idx % 10 == 0 or chunk_idx == n_chunks - 1:
@@ -872,29 +863,33 @@ class RCICalculatorEngine:
         for period in periods:
             rci_column_name = f"rci_{period}"
             result = result.with_columns(
-                pl.Series(name=rci_column_name, values=all_rci_values[period], dtype=pl.Float32)
+                pl.Series(
+                    name=rci_column_name,
+                    values=all_rci_values[period],
+                    dtype=pl.Float32,
+                )
             )
 
         return result
 
     def _calculate_rci_parallel(
-        self,
-        prices: np.ndarray,
-        periods: list[int]
+        self, prices: np.ndarray, periods: list[int]
     ) -> dict[int, list[float | None]]:
         """複数期間のRCIを並列計算
-        
+
         Args:
             prices: 価格配列
             periods: 計算する期間リスト
-            
+
         Returns:
             各期間のRCI値リスト
         """
         results = {}
 
         # 並列処理を使用
-        with ThreadPoolExecutor(max_workers=min(len(periods), self.MAX_PARALLEL_WORKERS)) as executor:
+        with ThreadPoolExecutor(
+            max_workers=min(len(periods), self.MAX_PARALLEL_WORKERS)
+        ) as executor:
             # 各期間の計算を並列実行
             future_to_period = {
                 executor.submit(self._calculate_rci_batch, prices, period): period
@@ -912,20 +907,18 @@ class RCICalculatorEngine:
                     logger.error(f"Error calculating RCI for period {period}: {e}")
                     results[period] = [None] * len(prices)
 
-        self._statistics['parallel_calculations'] += 1
+        self._statistics["parallel_calculations"] += 1
         return results
 
     def add_incremental(
-        self,
-        price: float,
-        periods: list[int] | None = None
+        self, price: float, periods: list[int] | None = None
     ) -> dict[int, float | None]:
         """単一価格の増分更新（リアルタイム用）
-        
+
         Args:
             price: 新しい価格値
             periods: 計算する期間リスト（Noneの場合はDEFAULT_PERIODS）
-            
+
         Returns:
             各期間の最新RCI値
         """
@@ -947,14 +940,13 @@ class RCICalculatorEngine:
         return results
 
     def get_latest_rci_values(
-        self,
-        periods: list[int] | None = None
+        self, periods: list[int] | None = None
     ) -> dict[int, float | None]:
         """最新のRCI値を取得（リアルタイム監視用）
-        
+
         Args:
             periods: 取得する期間リスト（Noneの場合はアクティブな全期間）
-            
+
         Returns:
             各期間の最新RCI値
         """
@@ -972,7 +964,7 @@ class RCICalculatorEngine:
 
     def _monitor_memory_usage(self) -> float:
         """メモリ使用量を監視
-        
+
         Returns:
             メモリ使用率（パーセント）
         """
@@ -993,10 +985,10 @@ class RCICalculatorEngine:
 
     def _adjust_chunk_size_dynamically(self, current_memory: float) -> int:
         """メモリ使用量に基づいてチャンクサイズを動的調整
-        
+
         Args:
             current_memory: 現在のメモリ使用率（パーセント）
-            
+
         Returns:
             調整後のチャンクサイズ
         """
@@ -1025,14 +1017,14 @@ class RCICalculatorEngine:
 
 class RCIProcessor:
     """Polars Expression統合用ラッパークラス
-    
+
     RCI計算をPolars Expressionとして提供し、
     DataFrameやLazyFrameとシームレスに統合できるようにします。
-    
+
     Attributes:
         engine (RCICalculatorEngine): 内部で使用するRCI計算エンジン
         use_float32 (bool): Float32精度を使用するかどうか
-        
+
     Methods:
         create_rci_expression: Polars ExpressionとしてRCI計算を定義
         apply_to_dataframe: DataFrameに直接RCI計算を適用
@@ -1042,7 +1034,7 @@ class RCIProcessor:
 
     def __init__(self, use_float32: bool = True):
         """RCIProcessorの初期化
-        
+
         Args:
             use_float32: Float32精度を使用するかどうか（デフォルト: True）
         """
@@ -1050,25 +1042,24 @@ class RCIProcessor:
         self.use_float32 = use_float32
         self._expr_cache: dict[tuple[str, int], pl.Expr] = {}
 
-    def create_rci_expression(
-        self,
-        column: str,
-        period: int
-    ) -> pl.Expr:
+    def create_rci_expression(self, column: str, period: int) -> pl.Expr:
         """Polars ExpressionとしてRCI計算を定義
-        
+
         Args:
             column: 価格データのカラム名
             period: RCI計算期間
-            
+
         Returns:
             RCI計算を表すPolars Expression
-            
+
         Raises:
             InvalidPeriodError: 無効な期間が指定された場合
         """
         # パラメータ検証
-        if period < RCICalculatorEngine.MIN_PERIOD or period > RCICalculatorEngine.MAX_PERIOD:
+        if (
+            period < RCICalculatorEngine.MIN_PERIOD
+            or period > RCICalculatorEngine.MAX_PERIOD
+        ):
             raise InvalidPeriodError(
                 f"Period must be between {RCICalculatorEngine.MIN_PERIOD} and "
                 f"{RCICalculatorEngine.MAX_PERIOD}, got {period}"
@@ -1087,7 +1078,7 @@ class RCIProcessor:
         def _calculate_rci_values(values) -> float:
             """ウィンドウ内のRCI値を計算"""
             # Polars SeriesをNumPy配列に変換
-            if hasattr(values, 'to_numpy'):
+            if hasattr(values, "to_numpy"):
                 values = values.to_numpy()
 
             if len(values) < period:
@@ -1099,7 +1090,8 @@ class RCIProcessor:
             # ランキング計算
             try:
                 from scipy.stats import rankdata
-                price_ranks = rankdata(values_f32, method='average') - 1
+
+                price_ranks = rankdata(values_f32, method="average") - 1
             except ImportError:
                 # NumPyフォールバック
                 order = np.argsort(values_f32)
@@ -1117,9 +1109,7 @@ class RCIProcessor:
             pl.col(column)
             .cast(pl.Float32 if self.use_float32 else pl.Float64)
             .rolling_map(
-                function=_calculate_rci_values,
-                window_size=period,
-                min_periods=period
+                function=_calculate_rci_values, window_size=period, min_periods=period
             )
             .alias(f"rci_{period}")
         )
@@ -1133,17 +1123,17 @@ class RCIProcessor:
         self,
         df: pl.DataFrame,
         periods: list[int] | None = None,
-        column_name: str = 'close',
-        add_reliability: bool = True
+        column_name: str = "close",
+        add_reliability: bool = True,
     ) -> pl.DataFrame:
         """DataFrameに直接RCI計算を適用
-        
+
         Args:
             df: 入力DataFrame
             periods: RCI計算期間のリスト（Noneの場合はデフォルト期間）
             column_name: 価格データのカラム名
             add_reliability: 信頼性フラグを追加するかどうか
-            
+
         Returns:
             RCI列が追加されたDataFrame
         """
@@ -1180,17 +1170,17 @@ class RCIProcessor:
         self,
         lf: pl.LazyFrame,
         periods: list[int] | None = None,
-        column_name: str = 'close',
-        add_reliability: bool = True
+        column_name: str = "close",
+        add_reliability: bool = True,
     ) -> pl.LazyFrame:
         """LazyFrameにRCI計算を適用（遅延評価）
-        
+
         Args:
             lf: 入力LazyFrame
             periods: RCI計算期間のリスト（Noneの場合はデフォルト期間）
             column_name: 価格データのカラム名
             add_reliability: 信頼性フラグを追加するかどうか
-            
+
         Returns:
             RCI列が追加されたLazyFrame（遅延評価）
         """
@@ -1228,12 +1218,12 @@ class RCIProcessor:
         df: pl.DataFrame | pl.LazyFrame,
         group_by: list[str],
         periods: list[int] | None = None,
-        column_name: str = 'close',
+        column_name: str = "close",
         add_reliability: bool = True,
-        parallel: bool = True
+        parallel: bool = True,
     ) -> pl.DataFrame | pl.LazyFrame:
         """グループごとのRCI計算（最適化済み）
-        
+
         Args:
             df: 入力DataFrame/LazyFrame
             group_by: グループ化するカラムのリスト
@@ -1241,7 +1231,7 @@ class RCIProcessor:
             column_name: 価格データのカラム名
             add_reliability: 信頼性フラグを追加するかどうか
             parallel: 並列処理を使用するかどうか
-            
+
         Returns:
             グループごとにRCIが計算されたDataFrame/LazyFrame
         """
@@ -1273,11 +1263,8 @@ class RCIProcessor:
                 pl.col(column_name)
                 .cast(dtype)
                 .map_batches(
-                    lambda s: pl.Series(
-                        _group_rci_calc(s.to_numpy()),
-                        dtype=dtype
-                    ),
-                    return_dtype=dtype
+                    lambda s: pl.Series(_group_rci_calc(s.to_numpy()), dtype=dtype),
+                    return_dtype=dtype,
                 )
                 .over(group_by)
                 .alias(f"rci_{period}")
@@ -1303,16 +1290,14 @@ class RCIProcessor:
         return result
 
     def create_multi_period_expression(
-        self,
-        column: str,
-        periods: list[int]
+        self, column: str, periods: list[int]
     ) -> list[pl.Expr]:
         """複数期間のRCI Expressionを一度に作成
-        
+
         Args:
             column: 価格データのカラム名
             periods: RCI計算期間のリスト
-            
+
         Returns:
             RCI Expressionのリスト
         """
@@ -1328,14 +1313,14 @@ class RCIProcessor:
 
     def get_statistics(self) -> dict[str, Any]:
         """統計情報を取得
-        
+
         Returns:
             Expressionキャッシュのサイズなど
         """
         return {
             "expression_cache_size": len(self._expr_cache),
             "cached_expressions": list(self._expr_cache.keys()),
-            "engine_statistics": self.engine.get_statistics()
+            "engine_statistics": self.engine.get_statistics(),
         }
 
     def clear_cache(self) -> None:

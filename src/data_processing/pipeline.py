@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 class IndicatorPipeline:
     """テクニカル指標の統合パイプライン
-    
+
     すべてのテクニカル指標（RCI、RSI、MACD、Bollinger Bands等）を
     統一的なインターフェースで処理します。
-    
+
     Attributes:
         rci_processor: RCI計算プロセッサ
         indicator_engine: テクニカル指標エンジン
         processing_engine: Polars処理エンジン
-        
+
     Methods:
         calculate_all_indicators: すべての指標を一括計算
         calculate_indicators_lazy: LazyFrameでの遅延評価計算
@@ -38,7 +38,7 @@ class IndicatorPipeline:
     def __init__(self, chunk_size: int = 100_000):
         """
         パイプラインの初期化
-        
+
         Args:
             chunk_size: チャンク処理のサイズ
         """
@@ -48,7 +48,7 @@ class IndicatorPipeline:
         self._statistics = {
             "total_calculations": 0,
             "total_rows_processed": 0,
-            "indicators_calculated": set()
+            "indicators_calculated": set(),
         }
         logger.info(f"IndicatorPipeline initialized with chunk_size={chunk_size:,}")
 
@@ -56,12 +56,12 @@ class IndicatorPipeline:
         self,
         df: pl.DataFrame,
         indicators: dict[str, dict[str, Any]],
-        price_column: str = 'close',
-        validate: bool = True
+        price_column: str = "close",
+        validate: bool = True,
     ) -> pl.DataFrame:
         """
         すべての指標を一括計算
-        
+
         Args:
             df: 入力DataFrame
             indicators: 指標設定の辞書
@@ -73,7 +73,7 @@ class IndicatorPipeline:
                 }
             price_column: 価格データのカラム名
             validate: 入力データのバリデーション実行
-            
+
         Returns:
             すべての指標が追加されたDataFrame
         """
@@ -89,78 +89,71 @@ class IndicatorPipeline:
         start_time = datetime.now()
 
         # RCI計算
-        if 'rci' in indicators:
+        if "rci" in indicators:
             logger.info("Calculating RCI indicators")
-            rci_config = indicators['rci']
-            periods = rci_config.get('periods', [9, 13, 24, 33, 48, 66, 108])
-            add_reliability = rci_config.get('add_reliability', True)
+            rci_config = indicators["rci"]
+            periods = rci_config.get("periods", [9, 13, 24, 33, 48, 66, 108])
+            add_reliability = rci_config.get("add_reliability", True)
 
             result = self.rci_processor.apply_to_dataframe(
                 result,
                 periods=periods,
                 column_name=price_column,
-                add_reliability=add_reliability
+                add_reliability=add_reliability,
             )
-            self._statistics["indicators_calculated"].add('rci')
+            self._statistics["indicators_calculated"].add("rci")
 
         # RSI計算
-        if 'rsi' in indicators:
+        if "rsi" in indicators:
             logger.info("Calculating RSI indicator")
-            rsi_config = indicators['rsi']
-            period = rsi_config.get('period', 14)
+            rsi_config = indicators["rsi"]
+            period = rsi_config.get("period", 14)
 
             result = self.indicator_engine.calculate_rsi(
-                result,
-                period=period,
-                price_column=price_column
+                result, period=period, price_column=price_column
             )
-            self._statistics["indicators_calculated"].add('rsi')
+            self._statistics["indicators_calculated"].add("rsi")
 
         # MACD計算
-        if 'macd' in indicators:
+        if "macd" in indicators:
             logger.info("Calculating MACD indicator")
-            macd_config = indicators['macd']
-            fast = macd_config.get('fast', 12)
-            slow = macd_config.get('slow', 26)
-            signal = macd_config.get('signal', 9)
+            macd_config = indicators["macd"]
+            fast = macd_config.get("fast", 12)
+            slow = macd_config.get("slow", 26)
+            signal = macd_config.get("signal", 9)
 
             result = self.indicator_engine.calculate_macd(
                 result,
                 fast_period=fast,
                 slow_period=slow,
                 signal_period=signal,
-                price_column=price_column
+                price_column=price_column,
             )
-            self._statistics["indicators_calculated"].add('macd')
+            self._statistics["indicators_calculated"].add("macd")
 
         # Bollinger Bands計算
-        if 'bollinger' in indicators:
+        if "bollinger" in indicators:
             logger.info("Calculating Bollinger Bands")
-            bb_config = indicators['bollinger']
-            period = bb_config.get('period', 20)
-            num_std = bb_config.get('num_std', 2)
+            bb_config = indicators["bollinger"]
+            period = bb_config.get("period", 20)
+            num_std = bb_config.get("num_std", 2)
 
             result = self.indicator_engine.calculate_bollinger_bands(
-                result,
-                period=period,
-                num_std=num_std,
-                price_column=price_column
+                result, period=period, num_std=num_std, price_column=price_column
             )
-            self._statistics["indicators_calculated"].add('bollinger')
+            self._statistics["indicators_calculated"].add("bollinger")
 
         # EMA計算
-        if 'ema' in indicators:
+        if "ema" in indicators:
             logger.info("Calculating EMA indicators")
-            ema_config = indicators['ema']
-            periods = ema_config.get('periods', [5, 10, 20, 50, 100, 200])
+            ema_config = indicators["ema"]
+            periods = ema_config.get("periods", [5, 10, 20, 50, 100, 200])
 
             for period in periods:
                 result = self.indicator_engine.calculate_ema(
-                    result,
-                    period=period,
-                    price_column=price_column
+                    result, period=period, price_column=price_column
                 )
-            self._statistics["indicators_calculated"].add('ema')
+            self._statistics["indicators_calculated"].add("ema")
 
         # 統計更新
         self._statistics["total_calculations"] += 1
@@ -178,38 +171,38 @@ class IndicatorPipeline:
         self,
         lf: pl.LazyFrame,
         indicators: dict[str, dict[str, Any]],
-        price_column: str = 'close'
+        price_column: str = "close",
     ) -> pl.LazyFrame:
         """
         LazyFrameでの遅延評価による指標計算
-        
+
         メモリ効率的な大規模データ処理に適しています。
-        
+
         Args:
             lf: 入力LazyFrame
             indicators: 指標設定の辞書
             price_column: 価格データのカラム名
-            
+
         Returns:
             指標計算が設定されたLazyFrame（未実行）
         """
         result = lf
 
         # RCI計算（LazyFrame対応）
-        if 'rci' in indicators:
-            rci_config = indicators['rci']
-            periods = rci_config.get('periods', [9, 13, 24])
-            add_reliability = rci_config.get('add_reliability', True)
+        if "rci" in indicators:
+            rci_config = indicators["rci"]
+            periods = rci_config.get("periods", [9, 13, 24])
+            add_reliability = rci_config.get("add_reliability", True)
 
             result = self.rci_processor.apply_to_lazyframe(
                 result,
                 periods=periods,
                 column_name=price_column,
-                add_reliability=add_reliability
+                add_reliability=add_reliability,
             )
 
         # 他の指標はLazyFrame非対応のため、警告を出す
-        non_lazy_indicators = [ind for ind in indicators if ind != 'rci']
+        non_lazy_indicators = [ind for ind in indicators if ind != "rci"]
         if non_lazy_indicators:
             logger.warning(
                 f"LazyFrame mode: Only RCI is fully supported. "
@@ -223,19 +216,19 @@ class IndicatorPipeline:
         df: pl.DataFrame | pl.LazyFrame,
         group_by: list[str],
         indicators: dict[str, dict[str, Any]],
-        price_column: str = 'close'
+        price_column: str = "close",
     ) -> pl.DataFrame | pl.LazyFrame:
         """
         グループごとの指標計算
-        
+
         シンボルや時間枠ごとに分けて指標を計算します。
-        
+
         Args:
             df: 入力DataFrame/LazyFrame
             group_by: グループ化するカラムのリスト
             indicators: 指標設定の辞書
             price_column: 価格データのカラム名
-            
+
         Returns:
             グループごとに指標が計算されたDataFrame/LazyFrame
         """
@@ -244,10 +237,10 @@ class IndicatorPipeline:
         result = df
 
         # RCIのグループ計算
-        if 'rci' in indicators:
-            rci_config = indicators['rci']
-            periods = rci_config.get('periods', [9, 13, 24])
-            add_reliability = rci_config.get('add_reliability', True)
+        if "rci" in indicators:
+            rci_config = indicators["rci"]
+            periods = rci_config.get("periods", [9, 13, 24])
+            add_reliability = rci_config.get("add_reliability", True)
 
             result = self.rci_processor.apply_grouped(
                 result,
@@ -255,15 +248,16 @@ class IndicatorPipeline:
                 periods=periods,
                 column_name=price_column,
                 add_reliability=add_reliability,
-                parallel=True
+                parallel=True,
             )
 
         # 他の指標のグループ計算
-        if any(ind in indicators for ind in ['rsi', 'macd', 'bollinger', 'ema']):
+        if any(ind in indicators for ind in ["rsi", "macd", "bollinger", "ema"]):
             # 指標設定を構築
             indicator_configs = {
-                k: v for k, v in indicators.items()
-                if k in ['rsi', 'macd', 'bollinger', 'ema']
+                k: v
+                for k, v in indicators.items()
+                if k in ["rsi", "macd", "bollinger", "ema"]
             }
 
             if isinstance(result, pl.LazyFrame):
@@ -272,12 +266,12 @@ class IndicatorPipeline:
             # グループごとに処理
             result = self.indicator_engine.calculate_all_indicators(
                 result,
-                include_ema=('ema' in indicator_configs),
-                include_rsi=('rsi' in indicator_configs),
-                include_macd=('macd' in indicator_configs),
-                include_bollinger=('bollinger' in indicator_configs),
+                include_ema=("ema" in indicator_configs),
+                include_rsi=("rsi" in indicator_configs),
+                include_macd=("macd" in indicator_configs),
+                include_bollinger=("bollinger" in indicator_configs),
                 price_column=price_column,
-                group_by=group_by if group_by else None
+                group_by=group_by if group_by else None,
             )
 
         return result
@@ -285,14 +279,14 @@ class IndicatorPipeline:
     def get_statistics(self) -> dict[str, Any]:
         """
         パイプラインの統計情報を取得
-        
+
         Returns:
             処理統計の辞書
         """
         return {
             "pipeline_stats": self._statistics,
             "rci_stats": self.rci_processor.get_statistics(),
-            "indicator_stats": self.indicator_engine.get_processing_statistics()
+            "indicator_stats": self.indicator_engine.get_processing_statistics(),
         }
 
     def reset_statistics(self) -> None:
@@ -300,7 +294,7 @@ class IndicatorPipeline:
         self._statistics = {
             "total_calculations": 0,
             "total_rows_processed": 0,
-            "indicators_calculated": set()
+            "indicators_calculated": set(),
         }
         self.rci_processor.clear_cache()
         logger.info("Pipeline statistics reset")
@@ -309,18 +303,18 @@ class IndicatorPipeline:
         self,
         df: pl.DataFrame,
         indicators: dict[str, dict[str, Any]],
-        price_column: str = 'close',
-        optimize_memory: bool = True
+        price_column: str = "close",
+        optimize_memory: bool = True,
     ) -> pl.DataFrame:
         """
         データ検証と最適化を含む完全な処理パイプライン
-        
+
         Args:
             df: 入力DataFrame
             indicators: 指標設定
             price_column: 価格データのカラム名
             optimize_memory: メモリ最適化の実行
-            
+
         Returns:
             処理済みDataFrame
         """
@@ -338,7 +332,7 @@ class IndicatorPipeline:
             df,
             indicators=indicators,
             price_column=price_column,
-            validate=False  # 既に検証済み
+            validate=False,  # 既に検証済み
         )
 
         return result

@@ -26,5 +26,5 @@ __all__ = [
     "InvalidPeriodError",
     "InsufficientDataError",
     "IndicatorPipeline",
-    "TechnicalIndicatorEngine"
+    "TechnicalIndicatorEngine",
 ]

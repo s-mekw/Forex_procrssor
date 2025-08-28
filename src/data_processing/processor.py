@@ -24,21 +24,25 @@ logger = logging.getLogger(__name__)
 # Custom exception classes
 class ProcessingError(Exception):
     """Base class for data processing errors."""
+
     pass
 
 
 class DataTypeError(ProcessingError):
     """Raised when data type validation fails."""
+
     pass
 
 
 class MemoryLimitError(ProcessingError):
     """Raised when memory limits are exceeded."""
+
     pass
 
 
 class FileValidationError(ProcessingError):
     """Raised when file validation fails."""
+
     pass
 
 
@@ -56,7 +60,7 @@ class PolarsProcessingEngine:
 
         Args:
             chunk_size: Number of rows to process per chunk (default: 100,000)
-        
+
         Raises:
             ValueError: If chunk_size is not positive
         """
@@ -76,28 +80,28 @@ class PolarsProcessingEngine:
         self,
         df: pl.DataFrame,
         periods: Optional[List[int]] = None,
-        column_name: str = 'close',
-        add_reliability: bool = True
+        column_name: str = "close",
+        add_reliability: bool = True,
     ) -> pl.DataFrame:
         """
         Calculate RCI (Rank Correlation Index) indicators.
-        
+
         This method integrates RCI calculation into the processing pipeline,
         providing efficient computation of RCI values for multiple periods.
-        
+
         Args:
             df: Input DataFrame with price data
             periods: List of RCI periods to calculate (default: [9, 13, 24, 33, 48, 66, 108])
             column_name: Column name for price data (default: 'close')
             add_reliability: Whether to add reliability flags (default: True)
-            
+
         Returns:
             DataFrame with RCI columns added
-            
+
         Raises:
             ValueError: If DataFrame is empty or column_name doesn't exist
             RCICalculationError: If RCI calculation fails
-            
+
         Example:
             df = engine.calculate_rci(df, periods=[9, 13, 24])
             # Adds columns: rci_9, rci_13, rci_24, rci_9_reliable, etc.
@@ -122,7 +126,7 @@ class PolarsProcessingEngine:
                 df,
                 periods=periods,
                 column_name=column_name,
-                add_reliability=add_reliability
+                add_reliability=add_reliability,
             )
 
             # Log statistics
@@ -145,24 +149,24 @@ class PolarsProcessingEngine:
         df: pl.DataFrame,
         rci_periods: Optional[List[int]] = None,
         other_indicators: Optional[List[str]] = None,
-        price_column: str = 'close'
+        price_column: str = "close",
     ) -> pl.DataFrame:
         """
         Process DataFrame with RCI and optionally other technical indicators.
-        
+
         This method provides a unified interface for calculating multiple
         indicators including RCI in a single pipeline.
-        
+
         Args:
             df: Input DataFrame
             rci_periods: RCI periods to calculate
             other_indicators: List of other indicators to calculate
                             (e.g., ['rsi', 'macd', 'bollinger'])
             price_column: Column name for price data
-            
+
         Returns:
             DataFrame with all requested indicators
-            
+
         Example:
             df = engine.process_with_rci(
                 df,
@@ -176,9 +180,7 @@ class PolarsProcessingEngine:
         if rci_periods:
             logger.info(f"Adding RCI indicators for periods: {rci_periods}")
             result = self.calculate_rci(
-                result,
-                periods=rci_periods,
-                column_name=price_column
+                result, periods=rci_periods, column_name=price_column
             )
 
         # Calculate other indicators if specified
@@ -190,10 +192,18 @@ class PolarsProcessingEngine:
 
             # Map indicator names to methods
             indicator_map = {
-                'rsi': lambda df: indicator_engine.calculate_rsi(df, price_column=price_column),
-                'macd': lambda df: indicator_engine.calculate_macd(df, price_column=price_column),
-                'bollinger': lambda df: indicator_engine.calculate_bollinger_bands(df, price_column=price_column),
-                'ema': lambda df: indicator_engine.calculate_ema(df, price_column=price_column)
+                "rsi": lambda df: indicator_engine.calculate_rsi(
+                    df, price_column=price_column
+                ),
+                "macd": lambda df: indicator_engine.calculate_macd(
+                    df, price_column=price_column
+                ),
+                "bollinger": lambda df: indicator_engine.calculate_bollinger_bands(
+                    df, price_column=price_column
+                ),
+                "ema": lambda df: indicator_engine.calculate_ema(
+                    df, price_column=price_column
+                ),
             }
 
             for indicator in other_indicators:
@@ -208,18 +218,18 @@ class PolarsProcessingEngine:
         self,
         lf: pl.LazyFrame,
         periods: Optional[List[int]] = None,
-        column_name: str = 'close',
-        add_reliability: bool = True
+        column_name: str = "close",
+        add_reliability: bool = True,
     ) -> pl.LazyFrame:
         """
         Calculate RCI on LazyFrame for memory-efficient processing.
-        
+
         Args:
             lf: Input LazyFrame
             periods: List of RCI periods
             column_name: Column name for price data
             add_reliability: Whether to add reliability flags
-            
+
         Returns:
             LazyFrame with RCI calculations (not yet computed)
         """
@@ -235,7 +245,7 @@ class PolarsProcessingEngine:
             lf,
             periods=periods,
             column_name=column_name,
-            add_reliability=add_reliability
+            add_reliability=add_reliability,
         )
 
         return result
@@ -243,16 +253,16 @@ class PolarsProcessingEngine:
     def validate_datatypes(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Validate and fix data types in a DataFrame.
-        
+
         This method attempts to convert columns to appropriate numeric types
         and handles mixed data types gracefully.
-        
+
         Args:
             df: DataFrame to validate
-            
+
         Returns:
             DataFrame with validated and corrected data types
-            
+
         Raises:
             DataTypeError: If data types cannot be corrected
         """
@@ -266,12 +276,16 @@ class PolarsProcessingEngine:
                     try:
                         # First try to convert to Float32
                         df = df.with_columns(
-                            pl.col(col).str.replace(",", "").cast(pl.Float32, strict=False)
+                            pl.col(col)
+                            .str.replace(",", "")
+                            .cast(pl.Float32, strict=False)
                         )
                         logger.info(f"Converted string column {col} to Float32")
                     except Exception as e:
                         # If conversion fails, keep as string but log warning
-                        logger.warning(f"Column {col} contains non-numeric strings, keeping as text: {e}")
+                        logger.warning(
+                            f"Column {col} contains non-numeric strings, keeping as text: {e}"
+                        )
 
                 # Convert Float64 to Float32 for consistency
                 elif dtype == pl.Float64:
@@ -301,10 +315,10 @@ class PolarsProcessingEngine:
     def handle_empty_dataframe(self, df: pl.DataFrame | pl.LazyFrame) -> bool:
         """
         Check if a DataFrame is empty and handle appropriately.
-        
+
         Args:
             df: DataFrame or LazyFrame to check
-            
+
         Returns:
             True if the DataFrame is empty, False otherwise
         """
@@ -338,10 +352,10 @@ class PolarsProcessingEngine:
     def handle_memory_limit(self, required_memory_mb: float) -> bool:
         """
         Check if required memory exceeds available memory.
-        
+
         Args:
             required_memory_mb: Required memory in megabytes
-            
+
         Returns:
             True if memory is available, False if limit exceeded
         """
@@ -363,10 +377,10 @@ class PolarsProcessingEngine:
     def validate_file(self, file_path: str | Path) -> bool:
         """
         Validate that a file exists and is readable.
-        
+
         Args:
             file_path: Path to the file to validate
-            
+
         Returns:
             True if file is valid, False otherwise
         """
@@ -382,7 +396,7 @@ class PolarsProcessingEngine:
                 return False
 
             # Check file extension
-            valid_extensions = ['.csv', '.parquet', '.json', '.txt']
+            valid_extensions = [".csv", ".parquet", ".json", ".txt"]
             if file_path.suffix.lower() not in valid_extensions:
                 logger.warning(f"Unusual file extension: {file_path.suffix}")
 
@@ -399,7 +413,7 @@ class PolarsProcessingEngine:
     def handle_memory_pressure(self) -> int:
         """
         Handle memory pressure by adjusting processing parameters.
-        
+
         Returns:
             Adjusted chunk size based on memory pressure
         """
@@ -448,13 +462,13 @@ class PolarsProcessingEngine:
     ) -> None:
         """
         Validate input parameters for various methods.
-        
+
         Args:
             chunk_size: Optional chunk size to validate
             aggregations: Optional aggregations to validate
             filters: Optional filters to validate
             process_func: Optional processing function to validate
-            
+
         Raises:
             ValueError: If parameters are invalid
             TypeError: If parameters have wrong type
@@ -462,13 +476,15 @@ class PolarsProcessingEngine:
         # Validate chunk_size
         if chunk_size is not None:
             if not isinstance(chunk_size, int):
-                raise TypeError(f"chunk_size must be an integer, got {type(chunk_size)}")
+                raise TypeError(
+                    f"chunk_size must be an integer, got {type(chunk_size)}"
+                )
             if chunk_size <= 0:
                 raise ValueError(f"chunk_size must be positive, got {chunk_size}")
 
         # Validate aggregations
         if aggregations is not None:
-            valid_aggs = {'mean', 'sum', 'min', 'max', 'std', 'count', 'first', 'last'}
+            valid_aggs = {"mean", "sum", "min", "max", "std", "count", "first", "last"}
             for col, funcs in aggregations.items():
                 for func in funcs:
                     if func not in valid_aggs:
@@ -479,12 +495,11 @@ class PolarsProcessingEngine:
 
         # Validate filters
         if filters is not None:
-            valid_ops = {'>', '<', '>=', '<=', '==', '!='}
+            valid_ops = {">", "<", ">=", "<=", "==", "!="}
             for col, op, val in filters:
                 if op not in valid_ops:
                     raise ValueError(
-                        f"Unsupported operator: {op}. "
-                        f"Valid operators: {valid_ops}"
+                        f"Unsupported operator: {op}. Valid operators: {valid_ops}"
                     )
 
         # Validate process_func
@@ -532,7 +547,9 @@ class PolarsProcessingEngine:
         try:
             df = self.validate_datatypes(df)
         except DataTypeError:
-            logger.warning("Data type validation failed, continuing with original types")
+            logger.warning(
+                "Data type validation failed, continuing with original types"
+            )
 
         original_memory = df.estimated_size()
         optimizations = []

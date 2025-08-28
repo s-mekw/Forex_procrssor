@@ -114,7 +114,7 @@ class RealtimePipeline:
             multiframe_config = multiframe_config or {}
             # max_history_barsパラメータをMultiTimeframeAnalyzerに渡す
             analyzer_config = multiframe_config.copy()
-            analyzer_config['max_history_bars'] = self._max_history_bars
+            analyzer_config["max_history_bars"] = self._max_history_bars
             self._multiframe_analyzer = MultiTimeframeAnalyzer(**analyzer_config)
             self._logger = logging.getLogger(__name__)
             self._logger.info(
@@ -246,9 +246,7 @@ class RealtimePipeline:
         }
 
     async def _perform_multiframe_analysis(
-        self,
-        data_point: DataPoint,
-        processed_data: dict[str, Any]
+        self, data_point: DataPoint, processed_data: dict[str, Any]
     ) -> dict[str, Any] | None:
         """マルチタイムフレーム分析を実行する
 
@@ -321,8 +319,7 @@ class RealtimePipeline:
         self._metrics["multiframe_processing_count"] += 1
         self._metrics["multiframe_total_latency"] += latency
         self._metrics["multiframe_max_latency"] = max(
-            self._metrics["multiframe_max_latency"],
-            latency
+            self._metrics["multiframe_max_latency"], latency
         )
 
     def _update_metrics(self, latency: float) -> None:
@@ -477,9 +474,13 @@ class RealtimePipeline:
             metrics["avg_latency"] = 0.0
 
         # Calculate multi-timeframe average latency
-        if self._enable_multiframe and metrics.get("multiframe_processing_count", 0) > 0:
+        if (
+            self._enable_multiframe
+            and metrics.get("multiframe_processing_count", 0) > 0
+        ):
             metrics["multiframe_avg_latency"] = (
-                metrics["multiframe_total_latency"] / metrics["multiframe_processing_count"]
+                metrics["multiframe_total_latency"]
+                / metrics["multiframe_processing_count"]
             )
         else:
             metrics["multiframe_avg_latency"] = 0.0
