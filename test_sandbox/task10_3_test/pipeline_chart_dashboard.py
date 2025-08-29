@@ -31,6 +31,7 @@ import os
 from threading import Lock
 from dataclasses import dataclass, field
 import logging
+import toml
 
 # プロジェクトのインポート
 from src.data_processing.pipelines import RealtimePipeline, DataPoint, ProcessingResult
@@ -60,15 +61,64 @@ class ChartData:
 class PipelineChartManager:
     """RealtimePipelineとMultiTimeframeAnalyzerを使用したチャート管理クラス"""
     
-    def __init__(self, symbol: str = "EURJPY#", initial_bars: int = 200):
+    def __init__(self, config_path: str = None):
         """初期化
         
         Args:
-            symbol: 取引シンボル
-            initial_bars: 初期データのバー数
+            config_path: 設定ファイルのパス
         """
-        self.symbol = symbol
-        self.initial_bars = initial_bars
+        # 設定ファイルを読み込み
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.config = toml.load(f)
+        else:
+            # デフォルト設定
+            self.config = {
+                'chart': {
+                    'symbol': 'EURJPY#',
+                    'initial_bars': 200,
+                    'display_bars_m1': 100,
+                    'display_bars_m5': 20,
+                    'update_interval': 1.0,
+                    'show_grid': True
+                },
+                'pipeline': {
+                    'queue_size': 1000,
+                    'alert_threshold': 1.0,
+                    'enable_metrics': True,
+                    'max_history_bars': 5000
+                },
+                'analyzer': {
+                    'short_term_periods': [9, 13, 24, 33, 48, 66, 108],
+                    'long_term_periods': [24, 33, 48, 66, 108],
+                    'long_timeframe': '5T'
+                },
+                'theme': {
+                    'background': '#fffbea',
+                    'grid': '#e0e0e0',
+                    'text': '#000000'
+                },
+                'dash': {
+                    'host': '0.0.0.0',
+                    'port': 8053,
+                    'debug': False
+                },
+                'buffer': {
+                    'max_m1_bars': 1000,
+                    'max_m5_bars': 200
+                },
+                'tick_converter': {
+                    'timeframe': 60
+                }
+            }
+        
+        # 設定から値を取得
+        self.symbol = self.config['chart']['symbol']
+        self.initial_bars = self.config['chart']['initial_bars']
+        self.display_bars_m1 = self.config['chart']['display_bars_m1']
+        self.display_bars_m5 = self.config['chart']['display_bars_m5']
+        self.update_interval = self.config['chart']['update_interval']
+        self.show_grid = self.config['chart'].get('show_grid', True)
         
         # チャートデータ
         self.chart_data = ChartData()
@@ -76,15 +126,15 @@ class PipelineChartManager:
         
         # RealtimePipelineの初期化
         self.pipeline = RealtimePipeline(
-            queue_size=1000,
-            alert_threshold=1.0,
-            enable_metrics=True,
+            queue_size=self.config['pipeline']['queue_size'],
+            alert_threshold=self.config['pipeline']['alert_threshold'],
+            enable_metrics=self.config['pipeline']['enable_metrics'],
             enable_multiframe=True,
-            max_history_bars=5000,
+            max_history_bars=self.config['pipeline']['max_history_bars'],
             multiframe_config={
-                'short_term_periods': [9, 13, 24, 33, 48, 66, 108],
-                'long_term_periods': [24, 33, 48, 66, 108],
-                'long_timeframe': '5T'
+                'short_term_periods': self.config['analyzer']['short_term_periods'],
+                'long_term_periods': self.config['analyzer']['long_term_periods'],
+                'long_timeframe': self.config['analyzer']['long_timeframe']
             }
         )
         
@@ -94,7 +144,7 @@ class PipelineChartManager:
         # TickToBarConverter追加
         self.tick_converter = TickToBarConverter(
             symbol=self.symbol,
-            timeframe=60,  # 1分足
+            timeframe=self.config.get('tick_converter', {}).get('timeframe', 60),  # デフォルト1分足
             on_bar_complete=None  # 後でコールバックを設定
         )
         self.tick_adapter = TickAdapter()
@@ -331,9 +381,10 @@ class PipelineChartManager:
                                     new_m5_bar
                                 ])
                                 
-                                # メモリ管理：最新200本のみ保持
-                                if len(self.chart_data.m5_ohlc) > 200:
-                                    self.chart_data.m5_ohlc = self.chart_data.m5_ohlc[-200:]
+                                # メモリ管理：設定に基づく最大バー数を保持
+                                max_m5_bars = self.config['buffer']['max_m5_bars']
+                                if len(self.chart_data.m5_ohlc) > max_m5_bars:
+                                    self.chart_data.m5_ohlc = self.chart_data.m5_ohlc[-max_m5_bars:]
                             
                             logger.info(f"M5 chart updated: {len(self.chart_data.m5_ohlc)} bars")
                 
@@ -423,8 +474,8 @@ class PipelineChartManager:
                                     new_bar_df
                                 ])
                                 
-                                # メモリ管理：最新1000本のみ保持
-                                max_bars = 1000
+                                # メモリ管理：設定に基づく最大バー数を保持
+                                max_bars = self.config['buffer']['max_m1_bars']
                                 if len(self.chart_data.m1_ohlc) > max_bars:
                                     self.chart_data.m1_ohlc = self.chart_data.m1_ohlc[-max_bars:]
                                 
@@ -569,13 +620,14 @@ class PipelineChartManager:
             if self.chart_data.m1_ohlc is None or self.chart_data.m1_ohlc.is_empty():
                 return self._create_empty_chart()
             
-            # 表示バー数の制限
-            display_bars = 100
-            m1_ohlc = self.chart_data.m1_ohlc.tail(display_bars) if self.chart_data.m1_ohlc is not None else None
-            m5_ohlc = self.chart_data.m5_ohlc.tail(display_bars // 5) if self.chart_data.m5_ohlc is not None and not self.chart_data.m5_ohlc.is_empty() else None
-            m1_rci = {k: v[-display_bars:] if len(v) > display_bars else v 
+            # 表示バー数の制限（設定から取得）
+            display_bars_m1 = self.display_bars_m1
+            display_bars_m5 = self.display_bars_m5
+            m1_ohlc = self.chart_data.m1_ohlc.tail(display_bars_m1) if self.chart_data.m1_ohlc is not None else None
+            m5_ohlc = self.chart_data.m5_ohlc.tail(display_bars_m5) if self.chart_data.m5_ohlc is not None and not self.chart_data.m5_ohlc.is_empty() else None
+            m1_rci = {k: v[-display_bars_m1:] if len(v) > display_bars_m1 else v 
                      for k, v in self.chart_data.m1_rci.items()}
-            m5_rci = {k: v[-display_bars//5:] if len(v) > display_bars//5 else v 
+            m5_rci = {k: v[-display_bars_m5:] if len(v) > display_bars_m5 else v 
                      for k, v in self.chart_data.m5_rci.items()}
         
         # サブプロット作成（2列×4行）
@@ -749,8 +801,10 @@ class PipelineChartManager:
             showlegend=True,
             hovermode='x unified',
             margin=dict(l=50, r=50, t=40, b=40),
-            plot_bgcolor='#fffbea',
-            paper_bgcolor='#fffbea'
+            plot_bgcolor=self.config['theme']['background'],
+            paper_bgcolor=self.config['theme']['background'],
+            xaxis=dict(showgrid=self.show_grid, gridcolor=self.config['theme']['grid']),
+            yaxis=dict(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'])
         )
         
         # Y軸の範囲設定
@@ -876,12 +930,12 @@ def serve_layout():
         # 自動更新用インターバル
         dcc.Interval(
             id='interval-component',
-            interval=1000,  # 1秒ごとに更新
+            interval=chart_manager.update_interval * 1000 if chart_manager else 1000,  # 設定から更新間隔を取得
             n_intervals=0
         ),
         
         # データストア
-        dcc.Store(id='realtime-status', data={'is_running': False})
+        dcc.Store(id='realtime-status', data={'is_running': True})
     ], fluid=True)
 
 app.layout = serve_layout
@@ -902,7 +956,10 @@ def toggle_realtime(start_clicks, stop_clicks, status_state):
     
     ctx = callback_context
     if not ctx.triggered:
-        return status_state, "⚪ READY", "badge bg-secondary fs-6 ms-3"
+        # 初期状態でリアルタイム処理を開始
+        if chart_manager:
+            chart_manager.start_realtime()
+        return {'is_running': True}, "🟢 LIVE", "badge bg-success fs-6 ms-3"
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
@@ -987,18 +1044,31 @@ def main():
     print("=" * 60)
     print(f"Process ID: {os.getpid()}")
     
+    # 設定ファイルのパスを確認
+    config_path = os.path.join(os.path.dirname(__file__), 'task10_3_config.toml')
+    if os.path.exists(config_path):
+        print(f"✅ Using config file: {config_path}")
+    else:
+        print(f"⚠️ Config file not found: {config_path}, using defaults")
+    
     # チャートマネージャー初期化
     try:
-        chart_manager = PipelineChartManager(symbol="EURJPY#")
+        chart_manager = PipelineChartManager(config_path=config_path)
         print(f"✅ Initialized for symbol: {chart_manager.symbol}")
         print(f"✅ Pipeline queue size: {chart_manager.pipeline.queue_size}")
         print(f"✅ Analyzer ready: {chart_manager.pipeline._multiframe_analyzer.is_ready()}")
+        
+        # 自動的にリアルタイム処理を開始
+        chart_manager.start_realtime()
+        print(f"✅ Realtime processing started automatically")
     except Exception as e:
         print(f"❌ Initialization failed: {e}")
         sys.exit(1)
     
-    # ポート設定
-    port = int(os.environ.get('DASH_PORT', 8053))
+    # ポート設定（設定ファイルまたは環境変数から取得）
+    port = int(os.environ.get('DASH_PORT', chart_manager.config['dash']['port']))
+    host = chart_manager.config['dash']['host']
+    debug = chart_manager.config['dash']['debug']
     
     print(f"\n✅ Starting Dash server on http://localhost:{port}")
     print("📊 Open your browser to view the pipeline chart")
@@ -1006,8 +1076,8 @@ def main():
     
     # Dashサーバー起動
     app.run(
-        debug=False,
-        host="0.0.0.0",
+        debug=debug,
+        host=host,
         port=port,
         use_reloader=False,
         dev_tools_hot_reload=False
