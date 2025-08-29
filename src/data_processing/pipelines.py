@@ -97,9 +97,9 @@ class RealtimePipeline:
         self._enable_multiframe = enable_multiframe
         self._max_history_bars = max_history_bars
 
-        # Initialize queues
-        self._input_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
-        self._output_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+        # Queueは遅延初期化（イベントループ内で作成）
+        self._input_queue: asyncio.Queue | None = None
+        self._output_queue: asyncio.Queue | None = None
 
         # Initialize multi-timeframe analyzer
         self._multiframe_analyzer: AnalyzerProtocol | None = None
@@ -160,6 +160,11 @@ class RealtimePipeline:
 
         入力キューからDataPointを取得し、処理して出力キューへ送信します。
         """
+        # Queueが初期化されていない場合のチェック
+        if self._input_queue is None or self._output_queue is None:
+            self._logger.error("Queues not initialized in process loop")
+            return
+            
         while self._is_running:
             try:
                 # 入力キューからDataPointを取得（タイムアウト設定）
@@ -354,9 +359,13 @@ class RealtimePipeline:
         if self._is_running:
             raise RuntimeError("Pipeline already running")
 
+        # 現在のイベントループ内でQueueを作成
+        self._input_queue = asyncio.Queue(maxsize=self.queue_size)
+        self._output_queue = asyncio.Queue(maxsize=self.queue_size)
+        
         self._is_running = True
         self._processing_task = asyncio.create_task(self._process_loop())
-        self._logger.info("RealtimePipeline started")
+        self._logger.info("RealtimePipeline started with queues initialized")
 
     async def stop(self) -> None:
         """
@@ -393,6 +402,10 @@ class RealtimePipeline:
         """
         if not self._is_running:
             raise RuntimeError("Pipeline is not running")
+        
+        # Queueが初期化されていない場合のチェック
+        if self._input_queue is None:
+            raise RuntimeError("Pipeline queues not initialized. Call start() first.")
 
         try:
             # Check if queue is full
@@ -437,6 +450,10 @@ class RealtimePipeline:
         """
         if not self._is_running:
             raise RuntimeError("Pipeline is not running")
+        
+        # Queueが初期化されていない場合のチェック
+        if self._output_queue is None:
+            raise RuntimeError("Pipeline queues not initialized. Call start() first.")
 
         result = await self._output_queue.get()
         return result
@@ -461,9 +478,18 @@ class RealtimePipeline:
 
         metrics = self._metrics.copy()
 
-        # Add current queue sizes
-        metrics["input_queue_size"] = self._input_queue.qsize()
-        metrics["output_queue_size"] = self._output_queue.qsize()
+        # Add current queue sizes (Queueが初期化されている場合のみ)
+        if self._input_queue is not None:
+            metrics["input_queue_size"] = self._input_queue.qsize()
+            metrics["queue_size"] = self._input_queue.maxsize
+        else:
+            metrics["input_queue_size"] = 0
+            metrics["queue_size"] = self.queue_size
+            
+        if self._output_queue is not None:
+            metrics["output_queue_size"] = self._output_queue.qsize()
+        else:
+            metrics["output_queue_size"] = 0
 
         # Calculate average latency
         if metrics["processed_count"] > 0:
@@ -486,7 +512,7 @@ class RealtimePipeline:
             metrics["multiframe_avg_latency"] = 0.0
 
         # Add buffer size if multi-timeframe is enabled
-        if self._enable_multiframe:
+        if self._enable_multiframe and self._multiframe_analyzer:
             metrics["data_buffer_size"] = self._multiframe_analyzer.get_buffer_size()
 
         return metrics
@@ -498,7 +524,7 @@ class RealtimePipeline:
         Returns:
             bool: True if input queue usage exceeds 80% threshold
         """
-        if not self._is_running:
+        if not self._is_running or self._input_queue is None:
             return False
 
         # Backpressure active if queue is 80% or more full
@@ -521,6 +547,20 @@ class RealtimePipeline:
             - rejected_items: Total rejected items
             - max_queue_size: Maximum queue size observed
         """
+        # Queueが初期化されていない場合
+        if self._input_queue is None or self._output_queue is None:
+            return {
+                "is_running": self._is_running,
+                "input_queue_size": 0,
+                "input_queue_maxsize": self.queue_size,
+                "output_queue_size": 0,
+                "output_queue_maxsize": self.queue_size,
+                "backpressure_active": False,
+                "backpressure_events": self._metrics.get("backpressure_events", 0),
+                "rejected_items": self._metrics.get("rejected_items", 0),
+                "max_queue_size": self._metrics.get("max_queue_size", 0),
+            }
+        
         return {
             "is_running": self._is_running,
             "input_queue_size": self._input_queue.qsize(),
