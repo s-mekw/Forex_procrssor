@@ -1,0 +1,61 @@
+# Task 10.3 Pipeline Chart Dashboard Configuration
+# RealtimePipelineとMultiTimeframeAnalyzerを使用したチャート設定
+
+[chart]
+symbol = "EURJPY#"              # 取引シンボル
+initial_bars = 1000              # 初期データのバー数（5分足RCI期間108に対応）
+display_bars_m1 = 100           # M1チャート表示バー数
+display_bars_m5 = 100            # M5チャート表示バー数（5分足用に調整）
+update_interval = 0.5           # 更新間隔（秒）
+show_grid = true                # グリッド表示
+
+[pipeline]
+queue_size = 1000               # キューサイズ
+alert_threshold = 1.0           # アラート閾値（秒）
+enable_metrics = true           # メトリクス収集を有効化
+max_history_bars = 5000         # 最大履歴バー数
+
+[analyzer]
+# 短期RCI期間（M1用）
+short_term_periods = [9, 13, 24, 33, 48, 66, 108]
+# 長期RCI期間（M5用）
+long_term_periods = [24, 33, 48, 66, 108]
+long_timeframe = "5T"           # 長期タイムフレーム（5分）
+incomplete_bar_handling = "preview"  # 不完全バーの処理方法
+use_parallel = true             # 並列処理を使用
+max_workers = 4                 # 並列処理のワーカー数
+
+[mt5]
+timeout = 60000                 # タイムアウト（ミリ秒）
+max_retries = 3                 # 最大リトライ回数
+retry_delay = 1.0               # リトライ間隔（秒）
+
+[rci]
+use_float32 = true              # float32精度を使用
+
+[rci.levels]
+overbought = 80                 # 買われすぎライン
+oversold = -80                  # 売られすぎライン
+zero_line = 0                   # ゼロライン
+
+[dash]
+host = "0.0.0.0"                # ホスト
+port = 8053                     # ポート番号
+debug = false                   # デバッグモード
+
+[theme]
+background = "#fffbea"          # 背景色（クリーム色）
+grid = "#e0e0e0"                # グリッド色
+text = "#000000"                # テキスト色
+
+[tick_converter]
+timeframe = 60                  # 1分足（秒単位）
+gap_threshold = 30              # ティック欠損判定閾値（秒）
+
+[buffer]
+max_m1_bars = 1000             # M1チャートバッファの最大サイズ
+max_m5_bars = 200              # M5チャートバッファの最大サイズ
+
+[logging]
+level = "INFO"                  # ログレベル
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

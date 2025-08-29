@@ -272,16 +272,43 @@ class RealtimePipeline:
 
         try:
             multiframe_start = time.time()
+            
+            # OHLCデータの検証
+            required_fields = ['open', 'high', 'low', 'close', 'volume']
+            missing_fields = [f for f in required_fields if f not in processed_data]
+            
+            if missing_fields:
+                self._logger.warning(
+                    f"Missing OHLC fields: {missing_fields}. "
+                    f"Received data keys: {list(processed_data.keys())}. "
+                    "This may indicate tick data instead of bar data."
+                )
+            
+            # 有効なOHLCデータかチェック
+            ohlc_values = [processed_data.get(f, 0) for f in ['open', 'high', 'low', 'close']]
+            if all(v == 0 for v in ohlc_values):
+                self._logger.warning(
+                    "All OHLC values are zero. This typically indicates tick data "
+                    "was sent instead of bar data. Skipping multiframe analysis."
+                )
+                return None
 
-            # 新しいバーの作成
-            new_bar = {
-                "timestamp": data_point["timestamp"],
-                "open": processed_data.get("open", 0),
-                "high": processed_data.get("high", 0),
-                "low": processed_data.get("low", 0),
-                "close": processed_data.get("close", 0),
-                "volume": processed_data.get("volume", 0),
-            }
+            # 新しいバーの作成（データ型エラーの詳細化）
+            try:
+                new_bar = {
+                    "timestamp": data_point["timestamp"],
+                    "open": float(processed_data.get("open", 0)),
+                    "high": float(processed_data.get("high", 0)),
+                    "low": float(processed_data.get("low", 0)),
+                    "close": float(processed_data.get("close", 0)),
+                    "volume": float(processed_data.get("volume", 0)),
+                }
+            except (TypeError, ValueError) as e:
+                self._logger.error(
+                    f"Invalid data type in OHLC data: {e}. "
+                    f"Processed data: {processed_data}"
+                )
+                return None
 
             # Analyzerにバーを追加
             self._multiframe_analyzer.add_new_bar(new_bar)

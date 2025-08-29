@@ -460,6 +460,43 @@ class MultiTimeframeAnalyzer:
         if bar is None:
             logger.warning("None値のバーが渡されました。スキップします。")
             return
+        
+        # OHLC妥当性チェック
+        try:
+            high = float(bar.get("high", 0))
+            low = float(bar.get("low", 0))
+            close = float(bar.get("close", 0))
+            open_price = float(bar.get("open", 0))
+            
+            # High < Low のチェック
+            if high > 0 and low > 0 and high < low:
+                logger.warning(
+                    f"Invalid bar: high ({high}) < low ({low}). "
+                    f"Bar timestamp: {bar.get('timestamp')}"
+                )
+                return
+            
+            # Close が High/Low の範囲外のチェック
+            if high > 0 and low > 0 and close > 0:
+                if not (low <= close <= high):
+                    logger.warning(
+                        f"Invalid bar: close ({close}) out of high/low range [{low}, {high}]. "
+                        f"Bar timestamp: {bar.get('timestamp')}"
+                    )
+                    return
+            
+            # Open が High/Low の範囲外のチェック
+            if high > 0 and low > 0 and open_price > 0:
+                if not (low <= open_price <= high):
+                    logger.warning(
+                        f"Invalid bar: open ({open_price}) out of high/low range [{low}, {high}]. "
+                        f"Bar timestamp: {bar.get('timestamp')}"
+                    )
+                    return
+                    
+        except (TypeError, ValueError) as e:
+            logger.error(f"Invalid data type in bar data: {e}. Bar data: {bar}")
+            return
 
         self._data_buffer.append(bar)
         self._manage_buffer_size()

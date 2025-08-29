@@ -37,6 +37,8 @@ from src.data_processing.pipelines import RealtimePipeline, DataPoint, Processin
 from src.data_processing.analyzer import MultiTimeframeAnalyzer
 from src.mt5_data_acquisition.mt5_client import MT5ConnectionManager
 from src.common.models import Tick as CommonTick
+from src.mt5_data_acquisition.tick_to_bar import TickToBarConverter, Bar, Tick
+from src.mt5_data_acquisition.tick_adapter import TickAdapter
 
 # ロガー設定
 logging.basicConfig(
@@ -89,6 +91,14 @@ class PipelineChartManager:
         # MT5接続管理
         self.mt5_manager = None
         
+        # TickToBarConverter追加
+        self.tick_converter = TickToBarConverter(
+            symbol=self.symbol,
+            timeframe=60,  # 1分足
+            on_bar_complete=None  # 後でコールバックを設定
+        )
+        self.tick_adapter = TickAdapter()
+        
         # 統計情報
         self.stats = {
             "ticks_received": 0,
@@ -110,6 +120,8 @@ class PipelineChartManager:
         
         # 初期化
         self.initialize()
+        
+        logger.info(f"PipelineChartManager initialized with symbol={self.symbol}, initial_bars={self.initial_bars}")
     
     def initialize(self):
         """MT5接続とデータの初期化"""
@@ -132,6 +144,33 @@ class PipelineChartManager:
         
         logger.info("Initialization complete")
     
+    def calculate_rci_history(self, df: pl.DataFrame, periods: List[int]) -> Dict[int, List[float]]:
+        """全履歴データのRCIを計算"""
+        from src.data_processing.rci import RCICalculatorEngine
+        
+        rci_history = {period: [] for period in periods}
+        rci_engine = RCICalculatorEngine()
+        
+        # 各期間で必要な最小データ数から開始
+        for period in periods:
+            for i in range(period, len(df) + 1):
+                # 最新のperiod個のデータでRCI計算
+                window_df = df[i-period:i]
+                
+                # calculate_multipleメソッドを使用（dataパラメータを使用）
+                result = rci_engine.calculate_multiple(
+                    data=window_df,
+                    periods=[period],
+                    mode="batch"
+                )
+                
+                # 結果から最新のRCI値を取得
+                if f"rci_{period}" in result.columns:
+                    rci_value = result[f"rci_{period}"][-1]
+                    rci_history[period].append(float(rci_value))
+        
+        return rci_history
+
     def fetch_initial_data(self):
         """初期データを取得してアナライザに設定"""
         # M1データ取得
@@ -145,7 +184,23 @@ class PipelineChartManager:
         if rates_m1 is None or len(rates_m1) == 0:
             raise ValueError("Failed to fetch initial M1 data")
         
-        # DataFrame作成
+        logger.info(f"Fetched {len(rates_m1)} M1 bars")
+        
+        # M5データ取得（十分な本数を取得）
+        rates_m5 = mt5.copy_rates_from_pos(
+            self.symbol,
+            mt5.TIMEFRAME_M5,
+            0,
+            600  # RCI期間108に対して十分な本数
+        )
+        
+        if rates_m5 is None or len(rates_m5) == 0:
+            logger.warning("Failed to fetch initial M5 data")
+            rates_m5 = []
+        else:
+            logger.info(f"Fetched {len(rates_m5)} M5 bars")
+        
+        # M1 DataFrame作成
         df_m1 = pl.DataFrame({
             "timestamp": [datetime.fromtimestamp(r['time']) for r in rates_m1],
             "open": np.array([r['open'] for r in rates_m1], dtype=np.float32),
@@ -155,7 +210,49 @@ class PipelineChartManager:
             "volume": np.array([r['tick_volume'] for r in rates_m1], dtype=np.float32)
         })
         
-        # MultiTimeframeAnalyzerに初期データを設定
+        # M5 DataFrame作成
+        if rates_m5 is not None and len(rates_m5) > 0:
+            df_m5 = pl.DataFrame({
+                "timestamp": [datetime.fromtimestamp(r['time']) for r in rates_m5],
+                "open": np.array([r['open'] for r in rates_m5], dtype=np.float32),
+                "high": np.array([r['high'] for r in rates_m5], dtype=np.float32),
+                "low": np.array([r['low'] for r in rates_m5], dtype=np.float32),
+                "close": np.array([r['close'] for r in rates_m5], dtype=np.float32),
+                "volume": np.array([r['tick_volume'] for r in rates_m5], dtype=np.float32)
+            })
+        else:
+            df_m5 = None
+        
+        # 初期RCI履歴を計算
+        short_periods = [9, 13, 24, 33, 48, 66, 108]
+        long_periods = [24, 33, 48, 66, 108]
+        
+        # M1 RCI履歴を計算
+        logger.info("Calculating M1 RCI history...")
+        m1_rci_history = self.calculate_rci_history(df_m1, short_periods)
+        
+        # M5 RCI履歴を計算（データがある場合）
+        m5_rci_history = {}
+        if df_m5 is not None and not df_m5.is_empty():
+            logger.info("Calculating M5 RCI history...")
+            m5_rci_history = self.calculate_rci_history(df_m5, long_periods)
+        
+        # チャートデータの初期設定
+        with self.data_lock:
+            self.chart_data.m1_ohlc = df_m1
+            self.chart_data.m5_ohlc = df_m5
+            self.chart_data.m1_rci = m1_rci_history
+            self.chart_data.m5_rci = m5_rci_history
+            
+            # RCI履歴の確認ログ
+            for period, values in m1_rci_history.items():
+                logger.info(f"M1 RCI[{period}]: {len(values)} values calculated")
+            for period, values in m5_rci_history.items():
+                logger.info(f"M5 RCI[{period}]: {len(values)} values calculated")
+            
+            logger.info(f"Chart data initialized: M1={df_m1.shape}, M5={df_m5.shape if df_m5 is not None else None}")
+        
+        # MultiTimeframeAnalyzerにも初期データを設定（リアルタイム処理用）
         if self.pipeline._multiframe_analyzer:
             # 初期データをバッファに追加
             for i in range(len(df_m1)):
@@ -169,38 +266,99 @@ class PipelineChartManager:
                 }
                 self.pipeline._multiframe_analyzer.add_new_bar(bar_data)
             
-            logger.info(f"Loaded {len(df_m1)} initial bars into analyzer")
-            
-            # 初期分析を実行
-            if self.pipeline._multiframe_analyzer.is_ready():
-                analysis = self.pipeline._multiframe_analyzer.analyze_streaming()
-                self.update_chart_data_from_analysis(analysis)
-        
-        # チャートデータの初期設定
-        with self.data_lock:
-            self.chart_data.m1_ohlc = df_m1
+            logger.info(f"Loaded {len(df_m1)} initial bars into analyzer for realtime processing")
     
     def update_chart_data_from_analysis(self, analysis: Optional[Dict[str, Any]]):
         """分析結果からチャートデータを更新"""
         if not analysis:
+            logger.debug("No analysis data received")
             return
         
         # analyze_streamingのステータスをチェック
         if analysis.get("status") in ["not_ready", "no_data"]:
+            logger.warning(f"Analysis not ready: {analysis.get('status')}")
             return
         
+        logger.debug(f"Analysis data received: short_rci keys={list(analysis.get('short_rci', {}).keys())}, long_rci keys={list(analysis.get('long_rci', {}).keys())}, is_new_long_bar={analysis.get('is_new_long_bar', False)}")
+        
         with self.data_lock:
-            # RCIデータの更新（キー名を修正: short_term_rci → short_rci）
+            # 短期RCIデータの更新（1分足バー完成時のみ新しい値を追加）
             if 'short_rci' in analysis:
-                for period, values in analysis['short_rci'].items():
-                    if isinstance(period, int):
-                        self.chart_data.m1_rci[period] = values if isinstance(values, list) else [values]
+                for period, value in analysis['short_rci'].items():
+                    if isinstance(period, int) and value is not None:
+                        if period not in self.chart_data.m1_rci:
+                            self.chart_data.m1_rci[period] = []
+                        
+                        # 単一値として追加（バー完成ごとに1つの値）
+                        self.chart_data.m1_rci[period].append(float(value))
+                        
+                        # メモリ管理：最新200本分のみ保持
+                        if len(self.chart_data.m1_rci[period]) > 200:
+                            self.chart_data.m1_rci[period] = self.chart_data.m1_rci[period][-200:]
+                        
+                        logger.info(f"M1 RCI[{period}] updated: {len(self.chart_data.m1_rci[period])} values, latest={float(value):.2f}")
             
-            # 長期RCIデータの更新（キー名を修正: long_term_rci → long_rci）
-            if 'long_rci' in analysis:
-                for period, values in analysis['long_rci'].items():
-                    if isinstance(period, int):
-                        self.chart_data.m5_rci[period] = values if isinstance(values, list) else [values]
+            # 長期RCIデータの更新（5分足バー完成時のみ）
+            if analysis.get('is_new_long_bar') and 'long_rci' in analysis:
+                # M5チャートデータも更新（5分足バー完成時）
+                # MultiTimeframeAnalyzerの内部バッファから5分足データを生成
+                if self.pipeline._multiframe_analyzer:
+                    # 内部バッファから5分足に変換
+                    buffer_df = self.pipeline._multiframe_analyzer.get_buffer_as_dataframe()
+                    if buffer_df is not None and not buffer_df.is_empty():
+                        # 5分足に集約（最新の5分間のOHLC）
+                        latest_timestamp = buffer_df["timestamp"][-1]
+                        five_min_ago = latest_timestamp - timedelta(minutes=5)
+                        recent_bars = buffer_df.filter(pl.col("timestamp") > five_min_ago)
+                        
+                        if not recent_bars.is_empty():
+                            # 5分足バーを作成
+                            new_m5_bar = pl.DataFrame({
+                                "timestamp": [latest_timestamp],
+                                "open": [recent_bars["open"][0]],
+                                "high": [recent_bars["high"].max()],
+                                "low": [recent_bars["low"].min()],
+                                "close": [recent_bars["close"][-1]],
+                                "volume": [recent_bars["volume"].sum()]
+                            })
+                            
+                            # M5チャートデータを更新
+                            if self.chart_data.m5_ohlc is None:
+                                self.chart_data.m5_ohlc = new_m5_bar
+                            else:
+                                self.chart_data.m5_ohlc = pl.concat([
+                                    self.chart_data.m5_ohlc,
+                                    new_m5_bar
+                                ])
+                                
+                                # メモリ管理：最新200本のみ保持
+                                if len(self.chart_data.m5_ohlc) > 200:
+                                    self.chart_data.m5_ohlc = self.chart_data.m5_ohlc[-200:]
+                            
+                            logger.info(f"M5 chart updated: {len(self.chart_data.m5_ohlc)} bars")
+                
+                # RCIデータの更新
+                for period, value in analysis['long_rci'].items():
+                    if isinstance(period, int) and value is not None:
+                        if period not in self.chart_data.m5_rci:
+                            self.chart_data.m5_rci[period] = []
+                        
+                        # 単一値として追加（5分足バー完成ごとに1つの値）
+                        self.chart_data.m5_rci[period].append(float(value))
+                        
+                        # メモリ管理：最新120本分のみ保持
+                        if len(self.chart_data.m5_rci[period]) > 120:
+                            self.chart_data.m5_rci[period] = self.chart_data.m5_rci[period][-120:]
+                        
+                        logger.info(f"M5 RCI[{period}] updated: {len(self.chart_data.m5_rci[period])} values, latest={float(value):.2f}")
+            
+            # OHLCデータの更新（1分足バー完成時）
+            if 'timestamp' in analysis:
+                # 新しい1分足バーをチャートデータに追加
+                if self.chart_data.m1_ohlc is not None:
+                    # 最新のバーデータを取得（パイプラインから取得したデータを使用）
+                    # 注：実際のOHLCデータは tick_receiver_task で送信したものを使用
+                    pass
             
             self.chart_data.last_update = datetime.now()
     
@@ -222,30 +380,86 @@ class PipelineChartManager:
                 
                 # 新しいティックの場合のみ処理
                 if tick_time > last_tick_time:
-                    # DataPointの作成
-                    data_point: DataPoint = {
-                        "timestamp": tick_time,
-                        "data": {
-                            "symbol": self.symbol,
-                            "bid": float(tick.bid),
-                            "ask": float(tick.ask),
-                            "last": float(tick.last) if hasattr(tick, 'last') else float(tick.bid),
-                            "volume": float(tick.volume) if hasattr(tick, 'volume') else 1.0
-                        },
-                        "metadata": {
-                            "source": "MT5",
-                            "tick_time": tick.time
-                        }
-                    }
+                    # CommonTickを作成
+                    common_tick = CommonTick(
+                        symbol=self.symbol,
+                        timestamp=tick_time,
+                        bid=float(tick.bid),
+                        ask=float(tick.ask),
+                        last=float(tick.last) if hasattr(tick, 'last') else float(tick.bid),
+                        volume=float(tick.volume) if hasattr(tick, 'volume') else 1.0
+                    )
                     
-                    # パイプラインに送信
-                    success = await self.pipeline.submit(data_point)
+                    # TickAdapterでDecimal形式に変換してからTickを作成
+                    tick_dict = self.tick_adapter.to_decimal_dict(common_tick)
+                    tick_for_converter = Tick(
+                        symbol=tick_dict["symbol"],
+                        timestamp=tick_dict["time"],  # time フィールドを使用
+                        bid=tick_dict["bid"],
+                        ask=tick_dict["ask"],
+                        volume=tick_dict["volume"]
+                    )
+                    completed_bar = self.tick_converter.add_tick(tick_for_converter)
                     
-                    if success:
-                        self.stats["ticks_received"] += 1
-                        self.stats["current_price"] = float(tick.bid)
+                    # バーが完成した場合のみパイプラインに送信
+                    if completed_bar:
+                        # デバッグログ追加
+                        logger.info(f"Bar completed: {completed_bar.time} O:{float(completed_bar.open):.5f} H:{float(completed_bar.high):.5f} L:{float(completed_bar.low):.5f} C:{float(completed_bar.close):.5f} V:{float(completed_bar.volume)}")
+                        
+                        # M1チャートデータを更新
                         with self.data_lock:
-                            self.chart_data.current_price = float(tick.bid)
+                            if self.chart_data.m1_ohlc is not None:
+                                # 新しいバーをDataFrameに追加
+                                new_bar_df = pl.DataFrame({
+                                    "timestamp": [completed_bar.end_time],
+                                    "open": [float(completed_bar.open)],
+                                    "high": [float(completed_bar.high)],
+                                    "low": [float(completed_bar.low)],
+                                    "close": [float(completed_bar.close)],
+                                    "volume": [float(completed_bar.volume)]
+                                })
+                                self.chart_data.m1_ohlc = pl.concat([
+                                    self.chart_data.m1_ohlc,
+                                    new_bar_df
+                                ])
+                                
+                                # メモリ管理：最新1000本のみ保持
+                                max_bars = 1000
+                                if len(self.chart_data.m1_ohlc) > max_bars:
+                                    self.chart_data.m1_ohlc = self.chart_data.m1_ohlc[-max_bars:]
+                                
+                                logger.info(f"M1 chart updated: {len(self.chart_data.m1_ohlc)} bars")
+                        
+                        # OHLCデータを含むDataPointの作成
+                        data_point: DataPoint = {
+                            "timestamp": completed_bar.end_time,
+                            "data": {
+                                "symbol": self.symbol,
+                                "open": float(completed_bar.open),
+                                "high": float(completed_bar.high),
+                                "low": float(completed_bar.low),
+                                "close": float(completed_bar.close),
+                                "volume": float(completed_bar.volume)
+                            },
+                            "metadata": {
+                                "source": "MT5",
+                                "bar_time": completed_bar.time,
+                                "tick_count": completed_bar.tick_count
+                            }
+                        }
+                        
+                        # パイプラインに送信
+                        success = await self.pipeline.submit(data_point)
+                        
+                        if success:
+                            self.stats["bars_completed"] += 1
+                            logger.debug(f"Bar sent to pipeline successfully")
+                    
+                    # ティック統計の更新（バー完成に関係なく）
+                    self.stats["ticks_received"] += 1
+                    self.stats["current_price"] = float(tick.bid)
+                    with self.data_lock:
+                        self.chart_data.current_price = float(tick.bid)
                     
                     last_tick_time = tick_time
                 
@@ -358,9 +572,10 @@ class PipelineChartManager:
             # 表示バー数の制限
             display_bars = 100
             m1_ohlc = self.chart_data.m1_ohlc.tail(display_bars) if self.chart_data.m1_ohlc is not None else None
+            m5_ohlc = self.chart_data.m5_ohlc.tail(display_bars // 5) if self.chart_data.m5_ohlc is not None and not self.chart_data.m5_ohlc.is_empty() else None
             m1_rci = {k: v[-display_bars:] if len(v) > display_bars else v 
                      for k, v in self.chart_data.m1_rci.items()}
-            m5_rci = {k: v[-display_bars:] if len(v) > display_bars else v 
+            m5_rci = {k: v[-display_bars//5:] if len(v) > display_bars//5 else v 
                      for k, v in self.chart_data.m5_rci.items()}
         
         # サブプロット作成（2列×4行）
@@ -396,15 +611,19 @@ class PipelineChartManager:
             )
             
             # M1 RCI表示
+            m1_timestamps = m1_ohlc["timestamp"].to_list()
+            
             # サブウィンドウ1 [9, 13]
             for period in [9, 13]:
                 if period in m1_rci and len(m1_rci[period]) > 0:
                     color = 'blue' if period == 9 else 'red'
-                    time_list = m1_ohlc["timestamp"].to_list()[:len(m1_rci[period])]
+                    # RCIデータ長に合わせて時間軸を調整
+                    rci_len = len(m1_rci[period])
+                    time_list = m1_timestamps[-rci_len:] if rci_len <= len(m1_timestamps) else m1_timestamps
                     fig.add_trace(
                         go.Scatter(
                             x=time_list,
-                            y=m1_rci[period],
+                            y=m1_rci[period][-len(time_list):],
                             mode='lines',
                             name=f'M1 RCI {period}',
                             line=dict(color=color, width=1.5)
@@ -416,11 +635,12 @@ class PipelineChartManager:
             colors_sw2 = ['green', 'purple', 'orange']
             for i, period in enumerate([24, 33, 48]):
                 if period in m1_rci and len(m1_rci[period]) > 0:
-                    time_list = m1_ohlc["timestamp"].to_list()[:len(m1_rci[period])]
+                    rci_len = len(m1_rci[period])
+                    time_list = m1_timestamps[-rci_len:] if rci_len <= len(m1_timestamps) else m1_timestamps
                     fig.add_trace(
                         go.Scatter(
                             x=time_list,
-                            y=m1_rci[period],
+                            y=m1_rci[period][-len(time_list):],
                             mode='lines',
                             name=f'M1 RCI {period}',
                             line=dict(color=colors_sw2[i], width=1.5)
@@ -432,11 +652,12 @@ class PipelineChartManager:
             colors_sw3 = ['brown', 'pink']
             for i, period in enumerate([66, 108]):
                 if period in m1_rci and len(m1_rci[period]) > 0:
-                    time_list = m1_ohlc["timestamp"].to_list()[:len(m1_rci[period])]
+                    rci_len = len(m1_rci[period])
+                    time_list = m1_timestamps[-rci_len:] if rci_len <= len(m1_timestamps) else m1_timestamps
                     fig.add_trace(
                         go.Scatter(
                             x=time_list,
-                            y=m1_rci[period],
+                            y=m1_rci[period][-len(time_list):],
                             mode='lines',
                             name=f'M1 RCI {period}',
                             line=dict(color=colors_sw3[i], width=1.5)
@@ -444,15 +665,48 @@ class PipelineChartManager:
                         row=4, col=1
                     )
         
+        # M5チャート（右列）
+        if m5_ohlc is not None:
+            # M5ローソク足
+            fig.add_trace(
+                go.Candlestick(
+                    x=m5_ohlc["timestamp"].to_list(),
+                    open=m5_ohlc["open"].to_list(),
+                    high=m5_ohlc["high"].to_list(),
+                    low=m5_ohlc["low"].to_list(),
+                    close=m5_ohlc["close"].to_list(),
+                    name="M5 OHLC",
+                    showlegend=False
+                ),
+                row=1, col=2
+            )
+            
+            m5_timestamps = m5_ohlc["timestamp"].to_list()
+        else:
+            # M5データがない場合は空のプレースホルダーを追加
+            m5_timestamps = []
+            fig.add_trace(
+                go.Scatter(
+                    x=[],
+                    y=[],
+                    mode='lines',
+                    name="M5 (No Data)",
+                    showlegend=False
+                ),
+                row=1, col=2
+            )
+        
         # M5 RCI（右列）
         # サブウィンドウ1 [24, 33, 48]
         colors_m5_sw1 = ['green', 'purple', 'orange']
         for i, period in enumerate([24, 33, 48]):
-            if period in m5_rci and len(m5_rci[period]) > 0:
-                # M5は時間軸が異なるので調整が必要
+            if period in m5_rci and len(m5_rci[period]) > 0 and m5_timestamps:
+                rci_len = len(m5_rci[period])
+                time_list = m5_timestamps[-rci_len:] if rci_len <= len(m5_timestamps) else m5_timestamps
                 fig.add_trace(
                     go.Scatter(
-                        y=m5_rci[period],
+                        x=time_list,
+                        y=m5_rci[period][-len(time_list):],
                         mode='lines',
                         name=f'M5 RCI {period}',
                         line=dict(color=colors_m5_sw1[i], width=1.5)
@@ -463,10 +717,13 @@ class PipelineChartManager:
         # サブウィンドウ2 [66, 108]
         colors_m5_sw2 = ['brown', 'pink']
         for i, period in enumerate([66, 108]):
-            if period in m5_rci and len(m5_rci[period]) > 0:
+            if period in m5_rci and len(m5_rci[period]) > 0 and m5_timestamps:
+                rci_len = len(m5_rci[period])
+                time_list = m5_timestamps[-rci_len:] if rci_len <= len(m5_timestamps) else m5_timestamps
                 fig.add_trace(
                     go.Scatter(
-                        y=m5_rci[period],
+                        x=time_list,
+                        y=m5_rci[period][-len(time_list):],
                         mode='lines',
                         name=f'M5 RCI {period}',
                         line=dict(color=colors_m5_sw2[i], width=1.5)
