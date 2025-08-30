@@ -39,7 +39,10 @@
       "Bash(uv pip install:*)",
       "Bash(timeout 30 python 04_24h_continuous_operation.py)",
       "Bash(timeout 30 python rci_multiframe_chart.py)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(timeout:*)",
+      "Bash(git push:*)",
+      "WebSearch"
     ],
     "additionalDirectories": [
       "C:\\c\\Users\\shota\\repos"

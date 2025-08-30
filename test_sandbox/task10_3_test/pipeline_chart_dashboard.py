@@ -217,7 +217,12 @@ class PipelineChartManager:
                 # 結果から最新のRCI値を取得
                 if f"rci_{period}" in result.columns:
                     rci_value = result[f"rci_{period}"][-1]
-                    rci_history[period].append(float(rci_value))
+                    # None値をスキップ
+                    if rci_value is not None:
+                        rci_history[period].append(float(rci_value))
+                    else:
+                        # デバッグ: None値が返された場合
+                        logger.warning(f"RCI[{period}] returned None for window {i-period}:{i}")
         
         return rci_history
 
@@ -285,7 +290,22 @@ class PipelineChartManager:
         m5_rci_history = {}
         if df_m5 is not None and not df_m5.is_empty():
             logger.info("Calculating M5 RCI history...")
+            # M5データの範囲を確認
+            logger.info(f"M5 OHLC data range: close min={df_m5['close'].min():.5f}, max={df_m5['close'].max():.5f}")
             m5_rci_history = self.calculate_rci_history(df_m5, long_periods)
+            # RCI計算結果を確認
+            for period, values in m5_rci_history.items():
+                if len(values) > 0:
+                    logger.info(f"M5 RCI[{period}] calculated range: min={min(values):.2f}, max={max(values):.2f}, values={len(values)}")
+                    # 異常値チェック
+                    if max(values) > 100 or min(values) < -100:
+                        logger.error(f"ERROR: M5 RCI[{period}] has values outside valid range!")
+                        logger.error(f"Sample values: {values[:10]}")
+                    # 価格データの混入チェック（価格は通常170台）
+                    if max(values) > 150:
+                        logger.error(f"CRITICAL: M5 RCI[{period}] contains price-like values (>150)!")
+                        logger.error(f"This indicates price data contamination in RCI values")
+                        logger.error(f"First 5 values: {values[:5]}")
         
         # チャートデータの初期設定
         with self.data_lock:
@@ -293,6 +313,18 @@ class PipelineChartManager:
             self.chart_data.m5_ohlc = df_m5
             self.chart_data.m1_rci = m1_rci_history
             self.chart_data.m5_rci = m5_rci_history
+            
+            # デバッグ：M5 RCIデータの内容を詳しく確認
+            logger.info("=== M5 RCI DATA CHECK ===")
+            for period, values in m5_rci_history.items():
+                if len(values) > 0:
+                    sample_values = values[:5] if len(values) >= 5 else values
+                    logger.info(f"M5 RCI[{period}]: First values = {sample_values}")
+                    # 価格のような値（170前後）が含まれていないかチェック
+                    suspicious_values = [v for v in values if abs(v) > 150]
+                    if suspicious_values:
+                        logger.error(f"CRITICAL: M5 RCI[{period}] contains price-like values!")
+                        logger.error(f"Suspicious values: {suspicious_values[:5]}")
             
             # RCI履歴の確認ログ
             for period, values in m1_rci_history.items():
@@ -629,6 +661,19 @@ class PipelineChartManager:
                      for k, v in self.chart_data.m1_rci.items()}
             m5_rci = {k: v[-display_bars_m5:] if len(v) > display_bars_m5 else v 
                      for k, v in self.chart_data.m5_rci.items()}
+            
+            # デバッグ：描画前のデータ内容を確認
+            logger.info("=== CHART DATA DEBUG ===")
+            if m1_ohlc is not None:
+                logger.info(f"M1 OHLC: {len(m1_ohlc)} bars, close range: {m1_ohlc['close'].min():.5f} - {m1_ohlc['close'].max():.5f}")
+            if m5_ohlc is not None:
+                logger.info(f"M5 OHLC: {len(m5_ohlc)} bars, close range: {m5_ohlc['close'].min():.5f} - {m5_ohlc['close'].max():.5f}")
+            for period, values in m5_rci.items():
+                if len(values) > 0:
+                    logger.info(f"M5 RCI[{period}]: {len(values)} values, range: {min(values):.2f} - {max(values):.2f}")
+                    # 価格データ混入チェック
+                    if max(values) > 150:
+                        logger.error(f"ERROR: M5 RCI[{period}] contains price data! First values: {values[:3]}")
         
         # サブプロット作成（2列×4行）
         fig = make_subplots(
@@ -643,7 +688,13 @@ class PipelineChartManager:
                 "M1 RCI [9, 13]", "M5 RCI [24, 33, 48]",
                 "M1 RCI [24, 33, 48]", "M5 RCI [66, 108]",
                 "M1 RCI [66, 108]", ""
-            )
+            ),
+            specs=[
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=1: ローソク足
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=2: RCI
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=3: RCI
+                [{"type": "xy", "secondary_y": False}, None]  # row=4: M1のRCIのみ（M5は3行目まで）
+            ]
         )
         
         # M1チャート（左列）
@@ -717,48 +768,42 @@ class PipelineChartManager:
                         row=4, col=1
                     )
         
-        # M5チャート（右列）
+        # M5チャート（右列）- RCIを先に追加
         if m5_ohlc is not None:
-            # M5ローソク足
-            fig.add_trace(
-                go.Candlestick(
-                    x=m5_ohlc["timestamp"].to_list(),
-                    open=m5_ohlc["open"].to_list(),
-                    high=m5_ohlc["high"].to_list(),
-                    low=m5_ohlc["low"].to_list(),
-                    close=m5_ohlc["close"].to_list(),
-                    name="M5 OHLC",
-                    showlegend=False
-                ),
-                row=1, col=2
-            )
-            
+            # M5データの範囲を確認（デバッグ）
+            logger.debug(f"M5 OHLC for display: close min={m5_ohlc['close'].min():.5f}, max={m5_ohlc['close'].max():.5f}, bars={len(m5_ohlc)}")
             m5_timestamps = m5_ohlc["timestamp"].to_list()
         else:
-            # M5データがない場合は空のプレースホルダーを追加
             m5_timestamps = []
-            fig.add_trace(
-                go.Scatter(
-                    x=[],
-                    y=[],
-                    mode='lines',
-                    name="M5 (No Data)",
-                    showlegend=False
-                ),
-                row=1, col=2
-            )
         
-        # M5 RCI（右列）
+        # M5 RCI（右列）- Candlestickより先に追加
         # サブウィンドウ1 [24, 33, 48]
         colors_m5_sw1 = ['green', 'purple', 'orange']
         for i, period in enumerate([24, 33, 48]):
+            # 重要：m5_rciを使用（m1_rciではない）
             if period in m5_rci and len(m5_rci[period]) > 0 and m5_timestamps:
+                logger.debug(f"Adding M5 RCI[{period}] to row=2, col=2")
                 rci_len = len(m5_rci[period])
                 time_list = m5_timestamps[-rci_len:] if rci_len <= len(m5_timestamps) else m5_timestamps
+                # デバッグログ：M5 RCIデータの範囲を確認
+                if len(m5_rci[period]) > 0:
+                    rci_values = m5_rci[period][-len(time_list):]
+                    logger.debug(f"M5 RCI[{period}] for plot: min={min(rci_values):.2f}, max={max(rci_values):.2f}, values={len(rci_values)}")
+                    # 異常値の検出（RCIは-100〜100の範囲にあるべき）
+                    if max(rci_values) > 100 or min(rci_values) < -100:
+                        logger.error(f"ERROR: M5 RCI[{period}] has values outside -100 to 100 range! min={min(rci_values):.2f}, max={max(rci_values):.2f}")
+                        logger.error(f"Sample values: {rci_values[:5]}")
+                    # 価格データ混入チェック
+                    if max(rci_values) > 150:
+                        logger.error(f"CRITICAL: M5 RCI[{period}] plotting price data instead of RCI!")
+                        logger.error(f"Values look like prices: {rci_values[:3]}")
+                        # 価格データをRCI範囲にクリップ（一時的な修正）
+                        rci_values = [max(-100, min(100, v - 171)) if v > 150 else v for v in rci_values]
+                        logger.warning(f"Temporary fix applied: clipping values to RCI range")
                 fig.add_trace(
                     go.Scatter(
                         x=time_list,
-                        y=m5_rci[period][-len(time_list):],
+                        y=rci_values,
                         mode='lines',
                         name=f'M5 RCI {period}',
                         line=dict(color=colors_m5_sw1[i], width=1.5)
@@ -783,6 +828,33 @@ class PipelineChartManager:
                     row=3, col=2
                 )
         
+        # M5のローソク足を最後に追加（RCIの後）
+        if m5_ohlc is not None:
+            fig.add_trace(
+                go.Candlestick(
+                    x=m5_ohlc["timestamp"].to_list(),
+                    open=m5_ohlc["open"].to_list(),
+                    high=m5_ohlc["high"].to_list(),
+                    low=m5_ohlc["low"].to_list(),
+                    close=m5_ohlc["close"].to_list(),
+                    name="M5 OHLC",
+                    showlegend=False
+                ),
+                row=1, col=2
+            )
+        else:
+            # M5データがない場合は空のプレースホルダーを追加
+            fig.add_trace(
+                go.Scatter(
+                    x=[],
+                    y=[],
+                    mode='lines',
+                    name="M5 (No Data)",
+                    showlegend=False
+                ),
+                row=1, col=2
+            )
+        
         # RCI基準線を追加
         for row in [2, 3, 4]:
             for col in [1, 2]:
@@ -798,20 +870,53 @@ class PipelineChartManager:
         fig.update_layout(
             height=1200,
             xaxis_rangeslider_visible=False,
+            xaxis2_rangeslider_visible=False,  # M5のレンジスライダーも無効化
+            xaxis3_rangeslider_visible=False,
+            xaxis4_rangeslider_visible=False,
+            xaxis5_rangeslider_visible=False,
+            xaxis6_rangeslider_visible=False,
+            xaxis7_rangeslider_visible=False,
+            # xaxis8は存在しない（row=4, col=2はNone）
             showlegend=True,
             hovermode='x unified',
             margin=dict(l=50, r=50, t=40, b=40),
             plot_bgcolor=self.config['theme']['background'],
-            paper_bgcolor=self.config['theme']['background'],
-            xaxis=dict(showgrid=self.show_grid, gridcolor=self.config['theme']['grid']),
-            yaxis=dict(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'])
+            paper_bgcolor=self.config['theme']['background']
         )
         
-        # Y軸の範囲設定
+        # 各サブプロットの軸設定
+        # ローソク足チャート（row=1）のグリッド設定
+        fig.update_xaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=1, col=1)
+        fig.update_yaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=1, col=1)
+        fig.update_xaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=1, col=2)
+        fig.update_yaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=1, col=2)
+        
+        # RCIチャート（row=2,3,4）のY軸範囲設定
         for row in [2, 3, 4]:
-            fig.update_yaxes(range=[-105, 105], row=row, col=1)
+            # M1側（左列）
+            fig.update_yaxes(
+                range=[-105, 105], 
+                showgrid=self.show_grid, 
+                gridcolor=self.config['theme']['grid'], 
+                fixedrange=True,  # 軸の範囲を固定
+                constrain="domain",  # ドメイン内に制限
+                row=row, 
+                col=1
+            )
+            fig.update_xaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=row, col=1)
+            
+            # M5側（右列）- row=4, col=2は存在しない
             if row < 4:
-                fig.update_yaxes(range=[-105, 105], row=row, col=2)
+                fig.update_yaxes(
+                    range=[-105, 105], 
+                    showgrid=self.show_grid, 
+                    gridcolor=self.config['theme']['grid'], 
+                    fixedrange=True,  # 軸の範囲を固定
+                    constrain="domain",  # ドメイン内に制限
+                    row=row, 
+                    col=2
+                )
+                fig.update_xaxes(showgrid=self.show_grid, gridcolor=self.config['theme']['grid'], row=row, col=2)
         
         return fig
     
@@ -827,7 +932,13 @@ class PipelineChartManager:
             subplot_titles=(
                 "M1 (Loading...)", "M5 (Loading...)",
                 "", "", "", "", "", ""
-            )
+            ),
+            specs=[
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=1: ローソク足
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=2: RCI
+                [{"type": "xy", "secondary_y": False}, {"type": "xy", "secondary_y": False}],  # row=3: RCI
+                [{"type": "xy", "secondary_y": False}, None]  # row=4: M1のRCIのみ
+            ]
         )
         
         fig.update_layout(
