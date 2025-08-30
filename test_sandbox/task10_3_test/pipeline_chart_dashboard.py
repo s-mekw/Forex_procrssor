@@ -463,34 +463,41 @@ class PipelineChartManager:
                         
                         logger.info(f"M5 RCI[{period}] updated: {len(self.chart_data.m5_rci[period])} values, latest={float(value):.2f}")
             
-            # OHLCデータの更新（1分足バー完成時）
-            if 'timestamp' in analysis:
-                # 新しい1分足バーをチャートデータに追加
-                if self.chart_data.m1_ohlc is not None:
-                    # 最新のバーデータを取得（パイプラインから取得したデータを使用）
-                    # 注：実際のOHLCデータは tick_receiver_task で送信したものを使用
-                    pass
-            
+            # last_updateを必ず更新（データ更新があった場合）
             self.chart_data.last_update = datetime.now()
+            logger.debug(f"Chart data last_update updated to: {self.chart_data.last_update}")
     
     async def tick_receiver_task(self):
         """MT5からティックを受信してパイプラインに送信する非同期タスク"""
         logger.info("Starting tick receiver task")
         last_tick_time = datetime.now()
+        tick_count = 0
+        error_count = 0
         
         while self.is_running:
             try:
-                # MT5からティック取得
-                tick = mt5.symbol_info_tick(self.symbol)
+                # MT5からティック取得（run_in_executorで非同期化）
+                loop = asyncio.get_running_loop()
+                tick = await loop.run_in_executor(None, mt5.symbol_info_tick, self.symbol)
                 
                 if tick is None:
+                    error_count += 1
+                    if error_count % 10 == 0:  # 10回ごとにログ出力
+                        logger.warning(f"MT5 returned None tick (count: {error_count})")
                     await asyncio.sleep(0.1)
                     continue
                 
                 tick_time = datetime.fromtimestamp(tick.time)
+                tick_count += 1
+                
+                # デバッグ: ティック受信状況を定期的にログ出力
+                if tick_count % 100 == 0:
+                    logger.info(f"Ticks received: {tick_count}, Last tick time: {tick_time}, Price: {tick.bid:.5f}")
                 
                 # 新しいティックの場合のみ処理
                 if tick_time > last_tick_time:
+                    logger.debug(f"New tick: {tick_time} > {last_tick_time}, bid={tick.bid:.5f}")
+                    
                     # CommonTickを作成
                     common_tick = CommonTick(
                         symbol=self.symbol,
@@ -540,6 +547,8 @@ class PipelineChartManager:
                                     self.chart_data.m1_ohlc = self.chart_data.m1_ohlc[-max_bars:]
                                 
                                 logger.info(f"M1 chart updated: {len(self.chart_data.m1_ohlc)} bars")
+                                # チャート更新のためにlast_updateを更新
+                                self.chart_data.last_update = datetime.now()
                         
                         # OHLCデータを含むDataPointの作成
                         data_point: DataPoint = {
@@ -565,19 +574,58 @@ class PipelineChartManager:
                         if success:
                             self.stats["bars_completed"] += 1
                             logger.debug(f"Bar sent to pipeline successfully")
+                        else:
+                            logger.warning("Failed to send bar to pipeline")
                     
                     # ティック統計の更新（バー完成に関係なく）
                     self.stats["ticks_received"] += 1
                     self.stats["current_price"] = float(tick.bid)
                     with self.data_lock:
                         self.chart_data.current_price = float(tick.bid)
+                        
+                        # 最新バーのClose価格をリアルタイム更新
+                        if self.chart_data.m1_ohlc is not None and not self.chart_data.m1_ohlc.is_empty():
+                            # 最新バーのインデックス
+                            last_idx = len(self.chart_data.m1_ohlc) - 1
+                            # Close価格を現在の価格で更新
+                            self.chart_data.m1_ohlc = self.chart_data.m1_ohlc.with_columns(
+                                pl.when(pl.arange(len(self.chart_data.m1_ohlc)) == last_idx)
+                                .then(float(tick.bid))
+                                .otherwise(pl.col("close"))
+                                .alias("close")
+                            )
+                            # High/Lowも必要に応じて更新
+                            current_high = self.chart_data.m1_ohlc["high"][last_idx]
+                            current_low = self.chart_data.m1_ohlc["low"][last_idx]
+                            if float(tick.bid) > current_high:
+                                self.chart_data.m1_ohlc = self.chart_data.m1_ohlc.with_columns(
+                                    pl.when(pl.arange(len(self.chart_data.m1_ohlc)) == last_idx)
+                                    .then(float(tick.bid))
+                                    .otherwise(pl.col("high"))
+                                    .alias("high")
+                                )
+                            if float(tick.bid) < current_low:
+                                self.chart_data.m1_ohlc = self.chart_data.m1_ohlc.with_columns(
+                                    pl.when(pl.arange(len(self.chart_data.m1_ohlc)) == last_idx)
+                                    .then(float(tick.bid))
+                                    .otherwise(pl.col("low"))
+                                    .alias("low")
+                                )
+                        
+                        # ティックごとにもlast_updateを更新（価格の更新を反映）
+                        self.chart_data.last_update = datetime.now()
                     
                     last_tick_time = tick_time
+                    error_count = 0  # エラーカウントをリセット
+                else:
+                    # 同じタイムスタンプのティック
+                    logger.debug(f"Same tick time: {tick_time} == {last_tick_time}")
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01)  # CPU負荷軽減のため待機時間を短縮
                 
             except Exception as e:
-                logger.error(f"Tick receiver error: {e}")
+                error_count += 1
+                logger.error(f"Tick receiver error: {e}, Error count: {error_count}")
                 await asyncio.sleep(1)
     
     async def result_processor_task(self):

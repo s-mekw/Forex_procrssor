@@ -11,7 +11,7 @@ max_retries = 3                 # 最大リトライ回数
 retry_delay = 1.0               # リトライ間隔（秒）
 
 [chart]
-symbol = "EURJPY#"              # 取引シンボル
+symbol = "BTCUSD#"              # 取引シンボル
 initial_bars = 1000              # 初期データのバー数（5分足RCI期間108に対応）
 display_bars_m1 = 100           # M1チャート表示バー数
 display_bars_m5 = 100            # M5チャート表示バー数（5分足用に調整）
