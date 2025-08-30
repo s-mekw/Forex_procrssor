@@ -109,6 +109,15 @@ class PipelineChartManager:
                 },
                 'tick_converter': {
                     'timeframe': 60
+                },
+                'mt5': {
+                    'login': 75334547,
+                    'password': '#Shota1627763',
+                    'server': 'XMTrading-MT5 3',
+                    'timeout': 60000,
+                    'path': 'C:\\Program Files\\XMTrading MT5\\terminal64.exe',
+                    'max_retries': 3,
+                    'retry_delay': 1.0
                 }
             }
         
@@ -177,9 +186,28 @@ class PipelineChartManager:
         """MT5接続とデータの初期化"""
         logger.info(f"Initializing PipelineChartManager for {self.symbol}")
         
-        # MT5初期化
-        if not mt5.initialize():
-            raise RuntimeError("MT5 initialization failed")
+        # MT5ConnectionManagerを使用して接続
+        mt5_config = {
+            'account': self.config['mt5'].get('login'),
+            'password': self.config['mt5'].get('password'),
+            'server': self.config['mt5'].get('server'),
+            'timeout': self.config['mt5'].get('timeout', 60000),
+            'path': self.config['mt5'].get('path'),
+            'max_retries': self.config['mt5'].get('max_retries', 3),
+            'retry_delay': self.config['mt5'].get('retry_delay', 1.0)
+        }
+        
+        # MT5ConnectionManagerのインスタンスを作成
+        self.mt5_manager = MT5ConnectionManager(mt5_config)
+        
+        # 接続試行
+        if not self.mt5_manager.connect(mt5_config):
+            # フォールバック：従来の方法で接続を試みる
+            logger.warning("MT5ConnectionManager failed, trying direct initialization")
+            if not mt5.initialize():
+                raise RuntimeError("MT5 initialization failed")
+        else:
+            logger.info("MT5 connected successfully via MT5ConnectionManager")
         
         # シンボル確認
         symbol_info = mt5.symbol_info(self.symbol)
@@ -1130,8 +1158,13 @@ def cleanup():
     if chart_manager:
         logger.info("Cleaning up...")
         chart_manager.stop_realtime()
-        if mt5.initialize():
-            mt5.shutdown()
+        # MT5ConnectionManagerを使用している場合はdisconnectを呼ぶ
+        if chart_manager.mt5_manager:
+            chart_manager.mt5_manager.disconnect()
+        else:
+            # 直接初期化した場合のクリーンアップ
+            if mt5.initialize():
+                mt5.shutdown()
         logger.info("Cleanup complete")
 
 def signal_handler(sig, frame):

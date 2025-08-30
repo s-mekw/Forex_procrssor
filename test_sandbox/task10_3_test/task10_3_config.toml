@@ -1,6 +1,15 @@
 # Task 10.3 Pipeline Chart Dashboard Configuration
 # RealtimePipelineとMultiTimeframeAnalyzerを使用したチャート設定
 
+[mt5]
+login = 75334547                # アカウント番号
+password = "#Shota1627763"      # パスワード
+server = "XMTrading-MT5 3"      # サーバー名
+timeout = 60000                 # タイムアウト（ミリ秒）
+path = "C:\\Program Files\\XMTrading MT5\\terminal64.exe"  # MT5実行ファイルのパス
+max_retries = 3                 # 最大リトライ回数
+retry_delay = 1.0               # リトライ間隔（秒）
+
 [chart]
 symbol = "EURJPY#"              # 取引シンボル
 initial_bars = 1000              # 初期データのバー数（5分足RCI期間108に対応）
@@ -24,11 +33,6 @@ long_timeframe = "5T"           # 長期タイムフレーム（5分）
 incomplete_bar_handling = "preview"  # 不完全バーの処理方法
 use_parallel = true             # 並列処理を使用
 max_workers = 4                 # 並列処理のワーカー数
-
-[mt5]
-timeout = 60000                 # タイムアウト（ミリ秒）
-max_retries = 3                 # 最大リトライ回数
-retry_delay = 1.0               # リトライ間隔（秒）
 
 [rci]
 use_float32 = true              # float32精度を使用
