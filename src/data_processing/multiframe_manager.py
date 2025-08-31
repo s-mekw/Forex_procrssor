@@ -259,6 +259,7 @@ class MultiTimeframeManager:
         if tf_data.last_bar_time is None:
             # 初回
             tf_data.last_bar_time = self._get_bar_start_time(current_time, tf_data.interval_seconds)
+            logger.debug(f"[{tf_data.timeframe}] Initial bar time set to: {tf_data.last_bar_time}")
             return False
         
         # 現在のバー開始時刻を計算
@@ -266,6 +267,9 @@ class MultiTimeframeManager:
         
         # 前回のバー時刻と比較
         if current_bar_time > tf_data.last_bar_time:
+            logger.info(f"✅ [{tf_data.timeframe}] New bar detected! "
+                       f"Previous: {tf_data.last_bar_time}, Current: {current_bar_time}, "
+                       f"Tick time: {current_time}")
             tf_data.last_bar_time = current_bar_time
             return True
         

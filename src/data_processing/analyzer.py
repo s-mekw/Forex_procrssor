@@ -703,6 +703,10 @@ class MultiTimeframeAnalyzer:
     def _is_new_long_bar_complete(self, timestamp: datetime) -> bool:
         """
         新しい5分足バーが完成したかチェックします。
+        
+        境界を超えたかどうかを判定する方式に変更。
+        （以前の timestamp.second == 0 の条件は実際のティックデータでは
+        ほぼ満たされないため）
 
         Args:
             timestamp: チェックするタイムスタンプ
@@ -712,9 +716,22 @@ class MultiTimeframeAnalyzer:
         """
         # タイムフレームのパース（"5T" -> 5分）
         interval_minutes = int(self.long_timeframe.rstrip("T"))
-
-        # タイムスタンプが5分足の境界にあるかチェック
-        return timestamp.minute % interval_minutes == 0 and timestamp.second == 0
+        
+        # 現在のバーの開始分を計算
+        current_bar_minute = (timestamp.minute // interval_minutes) * interval_minutes
+        
+        # 初回チェック時は前回のバー時刻を記録
+        if not hasattr(self, '_last_bar_minute'):
+            self._last_bar_minute = current_bar_minute
+            return False
+        
+        # バー境界を超えたかチェック
+        if current_bar_minute != self._last_bar_minute:
+            logger.debug(f"M5 bar boundary crossed: {self._last_bar_minute:02d}:00 -> {current_bar_minute:02d}:00 at {timestamp}")
+            self._last_bar_minute = current_bar_minute
+            return True
+        
+        return False
 
     def _calculate_single_rci(self, prices: np.ndarray, period: int) -> float:
         """
