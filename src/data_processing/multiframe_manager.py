@@ -172,14 +172,14 @@ class MultiTimeframeManager:
                     logger.error(f"Failed to fetch initial data for {tf_name}")
                     continue
                 
-                # DataFrameに変換
+                # DataFrameに変換（Float64を使用）
                 df = pl.DataFrame({
                     "timestamp": [datetime.fromtimestamp(r['time']) for r in rates],
-                    "open": np.array([r['open'] for r in rates], dtype=np.float32),
-                    "high": np.array([r['high'] for r in rates], dtype=np.float32),
-                    "low": np.array([r['low'] for r in rates], dtype=np.float32),
-                    "close": np.array([r['close'] for r in rates], dtype=np.float32),
-                    "volume": np.array([r['tick_volume'] for r in rates], dtype=np.float32)
+                    "open": [float(r['open']) for r in rates],
+                    "high": [float(r['high']) for r in rates],
+                    "low": [float(r['low']) for r in rates],
+                    "close": [float(r['close']) for r in rates],
+                    "volume": [float(r['tick_volume']) for r in rates]
                 })
                 
                 tf_data.completed_bars = df
