@@ -69,6 +69,7 @@ class PipelineChartManager:
         """
         # 設定ファイルを読み込み
         if config_path and os.path.exists(config_path):
+            
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.config = toml.load(f)
         else:
@@ -223,34 +224,57 @@ class PipelineChartManager:
         logger.info("Initialization complete")
     
     def calculate_rci_history(self, df: pl.DataFrame, periods: List[int]) -> Dict[int, List[float]]:
-        """全履歴データのRCIを計算"""
+        """全履歴データのRCIを計算（修正版）"""
         from src.data_processing.rci import RCICalculatorEngine
         
         rci_history = {period: [] for period in periods}
+        
+        # 全期間の最大値を取得
+        max_period = max(periods)
+        
+        # 十分なデータがある場合のみ計算
+        if len(df) < max_period:
+            logger.warning(f"Insufficient data for RCI calculation. Need {max_period}, got {len(df)}")
+            return rci_history
+        
+        # RCIエンジンを初期化
         rci_engine = RCICalculatorEngine()
         
-        # 各期間で必要な最小データ数から開始
-        for period in periods:
-            for i in range(period, len(df) + 1):
-                # 最新のperiod個のデータでRCI計算
-                window_df = df[i-period:i]
-                
-                # calculate_multipleメソッドを使用（dataパラメータを使用）
-                result = rci_engine.calculate_multiple(
-                    data=window_df,
-                    periods=[period],
-                    mode="batch"
-                )
-                
-                # 結果から最新のRCI値を取得
-                if f"rci_{period}" in result.columns:
-                    rci_value = result[f"rci_{period}"][-1]
-                    # None値をスキップ
-                    if rci_value is not None:
-                        rci_history[period].append(float(rci_value))
-                    else:
-                        # デバッグ: None値が返された場合
-                        logger.warning(f"RCI[{period}] returned None for window {i-period}:{i}")
+        # 全データで一度にRCIを計算（効率的）
+        try:
+            # calculate_multipleを使用して全期間のRCIを一度に計算
+            result = rci_engine.calculate_multiple(
+                data=df,
+                periods=periods,
+                column_name="close",  # 明示的にclose列を指定
+                mode="batch",
+                add_reliability=True
+            )
+            
+            # 各期間のRCI値を抽出
+            for period in periods:
+                rci_col = f"rci_{period}"
+                if rci_col in result.columns:
+                    # RCI値を取得（Noneではない値のみ）
+                    rci_values = result[rci_col].to_list()
+                    # 最初のperiod-1個はNoneなので、それ以降の値を取得
+                    valid_values = [float(v) for v in rci_values[period-1:] if v is not None]
+                    rci_history[period] = valid_values
+                    
+                    # 値の範囲チェック（RCIは-100〜100の範囲内であるべき）
+                    if valid_values:
+                        min_val, max_val = min(valid_values), max(valid_values)
+                        if min_val < -100 or max_val > 100:
+                            logger.error(f"RCI[{period}] values out of range: min={min_val:.2f}, max={max_val:.2f}")
+                            # 範囲外の値をクリップ
+                            rci_history[period] = [max(-100, min(100, v)) for v in valid_values]
+                        else:
+                            logger.debug(f"RCI[{period}] calculated: {len(valid_values)} values, range: [{min_val:.2f}, {max_val:.2f}]")
+                    
+        except Exception as e:
+            logger.error(f"Failed to calculate RCI history: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return rci_history
 
@@ -411,42 +435,39 @@ class PipelineChartManager:
             # 長期RCIデータの更新（5分足バー完成時のみ）
             if analysis.get('is_new_long_bar') and 'long_rci' in analysis:
                 # M5チャートデータも更新（5分足バー完成時）
-                # MultiTimeframeAnalyzerの内部バッファから5分足データを生成
+                # MultiTimeframeAnalyzerから5分足データを取得
                 if self.pipeline._multiframe_analyzer:
-                    # 内部バッファから5分足に変換
-                    buffer_df = self.pipeline._multiframe_analyzer.get_buffer_as_dataframe()
-                    if buffer_df is not None and not buffer_df.is_empty():
-                        # 5分足に集約（最新の5分間のOHLC）
-                        latest_timestamp = buffer_df["timestamp"][-1]
-                        five_min_ago = latest_timestamp - timedelta(minutes=5)
-                        recent_bars = buffer_df.filter(pl.col("timestamp") > five_min_ago)
+                    # get_long_bars メソッドを使用して5分足データを取得
+                    long_bars = self.pipeline._multiframe_analyzer.get_long_bars()
+                    
+                    if long_bars is not None and not long_bars.is_empty():
+                        # 最新の5分足バーを取得
+                        latest_m5_bar = long_bars.tail(1)
                         
-                        if not recent_bars.is_empty():
-                            # 5分足バーを作成
-                            new_m5_bar = pl.DataFrame({
-                                "timestamp": [latest_timestamp],
-                                "open": [recent_bars["open"][0]],
-                                "high": [recent_bars["high"].max()],
-                                "low": [recent_bars["low"].min()],
-                                "close": [recent_bars["close"][-1]],
-                                "volume": [recent_bars["volume"].sum()]
-                            })
+                        # M5チャートデータを更新
+                        if self.chart_data.m5_ohlc is None:
+                            self.chart_data.m5_ohlc = latest_m5_bar
+                        else:
+                            # 最新バーのタイムスタンプを確認
+                            last_m5_timestamp = self.chart_data.m5_ohlc["timestamp"][-1] if not self.chart_data.m5_ohlc.is_empty() else None
+                            new_timestamp = latest_m5_bar["timestamp"][0]
                             
-                            # M5チャートデータを更新
-                            if self.chart_data.m5_ohlc is None:
-                                self.chart_data.m5_ohlc = new_m5_bar
-                            else:
+                            # 新しいバーの場合のみ追加（重複を避ける）
+                            if last_m5_timestamp is None or new_timestamp > last_m5_timestamp:
                                 self.chart_data.m5_ohlc = pl.concat([
                                     self.chart_data.m5_ohlc,
-                                    new_m5_bar
+                                    latest_m5_bar
                                 ])
                                 
                                 # メモリ管理：設定に基づく最大バー数を保持
                                 max_m5_bars = self.config['buffer']['max_m5_bars']
                                 if len(self.chart_data.m5_ohlc) > max_m5_bars:
                                     self.chart_data.m5_ohlc = self.chart_data.m5_ohlc[-max_m5_bars:]
-                            
-                            logger.info(f"M5 chart updated: {len(self.chart_data.m5_ohlc)} bars")
+                                
+                                logger.info(f"M5 chart updated with new bar: {new_timestamp}, total bars: {len(self.chart_data.m5_ohlc)}")
+                            else:
+                                # 既存バーの更新（同じタイムスタンプ）
+                                logger.debug(f"M5 bar already exists for timestamp: {new_timestamp}")
                 
                 # RCIデータの更新
                 for period, value in analysis['long_rci'].items():
@@ -747,9 +768,6 @@ class PipelineChartManager:
             for period, values in m5_rci.items():
                 if len(values) > 0:
                     logger.info(f"M5 RCI[{period}]: {len(values)} values, range: {min(values):.2f} - {max(values):.2f}")
-                    # 価格データ混入チェック
-                    if max(values) > 150:
-                        logger.error(f"ERROR: M5 RCI[{period}] contains price data! First values: {values[:3]}")
         
         # サブプロット作成（2列×4行）
         fig = make_subplots(
@@ -862,20 +880,11 @@ class PipelineChartManager:
                 rci_len = len(m5_rci[period])
                 time_list = m5_timestamps[-rci_len:] if rci_len <= len(m5_timestamps) else m5_timestamps
                 # デバッグログ：M5 RCIデータの範囲を確認
-                if len(m5_rci[period]) > 0:
-                    rci_values = m5_rci[period][-len(time_list):]
-                    logger.debug(f"M5 RCI[{period}] for plot: min={min(rci_values):.2f}, max={max(rci_values):.2f}, values={len(rci_values)}")
-                    # 異常値の検出（RCIは-100〜100の範囲にあるべき）
-                    if max(rci_values) > 100 or min(rci_values) < -100:
-                        logger.error(f"ERROR: M5 RCI[{period}] has values outside -100 to 100 range! min={min(rci_values):.2f}, max={max(rci_values):.2f}")
-                        logger.error(f"Sample values: {rci_values[:5]}")
-                    # 価格データ混入チェック
-                    if max(rci_values) > 150:
-                        logger.error(f"CRITICAL: M5 RCI[{period}] plotting price data instead of RCI!")
-                        logger.error(f"Values look like prices: {rci_values[:3]}")
-                        # 価格データをRCI範囲にクリップ（一時的な修正）
-                        rci_values = [max(-100, min(100, v - 171)) if v > 150 else v for v in rci_values]
-                        logger.warning(f"Temporary fix applied: clipping values to RCI range")
+                rci_values = m5_rci[period][-len(time_list):]
+                # 異常値の検出とクリップ（安全対策）
+                if len(rci_values) > 0 and (max(rci_values) > 100 or min(rci_values) < -100):
+                    logger.debug(f"M5 RCI[{period}] values clipped to valid range")
+                    rci_values = [max(-100, min(100, v)) for v in rci_values]
                 fig.add_trace(
                     go.Scatter(
                         x=time_list,
