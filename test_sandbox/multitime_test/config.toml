@@ -8,7 +8,7 @@ timeout = 60000
 path = "C:\\Program Files\\XMTrading MT5\\terminal64.exe"
 
 [trading]
-symbol = "BTCUSD#"  # Bitcoin - 24/7 trading available
+symbol = "EURJPY#"  # Euro/Japanese Yen - 24/7 trading available
 timeframes = ["M1", "M5"]
 
 [chart]
@@ -24,8 +24,6 @@ debug = false          # Dash debug mode
 host = "127.0.0.1"     # Dashboard host
 
 [theme]
-background = "#1e1e1e"  # Dark background
-grid = "#333333"        # Grid color
-text = "#ffffff"        # Text color
-bullish = "#26a69a"     # Bullish candle color
-bearish = "#ef5350"     # Bearish candle color
+background = "#fffbea"          # 背景色（クリーム色）
+grid = "#e0e0e0"                # グリッド色
+text = "#000000"                # テキスト色

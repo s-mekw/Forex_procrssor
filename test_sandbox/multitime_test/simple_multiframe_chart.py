@@ -2,7 +2,7 @@
 Simple MultiTimeframe Chart Display
 M1とM5のチャートをリアルタイム表示するシンプルなテスト
 
-BTCUSD#を使用（日曜日でも取引可能）
+config.tomlで設定されたシンボルを使用
 """
 
 import sys
@@ -36,8 +36,15 @@ logger = logging.getLogger(__name__)
 class SimpleMultiframeChart:
     """シンプルなマルチタイムフレームチャート"""
     
-    def __init__(self, config_path: str = "config.toml"):
+    def __init__(self, config_path: str = None):
         """初期化"""
+        # configパスの解決
+        if config_path is None:
+            # スクリプトと同じディレクトリのconfig.tomlを使用
+            from pathlib import Path
+            script_dir = Path(__file__).parent
+            config_path = script_dir / "config.toml"
+        
         # 設定読み込み
         self.config = toml.load(config_path)
         logger.info(f"Config loaded from {config_path}")
@@ -208,7 +215,7 @@ class SimpleMultiframeChart:
         
         self.app.layout = html.Div([
             html.H1(
-                f"BTCUSD MultiTimeframe Chart - M1 & M5",
+                f"{self.symbol} MultiTimeframe Chart - M1 & M5",
                 style={'textAlign': 'center', 'color': theme['text']}
             ),
             
