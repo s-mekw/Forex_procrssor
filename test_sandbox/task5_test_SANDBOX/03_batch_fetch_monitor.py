@@ -190,7 +190,8 @@ def fetch_large_dataset(monitor: BatchProcessMonitor):
             "account": config.mt5_login,
             "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
             "server": config.mt5_server,
-            "timeout": config.mt5_timeout
+            "timeout": config.mt5_timeout,
+            "path": config.mt5_path  # MT5実行ファイルのパス
         }
         
         # MT5クライアントを作成

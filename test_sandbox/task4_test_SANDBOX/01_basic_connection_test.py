@@ -148,12 +148,11 @@ async def test_connection():
             stats_table.add_column("Metric", style="magenta")
             stats_table.add_column("Value", justify="right")
             
-            stats_table.add_row("Symbol", streamer.symbol)
-            stats_table.add_row("Buffer Size", str(streamer.buffer_size))
-            stats_table.add_row("Spike Threshold", f"{streamer.spike_threshold}σ")
-            stats_table.add_row("Backpressure Threshold", f"{streamer.backpressure_threshold * 100:.0f}%")
-            stats_table.add_row("Statistics Window", str(streamer.statistics_window))
-            stats_table.add_row("Circuit Breaker", "Open" if streamer.circuit_breaker_open else "Closed")
+            stats_table.add_row("Symbol", streamer.config.symbol)
+            stats_table.add_row("Buffer Size", str(streamer.config.buffer_size))
+            stats_table.add_row("Spike Threshold", f"{streamer.config.spike_threshold_percent:.1f}%")
+            stats_table.add_row("Backpressure Threshold", f"{streamer.config.backpressure_threshold * 100:.0f}%")
+            stats_table.add_row("Circuit Breaker", "Open" if streamer.circuit_breaker.is_open else "Closed")
             
             console.print(stats_table)
             

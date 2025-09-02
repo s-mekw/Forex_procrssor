@@ -1,4 +1,9 @@
 {
+  "env": {
+    "MAX_THINKING_TOKENS": "31999",
+    "DISABLE_MICROCOMPACT": "true",
+    "DISABLE_INTERLEAVED_THINKING": "true"
+  },
   "permissions": {
     "allow": [
       "mcp__serena__list_dir",
@@ -25,7 +30,22 @@
       "Bash(timeout 10 python test_sandbox/task6_test_SANDBOX/01_basic_tick_to_bar.py)",
       "Bash(timeout 10 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
       "Bash(timeout 15 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
-      "Bash(timeout 30 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)"
+      "Bash(timeout 30 python test_sandbox/task6_test_SANDBOX/02_realtime_bar_builder.py)",
+      "Bash(git commit:*)",
+      "Bash(pytest:*)",
+      "Bash(git log:*)",
+      "mcp__serena__insert_before_symbol",
+      "Bash(uv pip show:*)",
+      "Bash(uv pip install:*)",
+      "Bash(timeout 30 python 04_24h_continuous_operation.py)",
+      "Bash(timeout 30 python rci_multiframe_chart.py)",
+      "Bash(dir:*)",
+      "Bash(timeout:*)",
+      "Bash(git push:*)",
+      "WebSearch"
+    ],
+    "additionalDirectories": [
+      "C:\\c\\Users\\shota\\repos"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -33,7 +53,7 @@
     "context7",
     "serena"
   ],
-  "outputStyle": "Explanatory",
+  "outputStyle": "default",
   "comment": "Claude Code Settings - Simplified Configuration",
   "description": "ワークフローでサブエージェントを効率的に使うための最小限の設定"
 }

@@ -35,6 +35,7 @@ class TestBaseConfig:
         assert config.mt5_password is None
         assert config.mt5_server == "MetaQuotes-Demo"
         assert config.mt5_timeout == 60000
+        assert config.mt5_path is None
         
         # DB設定
         assert config.db_host == "localhost"
@@ -64,12 +65,14 @@ class TestBaseConfig:
             "FOREX_APP_NAME": "test_app",
             "FOREX_DEBUG": "true",
             "FOREX_MT5_LOGIN": "12345",
+            "FOREX_MT5_PATH": "C:\\Test\\MT5\\terminal64.exe",
             "FOREX_BATCH_SIZE": "5000",
         }):
             config = BaseConfig()
             assert config.app_name == "test_app"
             assert config.debug is True
             assert config.mt5_login == 12345
+            assert config.mt5_path == "C:\\Test\\MT5\\terminal64.exe"
             assert config.batch_size == 5000
     
     def test_log_level_validation(self):

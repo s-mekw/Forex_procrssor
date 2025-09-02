@@ -54,21 +54,22 @@
 
 ## フェーズ3: 高速データ処理パイプライン
 
-- [ ] 7. Polarsデータ処理基盤の構築
+- [X] 7. Polarsデータ処理基盤の構築
   - tests/unit/test_data_processor.pyにPolars処理とメモリ最適化のテストを作成
   - src/data_processing/processor.pyにPolarsProcessingEngineクラスを実装
   - LazyFrameによる遅延評価とFloat32統一のスキーマを定義
   - チャンク処理とストリーミング処理の切り替えロジックを実装
   - _要件: 2.1_
 
-- [ ] 8. テクニカル指標計算エンジンの実装
+- [X] 8. テクニカル指標計算エンジンの実装
   - tests/unit/test_indicators.pyに各指標の計算精度テストを作成
   - src/data_processing/indicators.pyにTechnicalIndicatorEngineクラスを実装
   - polars-ta-extensionを使用したEMA（5、20、50、100、200期間）計算を実装
+    - polars-ta-extensionは"https://github.com/Yvictor/polars_ta_extension"
   - 増分計算による効率的な更新メカニズムを追加
   - _要件: 2.2_
 
-- [ ] 9. RCI計算エンジンの高速実装
+- [X] 9. RCI計算エンジンの高速実装
   - tests/unit/test_rci.pyにRCI計算とパラメータ検証のテストを作成
   - src/data_processing/rci.pyにRCICalculatorクラスを実装
   - 設定可能な期間リストのRCI計算を実装（エンジンは汎用）
@@ -76,14 +77,14 @@
   - Polars Expressionによる高速ランキング処理を実装
   - _要件: 2.3_
 
-- [ ] 10.1. リアルタイム処理パイプライン基盤の構築
+- [X] 10.1. リアルタイム処理パイプライン基盤の構築
   - tests/integration/test_data_pipeline.pyに非同期処理とバックプレッシャーのテストを作成
   - src/data_processing/pipelines.pyにRealtimePipelineクラスの骨格を実装
   - asyncioベースの非同期データフロー処理を実装（1分足データをパススルー）
   - 1秒を超える遅延時のアラート機能を追加
   - _要件: 2.4_
 
-- [ ] 10.2. マルチタイムフレーム分析機能の実装
+- [X] 10.2. マルチタイムフレーム分析機能の実装
   - 1分足データから5分足データを動的にリサンプリングする機能をパイプラインに追加
   - 短期RCI（1分足ベース）と長期RCI（5分足ベース）の計算をオーケストレーション
   - 期間セットを明示: 短期（1分足）=[9, 13, 24, 33, 48, 66, 108]、長期（5分足）=[24, 33, 48, 66, 108]（120/165/240/330/540期間の代替）
@@ -91,7 +92,7 @@
   - マルチタイムフレーム処理の結合とデータ整合性を検証するテストを作成
   - _要件: 2.5_
 
-- [ ] 10.3. パイプラインのリファクタリングと責務の明確化
+- [X] 10.3. パイプラインのリファクタリングと責務の明確化
   - src/data_processing/analyzer.py に MultiFrameAnalyzer クラスを新設
   - RealtimePipeline からマルチタイムフレーム分析ロジックを MultiFrameAnalyzer に移譲
   - RealtimePipeline はデータフロー管理に専念し、MultiFrameAnalyzer をコンポーネントとして利用する構成に変更

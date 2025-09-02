@@ -1,0 +1,31 @@
+# MultiTimeframe Chart Test Configuration
+
+[mt5]
+account = 75334547
+password = "#Shota1627763"
+server = "XMTrading-MT5 3"
+timeout = 60000
+path = "C:\\Program Files\\XMTrading MT5\\terminal64.exe"
+
+[trading]
+symbol = "EURJPY#"  # Euro/Japanese Yen - 24/7 trading available
+timeframes = ["M1", "M5"]
+
+[chart]
+initial_bars = 200      # Initial bars to load from MT5
+max_bars = 500          # Maximum bars to keep in memory
+display_bars_m1 = 100   # Number of M1 bars to display
+display_bars_m5 = 100   # Number of M5 bars to display
+update_interval = 1000  # Chart update interval in milliseconds
+
+[dash]
+port = 8060            # Dashboard port
+debug = false          # Dash debug mode
+host = "127.0.0.1"     # Dashboard host
+
+[theme]
+background = "#fffbea"          # 背景色（クリーム色）
+grid = "#e0e0e0"                # グリッド色
+text = "#000000"                # テキスト色
+bullish = "#26a69a"             # 上昇ローソク足の色（緑）
+bearish = "#ef5350"             # 下降ローソク足の色（赤）

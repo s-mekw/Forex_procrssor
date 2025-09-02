@@ -123,6 +123,8 @@ markers = [
     "mt5: MT5接続が必要なテスト",
     "influxdb: InfluxDB接続が必要なテスト",
     "gpu: GPU環境が必要なテスト",
+    "benchmark: パフォーマンスベンチマークテスト",
+    "asyncio: 非同期テスト用のマーカー",
 ]
 filterwarnings = [
     "error",
@@ -158,6 +160,10 @@ exclude_lines = [
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+# pytest-asyncio設定
+[tool.pytest-asyncio]
+asyncio_mode = "auto"
 
 # Black設定
 [tool.black]

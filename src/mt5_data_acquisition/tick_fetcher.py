@@ -504,6 +504,15 @@ class TickDataStreamer:
         # 新しいティック追跡用のインデックス
         self._last_read_index: int = 0
         self._tick_counter: int = 0  # 総ティック数のカウンター
+        
+        # 統計情報の初期化
+        self.stats: dict[str, Any] = {
+            "mean": 0.0,
+            "std": 0.0,
+            "sample_count": 0,
+            "spike_count": 0,
+            "last_update": None,
+        }
 
     @property
     def buffer_usage(self) -> float:

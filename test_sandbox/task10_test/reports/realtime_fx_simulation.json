@@ -1,0 +1,47 @@
+{
+  "report_timestamp": "2025-08-26T23:33:27.657989",
+  "summary": {
+    "total_tests": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "results": [
+    {
+      "test_name": "リアルタイムFX市場シミュレーション",
+      "status": "PASSED",
+      "duration_seconds": 66.866904,
+      "timestamp": "2025-08-26T23:33:27.654080",
+      "error_message": null,
+      "logs": [
+        "総メッセージ数: 1029",
+        "平均遅延: 0.223秒",
+        "アラート数: 27",
+        "バックプレッシャーイベント: 171",
+        "安定性スコア: 93.6/100"
+      ],
+      "performance": {
+        "test_name": "リアルタイムFX市場シミュレーション",
+        "duration_seconds": 66.87,
+        "total_messages": 1035,
+        "successful_messages": 1025,
+        "failed_messages": 164,
+        "avg_latency_ms": 15.16,
+        "max_latency_ms": 15.16,
+        "min_latency_ms": 15.16,
+        "throughput_per_sec": 15.48,
+        "success_rate_percent": 99.03,
+        "backpressure_events": 158,
+        "alert_count": 42,
+        "alert_distribution": {
+          "unknown": 18,
+          "medium": 4,
+          "high": 5,
+          "critical": 15
+        },
+        "memory_usage_mb": null,
+        "cpu_usage_percent": null,
+        "timestamp": "2025-08-26T23:33:27.654080"
+      }
+    }
+  ]
+}

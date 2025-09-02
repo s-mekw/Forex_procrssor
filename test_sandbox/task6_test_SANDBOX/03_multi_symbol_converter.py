@@ -319,6 +319,7 @@ async def main():
             "password": config.mt5_password.get_secret_value() if config.mt5_password else None,
             "server": config.mt5_server,
             "timeout": config.mt5_timeout,
+            "path": config.mt5_path,  # MT5実行ファイルのパス
             "retry_count": 3,
             "retry_delay": 1
         }

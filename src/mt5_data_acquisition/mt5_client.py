@@ -109,14 +109,37 @@ class MT5ConnectionManager:
             return False
 
         try:
-            # 1. MT5の初期化
+            # 認証情報を取得
+            login = config.get("account")
+            password = config.get("password")
+            server = config.get("server")
+            timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
             path = config.get("path")
-            if path:
-                # パスが指定されている場合
+
+            # 1. MT5の初期化
+            # Axiory MT5などの特定のブローカーでは、初期化時に認証情報も同時に渡す必要がある
+            if path and login and password and server:
+                # すべての情報がある場合は、初期化時にログイン情報も渡す
+                self.logger.info(f"MT5を初期化します（パス付き、認証情報付き）: {path}")
+                init_result = mt5.initialize(
+                    path=path,
+                    login=login,
+                    password=password,
+                    server=server,
+                    timeout=timeout
+                )
+                # この場合、初期化成功=ログイン成功
+                need_separate_login = False
+            elif path:
+                # パスのみ指定されている場合
+                self.logger.info(f"MT5を初期化します（パス付き）: {path}")
                 init_result = mt5.initialize(path=path)
+                need_separate_login = True
             else:
                 # パスが指定されていない場合（デフォルトパス使用）
+                self.logger.info("MT5を初期化します（デフォルトパス）")
                 init_result = mt5.initialize()
+                need_separate_login = True
 
             if not init_result:
                 # 初期化失敗
@@ -124,24 +147,21 @@ class MT5ConnectionManager:
                 self.logger.error(f"MT5の初期化に失敗しました: {error}")
                 return False
 
-            # 2. MT5へのログイン
-            login = config.get("account")
-            password = config.get("password")
-            server = config.get("server")
-            timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
+            # 2. 必要に応じて別途ログイン
+            if need_separate_login:
+                self.logger.info("MT5にログインします...")
+                # ログイン実行
+                login_result = mt5.login(
+                    login=login, password=password, server=server, timeout=timeout
+                )
 
-            # ログイン実行
-            login_result = mt5.login(
-                login=login, password=password, server=server, timeout=timeout
-            )
-
-            if not login_result:
-                # ログイン失敗
-                error = mt5.last_error()
-                self.logger.error(f"MT5へのログインに失敗しました: {error}")
-                # 初期化は成功したが、ログインに失敗した場合はshutdownする
-                mt5.shutdown()
-                return False
+                if not login_result:
+                    # ログイン失敗
+                    error = mt5.last_error()
+                    self.logger.error(f"MT5へのログインに失敗しました: {error}")
+                    # 初期化は成功したが、ログインに失敗した場合はshutdownする
+                    mt5.shutdown()
+                    return False
 
             # 3. 接続成功時の処理
             # ターミナル情報の取得
