@@ -5,6 +5,7 @@ including connection management, health checks, and basic CRUD operations.
 """
 
 import logging
+import os
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -292,6 +293,84 @@ class InfluxDBHandler:
         self.verify_ssl = verify_ssl
         self._client: InfluxDBClient | None = None
         self._is_connected = False
+
+    @classmethod
+    def from_env(cls) -> "InfluxDBHandler":
+        """Create InfluxDBHandler instance from environment variables.
+
+        Environment variables:
+            INFLUXDB_URL: The InfluxDB server URL (default: http://localhost:8086)
+            INFLUXDB_TOKEN: The authentication token (required)
+            INFLUXDB_ORG: The organization name (required)
+            INFLUXDB_BUCKET: The bucket name (required)
+            INFLUXDB_TIMEOUT: Connection timeout in ms (default: 10000)
+            INFLUXDB_VERIFY_SSL: Whether to verify SSL (default: true)
+
+        Returns:
+            InfluxDBHandler instance configured from environment variables.
+
+        Raises:
+            ValueError: If required environment variables are missing.
+
+        Example:
+            >>> # Set environment variables first
+            >>> import os
+            >>> os.environ['INFLUXDB_TOKEN'] = 'your-token'
+            >>> os.environ['INFLUXDB_ORG'] = 'your-org'
+            >>> os.environ['INFLUXDB_BUCKET'] = 'your-bucket'
+            >>> # Create handler from environment
+            >>> handler = InfluxDBHandler.from_env()
+        """
+        # Get required environment variables
+        token = os.getenv("INFLUXDB_TOKEN")
+        org = os.getenv("INFLUXDB_ORG")
+        bucket = os.getenv("INFLUXDB_BUCKET")
+
+        # Validate required variables
+        missing_vars = []
+        if not token:
+            missing_vars.append("INFLUXDB_TOKEN")
+        if not org:
+            missing_vars.append("INFLUXDB_ORG")
+        if not bucket:
+            missing_vars.append("INFLUXDB_BUCKET")
+
+        if missing_vars:
+            raise ValueError(
+                f"Missing required environment variables: {', '.join(missing_vars)}"
+            )
+
+        # Get optional environment variables with defaults
+        url = os.getenv("INFLUXDB_URL", "http://localhost:8086")
+        timeout_str = os.getenv("INFLUXDB_TIMEOUT", "10000")
+        verify_ssl_str = os.getenv("INFLUXDB_VERIFY_SSL", "true")
+
+        # Parse timeout
+        try:
+            timeout = int(timeout_str)
+            if timeout <= 0:
+                raise ValueError(f"Invalid timeout value: {timeout}")
+        except ValueError as e:
+            raise ValueError(f"Invalid INFLUXDB_TIMEOUT value: {timeout_str}") from e
+
+        # Parse verify_ssl
+        verify_ssl = verify_ssl_str.lower() in ("true", "yes", "1", "on")
+
+        # Log configuration (without sensitive token)
+        logger.info(
+            f"Creating InfluxDBHandler from environment: "
+            f"url={url}, org={org}, bucket={bucket}, "
+            f"timeout={timeout}, verify_ssl={verify_ssl}"
+        )
+
+        return cls(
+            url=url,
+            token=token,
+            org=org,
+            bucket=bucket,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+        )
 
     async def connect(self) -> None:
         """Establish connection to InfluxDB.

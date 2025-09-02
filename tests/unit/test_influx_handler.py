@@ -4,6 +4,7 @@ This module contains unit tests for InfluxDBHandler class,
 including connection management and health check functionality.
 """
 
+import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -703,7 +704,7 @@ class TestInfluxDBHandler:
             influx_handler._client = MagicMock()
 
             # Query with broker filter
-            df = await influx_handler.query_ohlc(
+            await influx_handler.query_ohlc(
                 symbol="EURUSD",
                 timeframe="M5",
                 start_time=datetime(2024, 1, 1, 12, 0, 0),
@@ -780,7 +781,7 @@ class TestInfluxDBHandler:
 
             # Query with filters
             filters = {"tag1": "value1", "tag2": "value2"}
-            df = await influx_handler.query_time_range(
+            await influx_handler.query_time_range(
                 measurement="test",
                 start_time=datetime(2024, 1, 1, 12, 0, 0),
                 filters=filters,
@@ -818,6 +819,166 @@ class TestInfluxDBHandler:
                 measurement="test",
                 start_time=datetime.now(),
             )
+
+    def test_from_env_success(self):
+        """Test creating handler from environment variables with all required values."""
+        # Set up environment variables
+        env_vars = {
+            "INFLUXDB_URL": "http://test-server:8086",
+            "INFLUXDB_TOKEN": "test-token-123",
+            "INFLUXDB_ORG": "test-organization",
+            "INFLUXDB_BUCKET": "test-bucket-env",
+            "INFLUXDB_TIMEOUT": "5000",
+            "INFLUXDB_VERIFY_SSL": "false",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            handler = InfluxDBHandler.from_env()
+
+            assert handler.url == "http://test-server:8086"
+            assert handler.token == "test-token-123"
+            assert handler.org == "test-organization"
+            assert handler.bucket == "test-bucket-env"
+            assert handler.timeout == 5000
+            assert handler.verify_ssl is False
+
+    def test_from_env_with_defaults(self):
+        """Test creating handler from environment with default optional values."""
+        # Set only required environment variables
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token-456",
+            "INFLUXDB_ORG": "test-org-default",
+            "INFLUXDB_BUCKET": "test-bucket-default",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Clear optional vars to ensure defaults are used
+            for key in ["INFLUXDB_URL", "INFLUXDB_TIMEOUT", "INFLUXDB_VERIFY_SSL"]:
+                os.environ.pop(key, None)
+
+            handler = InfluxDBHandler.from_env()
+
+            assert handler.url == "http://localhost:8086"  # Default
+            assert handler.token == "test-token-456"
+            assert handler.org == "test-org-default"
+            assert handler.bucket == "test-bucket-default"
+            assert handler.timeout == 10000  # Default
+            assert handler.verify_ssl is True  # Default
+
+    def test_from_env_missing_token(self):
+        """Test that missing INFLUXDB_TOKEN raises ValueError."""
+        env_vars = {
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Ensure TOKEN is not set
+            os.environ.pop("INFLUXDB_TOKEN", None)
+
+            with pytest.raises(
+                ValueError,
+                match="Missing required environment variables: INFLUXDB_TOKEN",
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_missing_org(self):
+        """Test that missing INFLUXDB_ORG raises ValueError."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_BUCKET": "test-bucket",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Ensure ORG is not set
+            os.environ.pop("INFLUXDB_ORG", None)
+
+            with pytest.raises(
+                ValueError, match="Missing required environment variables: INFLUXDB_ORG"
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_missing_bucket(self):
+        """Test that missing INFLUXDB_BUCKET raises ValueError."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Ensure BUCKET is not set
+            os.environ.pop("INFLUXDB_BUCKET", None)
+
+            with pytest.raises(
+                ValueError,
+                match="Missing required environment variables: INFLUXDB_BUCKET",
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_missing_multiple(self):
+        """Test that missing multiple required variables lists all missing."""
+        with patch.dict(os.environ, {}, clear=False):
+            # Clear all InfluxDB environment variables
+            for key in ["INFLUXDB_TOKEN", "INFLUXDB_ORG", "INFLUXDB_BUCKET"]:
+                os.environ.pop(key, None)
+
+            with pytest.raises(
+                ValueError,
+                match="Missing required environment variables: INFLUXDB_TOKEN, INFLUXDB_ORG, INFLUXDB_BUCKET",
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_invalid_timeout(self):
+        """Test that invalid INFLUXDB_TIMEOUT raises ValueError."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+            "INFLUXDB_TIMEOUT": "not-a-number",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            with pytest.raises(
+                ValueError, match="Invalid INFLUXDB_TIMEOUT value: not-a-number"
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_negative_timeout(self):
+        """Test that negative timeout raises ValueError."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+            "INFLUXDB_TIMEOUT": "-1000",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            with pytest.raises(
+                ValueError, match="Invalid INFLUXDB_TIMEOUT value: -1000"
+            ):
+                InfluxDBHandler.from_env()
+
+    def test_from_env_verify_ssl_variations(self):
+        """Test various INFLUXDB_VERIFY_SSL values."""
+        base_env = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+        }
+
+        # Test values that should be True
+        for ssl_value in ["true", "True", "TRUE", "yes", "YES", "1", "on", "ON"]:
+            env_vars = {**base_env, "INFLUXDB_VERIFY_SSL": ssl_value}
+            with patch.dict(os.environ, env_vars, clear=False):
+                handler = InfluxDBHandler.from_env()
+                assert handler.verify_ssl is True, f"Failed for value: {ssl_value}"
+
+        # Test values that should be False
+        for ssl_value in ["false", "False", "FALSE", "no", "NO", "0", "off", "OFF"]:
+            env_vars = {**base_env, "INFLUXDB_VERIFY_SSL": ssl_value}
+            with patch.dict(os.environ, env_vars, clear=False):
+                handler = InfluxDBHandler.from_env()
+                assert handler.verify_ssl is False, f"Failed for value: {ssl_value}"
 
 
 class TestOHLCDataPoint:
