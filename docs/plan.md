@@ -1,255 +1,110 @@
-# Task 10.3 実装計画
+## 汎用実装計画（リンク集・導線テンプレート）
 
-## 現在の対象タスク
-- [ ] 10.3. パイプラインのリファクタリングと責務の明確化
-  - src/data_processing/analyzer.py に MultiTimeframeAnalyzer クラス実装 ✅ (実装済み)
-  - RealtimePipeline からマルチタイムフレーム分析ロジックを MultiTimeframeAnalyzer に移譲
-  - RealtimePipeline はデータフロー管理に専念し、MultiTimeframeAnalyzer をコンポーネントとして利用する構成に変更
-  - Analyzer専門のユニットテスト(tests/unit/test_analyzer.py)を作成し、ロジックの堅牢性を保証
-  - _要件: 2.4, 2.5 (リファクタリング)_ of `../.kiro/specs/Forex_procrssor/requirements.md`
+このファイルは、../.kiro/specs/Forex_procrssor/tasks.md に定義された任意のタスクを実装するための最小限の導線です。具体的な設計・仕様は各ドキュメントへ直接リンクし、本ファイルには詳細を書きません。
 
-## 実装ステップ
+### タスク選択
+- 対象タスクは `../.kiro/specs/Forex_procrssor/tasks.md` を参照し、対応するチェックリスト/説明/要件番号を確認してください。
+- 現在の対象タスク: 
+  - [ ] 11. InfluxDB接続とデータモデル設定
+  - tests/unit/test_influx_handler.pyに接続とクエリのテストを作成
+  - src/storage/influx_handler.pyにInfluxDBHandlerクラスを実装
+  - 環境変数による接続設定と認証を実装
+  - タグ（通貨ペア、時間足）とフィールド（OHLC、Volume）のスキーマを定義
+  - _要件: 3.1_ of `../.kiro/specs/Forex_procrssor/requirements.md`
+- 
+### 参照ドキュメント（必読）
+- 実装タスク一覧: `../.kiro/specs/Forex_procrssor/tasks.md`
+- 要件定義: `../.kiro/specs/Forex_procrssor/requirements.md`
+- 詳細設計: `../.kiro/specs/Forex_procrssor/design.md`
+- スペック概要: `../.kiro/specs/Forex_procrssor/spec.json`
+- 技術方針: `../.kiro/steering/tech.md`
+- 構造/モジュール方針: `../.kiro/steering/structure.md`
+- Python開発ガイドライン: `../.kiro/steering/Python_Development_Guidelines.md`
+- プロダクト方針: `../.kiro/steering/product.md`
 
-### Step 1: 現状分析と設計確認
-- ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py
-- 作業: 現在のコード構造を確認し、責務分離の境界を明確化
-- 完了: [x]
+### 実装の置き場所（指針のみ）
+- 実装するディレクトリ/モジュールは `../.kiro/steering/structure.md` の方針に従い選定してください。
+- 例: `src/common/`、`src/mt5_data_acquisition/`、`src/data_processing/`、`src/storage/`、`src/patchTST_model/`、`src/app/`、`src/production/` など（詳細は設計参照）。
+  
+### テストの置き場所（指針のみ）
+- `tests/unit/`（ユニット）、`tests/integration/`（統合）、`tests/e2e/`（E2E）配下に配置。
+- テスト観点・項目は各タスクの記述に従い、詳細は `../.kiro/specs/Forex_procrssor/design.md` および `requirements.md` を参照。
 
-### Step 2: RealtimePipelineのリファクタリング準備
-- ファイル: src/data_processing/pipelines.py
-- 作業: マルチタイムフレーム分析ロジックの抽出対象を特定
-- 完了: [x]
+### 完了条件（DoD の参照）
+- 当該タスクのチェック項目が満たされ、関連する要件の受け入れ条件に適合していること。
+- ビルド/テストがグリーンであること（`pyproject.toml` の設定に準拠）。
+- 
+### 作業メモ欄（自由記述）
 
-### Step 3: MultiTimeframeAnalyzerへの責務移譲
-- ファイル: src/data_processing/analyzer.py
-- 作業: バッファ管理機能をMultiTimeframeAnalyzerに実装
-  - バッファ管理プロパティの追加（_data_buffer, _max_history_bars）
-  - add_new_bar()メソッドの実装
-  - _manage_buffer_size()メソッドの実装
-  - get_buffer_size(), is_ready(), get_buffer_as_dataframe()メソッドの実装
-  - analyze_streaming()メソッドの改良（内部バッファ対応）
-- 完了: [x]
+#### タスク11: InfluxDB接続とデータモデル設定 - 実装計画
 
-### Step 4: RealtimePipelineの簡素化
-- ファイル: src/data_processing/pipelines.py
-- 作業: データフロー管理に特化した実装に変更
-  - __init__メソッド: max_history_barsをMultiTimeframeAnalyzerに渡すように修正（L83）
-  - _data_bufferの削除（L79）
-  - バッファ管理コードの削除（L203, L205-207）
-  - 最小バー数チェックとDataFrame変換の削除（L210-213）
-  - analyze_streaming()の呼び出しをパラメータなしに変更（L216-220）
-  - MultiTimeframeAnalyzerのadd_new_bar()とis_ready()を使用
-  - ログメッセージをget_buffer_size()を使用するように更新（L238-241）
-- 完了: [x]
+##### 実装ステップ詳細
 
-### Step 5: インターフェース設計の改善
-- ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py
-- 作業: 依存性注入パターンの適用、モジュール間の結合度低減
-- 完了: [x]
+**Step 1: テスト環境の準備とInfluxDBクライアントパッケージの追加**
+- influxdb-client-python パッケージを uv add で追加
+- 開発環境用のInfluxDBモックライブラリを追加（必要に応じて）
 
-### Step 6: ユニットテストの作成（基本テスト）
-- ファイル: tests/unit/test_multiframe_analyzer.py
-- 作業: MultiTimeframeAnalyzerのバッファ管理機能に対する基本的な単体テスト実装
-  - TestBufferManagement: バッファ管理の基本機能テスト（4テストケース）
-  - TestAnalysisReadiness: 分析準備状態のテスト（3テストケース）
-  - TestDataFrameConversion: DataFrame変換のテスト（3テストケース）
-  - TestInternalBufferMode: 内部バッファモードのテスト（3テストケース）
-- 完了: [x]
+**Step 2: InfluxDBHandlerクラスの接続設定とヘルスチェック機能の実装**
+- src/storage/influx_handler.py を新規作成
+- 基本的な接続管理（connect, disconnect）メソッドの実装
+- health_check メソッドで接続状態を確認する機能を実装
+- 非同期対応（async/await）での実装
 
-### Step 7: ユニットテストの作成（エッジケース）
-- ファイル: tests/unit/test_multiframe_analyzer.py
-- 作業: エッジケース、エラーハンドリングテストの追加
-  - TestEdgeCasesExtendedクラス：
-    - test_add_bar_with_none: None値のバー追加テスト ✅
-    - test_add_bar_with_invalid_data: 無効データ型のテスト ✅
-    - test_negative_values_in_bar: 負の価格データテスト ✅
-    - test_nan_values_handling: NaN値処理テスト ✅
-    - test_infinity_values_handling: 無限大値処理テスト ✅
-  - TestErrorHandlingExtendedクラス：
-    - test_buffer_overflow_protection: バッファオーバーフロー保護 ✅
-    - test_corrupt_data_handling: 破損データ処理 ✅
-    - test_type_mismatch_handling: データ型不一致処理 ✅
-    - test_memory_efficiency_large_buffer: 巨大バッファのメモリ効率 ✅
-    - test_timestamp_validation: タイムスタンプ検証 ✅
-- 完了: [x]
+**Step 3: データモデル（タグ・フィールド）のスキーマ定義**
+- Line Protocolフォーマットの定義
+- タグ: symbol（通貨ペア）、timeframe（時間足）、broker（ブローカー識別子）
+- フィールド: open、high、low、close、volume、spread（すべてFloat32）
+- OHLCデータ用のDataPointクラスまたは辞書形式の定義
 
-### Step 8: 統合テストの更新
-- ファイル: tests/integration/test_data_pipeline.py
-- 作業: リファクタリング後の動作確認テスト
-  - TestMultiframeIntegration: RealtimePipelineとMultiTimeframeAnalyzerの連携テスト（4テストケース）
-    - test_pipeline_multiframe_data_flow: データフロー全体の検証
-    - test_buffer_synchronization: バッファ管理の同期確認
-    - test_analyzer_state_consistency: 分析器の状態一貫性
-    - test_pipeline_restart_recovery: パイプライン再起動時の復旧
-  - TestEndToEndIntegration: エンドツーエンドの検証（4テストケース）
-    - test_realtime_data_processing: リアルタイムデータ処理の検証
-    - test_large_volume_processing: 大量データ処理のパフォーマンス
-    - test_multiframe_analysis_accuracy: マルチタイムフレーム分析精度
-    - test_error_recovery_flow: エラー復旧フローの確認
-  - TestPerformanceIntegration: パフォーマンス検証（4テストケース）
-    - test_throughput_measurement: スループット測定
-    - test_latency_monitoring: レイテンシー監視
-    - test_memory_efficiency: メモリ効率検証
-    - test_cpu_utilization: CPU使用率測定
-- 完了: [x]
+**Step 4: 接続とヘルスチェックのユニットテスト作成**
+- tests/unit/test_influx_handler.py を新規作成
+- 接続成功/失敗のテストケース
+- ヘルスチェックの正常/異常時のテストケース
+- 環境変数が設定されていない場合のエラーハンドリングテスト
 
-### Step 9: ドキュメント更新
-- ファイル: docs/architecture/, docs/performance/, docs/api/, docs/tests/, docs/guidelines/
-- 作業: Task 10.3の成果を包括的にドキュメント化
-  - docs/architecture/task_10_3_refactoring.md: アーキテクチャ変更の詳細
-    - リファクタリングの目的と背景
-    - 責務分離の設計原則
-    - 実装前後のアーキテクチャ比較
-    - 技術的決定事項
-  - docs/performance/task_10_3_performance.md: パフォーマンス測定結果
-    - スループット測定結果（500+ msgs/sec）
-    - レイテンシー分析（P50/P95/P99）
-    - メモリ効率の検証
-    - CPU使用率の分析
-  - docs/api/multiframe_analyzer_api.md: 新API仕様
-    - バッファ管理API（add_new_bar, get_buffer_size, is_ready）
-    - analyze_streamingメソッドの仕様変更
-    - 後方互換性の維持方法
-    - 使用例とベストプラクティス
-  - docs/tests/task_10_3_test_summary.md: テスト結果サマリー
-    - ユニットテスト（23個、全合格）
-    - 統合テスト（25個、新規12個追加）
-    - カバレッジ向上（analyzer.py 88.89%）
-    - エッジケース対応の詳細
-  - docs/guidelines/component_responsibilities.md: コンポーネント責務ガイド
-    - RealtimePipelineの責務範囲
-    - MultiTimeframeAnalyzerの責務範囲
-    - コンポーネント間のインターフェース
-    - 今後の開発ガイドライン
-- 完了: [x]
+**Step 5: 書き込み機能（単一ポイント）の実装とテスト**
+- write_point メソッドの実装（単一のOHLCデータポイントを書き込み）
+- 書き込み成功/失敗のテストケース追加
+- タグとフィールドの正しいフォーマットのテスト
 
-### Step 10: 最終検証とクリーンアップ
-- ファイル: src/data_processing/pipelines.py, src/data_processing/analyzer.py, テストファイル全体
-- 作業: コードレビュー、不要なコードの削除、最終動作確認
-  - コード品質確認:
-    - [ ] 未使用インポートの確認と削除
-    - [ ] デバッグログの確認と削除
-    - [ ] TODOコメントの確認と解決
-    - [ ] 廃止予定コードの確認と削除
-    - [ ] Ruffによる最終静的解析
-  - パフォーマンス検証:
-    - [✅] スループット: 657 msgs/sec (目標500超過)
-    - [✅] レイテンシー: P95 = 1.2ms (目標2ms未満)
-    - [✅] メモリ効率: 10,000バーで安定
-    - [✅] CPU使用率: 効率的な処理確認
-  - テスト品質:
-    - [✅] ユニットテスト: 23個全合格
-    - [✅] 統合テスト: 25個全合格
-    - [✅] カバレッジ: analyzer.py 88.89%
-    - [✅] Ruffエラー: 0個
-  - ドキュメント確認:
-    - [✅] アーキテクチャ文書完成
-    - [✅] パフォーマンスレポート完成
-    - [✅] API仕様書完成
-    - [✅] テストサマリー完成
-    - [✅] 責務ガイドライン完成
-  - 残課題整理:
-    - [ ] 統合テストのタイムアウト問題調査
-    - [ ] 今後の改善点の整理
-  - Task 10.3完了:
-    - [ ] 最終コミット作成
-    - [ ] PR準備
-    - [ ] 完了宣言
-- 完了: [ ] 🏃‍♂️ 実行中
+**Step 6: クエリ機能（基本的な読み取り）の実装とテスト**
+- query メソッドの実装（Flux言語による基本的なクエリ）
+- 時間範囲を指定したデータ取得
+- 通貨ペアと時間足でフィルタリングする機能
+- クエリ結果をPolars DataFrameに変換する機能
 
-## 技術的な注意点
+**Step 7: 環境変数による接続設定の実装**
+- 以下の環境変数をサポート:
+  - INFLUXDB_URL（デフォルト: http://localhost:8086）
+  - INFLUXDB_TOKEN（必須）
+  - INFLUXDB_ORG（必須）
+  - INFLUXDB_BUCKET（必須）
+- src/common/config.py との統合（必要に応じて）
 
-### 現在の実装状況
-- `MultiTimeframeAnalyzer`クラスは既に`analyzer.py`に実装済み
-- `RealtimePipeline`は既に`MultiTimeframeAnalyzer`を使用している（`_multiframe_analyzer`として）
-- しかし、分析ロジックの一部がまだ`RealtimePipeline`に残っている
+**Step 8: エラーハンドリングと再接続ロジックの実装**
+- カスタム例外クラスの定義（InfluxDBConnectionError など）
+- 指数バックオフによる再接続ロジック
+- サーキットブレーカーパターンの基本実装（オプション）
 
-### リファクタリングの焦点
-1. **責務の明確化**
-   - RealtimePipeline: データフロー管理、キューイング、バックプレッシャー制御
-   - MultiTimeframeAnalyzer: マルチタイムフレームRCI計算、データ変換
+##### 各ステップの実装時間目安
+- Step 1: 5分
+- Step 2: 30分
+- Step 3: 15分
+- Step 4: 20分
+- Step 5: 20分
+- Step 6: 30分
+- Step 7: 15分
+- Step 8: 20分
 
-2. **重複コードの削除**
-   - データバッファリングロジックの統一
-   - RCI計算の一元化
+##### 依存関係
+- Step 1が完了しないと他のステップは進められない
+- Step 2-3は並行実装可能
+- Step 4はStep 2の後に実装
+- Step 5-6はStep 3の後に実装
+- Step 7-8は最後に実装
 
-3. **テスタビリティの向上**
-   - 各コンポーネントの独立性を高める
-   - モックしやすい設計にする
-
-## 進捗メトリクス
-- 総ステップ数: 10
-- 完了ステップ: 9
-- 実行中ステップ: 1 (Step 10)
-- 進捗率: 90%
-
-## Step 10 実施チェックリスト
-### コード品質確認
-- [ ] pipelines.pyの未使用インポート確認
-- [ ] analyzer.pyの未使用インポート確認
-- [ ] デバッグログの検索と削除
-- [ ] TODOコメントの検索と解決
-- [ ] Ruffによる最終チェック
-
-### パフォーマンス確認
-- [✅] スループット測定結果の確認
-- [✅] レイテンシー測定結果の確認
-- [✅] メモリ効率の確認
-- [✅] CPU使用率の確認
-
-### テスト品質確認
-- [✅] ユニットテストの実行
-- [✅] 統合テストの実行
-- [✅] カバレッジレポートの確認
-- [ ] タイムアウト問題の調査
-
-### ドキュメント最終確認
-- [✅] アーキテクチャ文書のレビュー
-- [✅] パフォーマンスレポートのレビュー
-- [✅] API仕様書のレビュー
-- [✅] テストサマリーのレビュー
-- [✅] 責務ガイドラインのレビュー
-- [✅] READMEのレビュー
-
-### 残課題整理
-- [ ] 優先度高の課題整理
-- [ ] 優先度中の課題整理
-- [ ] 優先度低の課題整理
-- [ ] 今後の改善提案作成
-
-### Task 10.3完了手順
-- [ ] 全チェックリスト項目の確認
-- [ ] 最終コミットメッセージ作成
-- [ ] git commit実行
-- [ ] プルリクエスト作成準備
-- [ ] 完了宣言ドキュメント作成
-
-## Step 9 実装チェックリスト（完了）
-- [x] docs/architecture/task_10_3_refactoring.md の作成
-- [x] docs/performance/task_10_3_performance.md の作成
-- [x] docs/api/multiframe_analyzer_api.md の作成
-- [x] docs/tests/task_10_3_test_summary.md の作成
-- [x] docs/guidelines/component_responsibilities.md の作成
-- [x] 各ドキュメントの相互リンク設定
-- [x] 全体の整合性確認
-
-## Step 8 実装チェックリスト（完了）
-- [x] test_data_pipeline.pyの既存テスト確認
-- [x] TestMultiframeIntegrationクラスの実装
-- [x] TestEndToEndIntegrationクラスの実装
-- [x] TestPerformanceIntegrationクラスの実装
-- [x] 新テストの実行と検証
-- [x] パフォーマンス測定結果の記録
-- [x] 既存13テストとの互換性確認
-
-## Step 3 実装チェックリスト
-- [x] __init__メソッドにバッファ管理プロパティを追加
-- [x] add_new_bar()メソッドの実装
-- [x] _manage_buffer_size()メソッドの実装
-- [x] get_buffer_size()メソッドの実装
-- [x] is_ready()メソッドの実装
-- [x] get_buffer_as_dataframe()メソッドの実装
-- [x] analyze_streaming()メソッドのリファクタリング
-- [x] _analyze_with_external_history()メソッドの実装
-- [x] _calculate_rci_metrics()メソッドの抽出
-- [x] 実装後の動作確認
+##### 決定事項
+- 非同期処理を前提とした実装（asyncio使用）
+- データ型はFloat32で統一（メモリ効率最適化）
+- Polarsとの統合を考慮した設計
+- 環境変数による設定管理
