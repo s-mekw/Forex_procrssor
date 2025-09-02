@@ -216,3 +216,8 @@ test_sandbox/task10_2_test/sample_img/
 # Task 10.3 specific temporary files
 # サンプル画像ファイル
 test_sandbox/task10_3_test/sample_img/
+test_sandbox/task10_3_test/debug_log.txt
+
+# Windows null device files (誤って生成される場合がある)
+nul
+**/nul

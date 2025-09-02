@@ -27,3 +27,5 @@ host = "127.0.0.1"     # Dashboard host
 background = "#fffbea"          # 背景色（クリーム色）
 grid = "#e0e0e0"                # グリッド色
 text = "#000000"                # テキスト色
+bullish = "#26a69a"             # 上昇ローソク足の色（緑）
+bearish = "#ef5350"             # 下降ローソク足の色（赤）

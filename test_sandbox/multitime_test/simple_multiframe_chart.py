@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parents[2]))
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import time
 import toml
@@ -51,6 +51,7 @@ class SimpleMultiframeChart:
         
         # 基本設定
         self.symbol = self.config['trading']['symbol']
+        logger.info(f"Loaded symbol from config: {self.symbol}")  # デバッグログ追加
         self.timeframes = self.config['trading']['timeframes']
         
         # MultiTimeframeManager
@@ -59,6 +60,8 @@ class SimpleMultiframeChart:
         # データ格納
         self.m1_data = None
         self.m5_data = None
+        self.m1_current_bar = None  # M1の現在進行形バー
+        self.m5_current_bar = None  # M5の現在進行形バー
         self.current_price = 0.0
         self.last_update = datetime.now()
         
@@ -126,6 +129,8 @@ class SimpleMultiframeChart:
             # 初期データを保存
             self.m1_data = self.manager.get_completed_bars("M1")
             self.m5_data = self.manager.get_completed_bars("M5")
+            self.m1_current_bar = self.manager.get_current_bar("M1")
+            self.m5_current_bar = self.manager.get_current_bar("M5")
             
             # 現在価格を取得
             tick = mt5.symbol_info_tick(self.symbol)
@@ -135,6 +140,8 @@ class SimpleMultiframeChart:
             logger.info("Manager initialized successfully")
             logger.info(f"M1 bars: {len(self.m1_data) if self.m1_data is not None else 0}")
             logger.info(f"M5 bars: {len(self.m5_data) if self.m5_data is not None else 0}")
+            logger.info(f"M1 current bar: {self.m1_current_bar is not None}")
+            logger.info(f"M5 current bar: {self.m5_current_bar is not None}")
             
             return True
             
@@ -179,10 +186,17 @@ class SimpleMultiframeChart:
                 # 最新データを取得
                 self.m1_data = self.manager.get_completed_bars("M1")
                 self.m5_data = self.manager.get_completed_bars("M5")
+                self.m1_current_bar = self.manager.get_current_bar("M1")
+                self.m5_current_bar = self.manager.get_current_bar("M5")
                 
                 # 10ティックごとにログ
                 if tick_count % 10 == 0:
                     logger.debug(f"Processed {tick_count} ticks, M1 bars: {m1_bars_completed}, M5 bars: {m5_bars_completed}")
+                    if tick_count % 50 == 0:  # 50ティックごとに現在のバー情報をログ
+                        if self.m1_current_bar:
+                            logger.info(f"M1 current bar - O:{self.m1_current_bar['open']:.2f} H:{self.m1_current_bar['high']:.2f} L:{self.m1_current_bar['low']:.2f} C:{self.m1_current_bar['close']:.2f}")
+                        if self.m5_current_bar:
+                            logger.info(f"M5 current bar - O:{self.m5_current_bar['open']:.2f} H:{self.m5_current_bar['high']:.2f} L:{self.m5_current_bar['low']:.2f} C:{self.m5_current_bar['close']:.2f}")
                 
                 time.sleep(0.1)  # CPU負荷軽減
                 
@@ -285,6 +299,32 @@ class SimpleMultiframeChart:
                 ),
                 row=1, col=1
             )
+            
+            # M1の現在進行形バーを追加
+            if self.m1_current_bar is not None:
+                # 最後の完成バーの時刻を取得
+                last_bar_time = m1_display["timestamp"].tail(1).to_list()[0] if not m1_display.is_empty() else datetime.now()
+                # 現在進行形バーの時刻を1分後に設定
+                current_bar_time = last_bar_time + timedelta(minutes=1)
+                
+                # 現在進行形バーを半透明で表示
+                current_color = theme['bullish'] if self.m1_current_bar['close'] >= self.m1_current_bar['open'] else theme['bearish']
+                
+                fig.add_trace(
+                    go.Candlestick(
+                        x=[current_bar_time],
+                        open=[self.m1_current_bar['open']],
+                        high=[self.m1_current_bar['high']],
+                        low=[self.m1_current_bar['low']],
+                        close=[self.m1_current_bar['close']],
+                        name="M1 Current",
+                        increasing_line_color=theme['bullish'],
+                        decreasing_line_color=theme['bearish'],
+                        opacity=0.5,  # 半透明で表示
+                        showlegend=False
+                    ),
+                    row=1, col=1
+                )
         
         # M5チャート
         if self.m5_data is not None and not self.m5_data.is_empty():
@@ -304,10 +344,36 @@ class SimpleMultiframeChart:
                 ),
                 row=1, col=2
             )
+            
+            # M5の現在進行形バーを追加
+            if self.m5_current_bar is not None:
+                # 最後の完成バーの時刻を取得
+                last_bar_time = m5_display["timestamp"].tail(1).to_list()[0] if not m5_display.is_empty() else datetime.now()
+                # 現在進行形バーの時刻を5分後に設定
+                current_bar_time = last_bar_time + timedelta(minutes=5)
+                
+                # 現在進行形バーを半透明で表示
+                current_color = theme['bullish'] if self.m5_current_bar['close'] >= self.m5_current_bar['open'] else theme['bearish']
+                
+                fig.add_trace(
+                    go.Candlestick(
+                        x=[current_bar_time],
+                        open=[self.m5_current_bar['open']],
+                        high=[self.m5_current_bar['high']],
+                        low=[self.m5_current_bar['low']],
+                        close=[self.m5_current_bar['close']],
+                        name="M5 Current",
+                        increasing_line_color=theme['bullish'],
+                        decreasing_line_color=theme['bearish'],
+                        opacity=0.5,  # 半透明で表示
+                        showlegend=False
+                    ),
+                    row=1, col=2
+                )
         
         # レイアウト設定
         fig.update_layout(
-            template="plotly_dark",
+            # template="plotly_dark",  # コメントアウトしてtheme設定を優先
             showlegend=False,
             height=700,
             paper_bgcolor=theme['background'],
