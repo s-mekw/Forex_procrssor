@@ -42,7 +42,8 @@
       "Bash(dir:*)",
       "Bash(timeout:*)",
       "Bash(git push:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(uv pip:*)"
     ],
     "additionalDirectories": [
       "C:\\c\\Users\\shota\\repos"
