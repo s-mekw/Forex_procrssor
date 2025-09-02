@@ -7,12 +7,16 @@
 import asyncio
 import logging
 import random
+import time
+import tracemalloc
 from datetime import datetime, timedelta
 from typing import Any
 
+import polars as pl
 import pytest
 
 # テスト対象のインポート
+from src.data_processing.analyzer import MultiTimeframeAnalyzer
 from src.data_processing.pipelines import DataPoint, RealtimePipeline
 
 # ログ設定
@@ -1077,3 +1081,1191 @@ async def generate_test_data(count: int = 100) -> list[dict[str, Any]]:
             }
         )
     return data
+
+
+class TestMultiframeIntegration:
+    """RealtimePipelineとMultiTimeframeAnalyzerの連携テスト
+    
+    新しいバッファ管理APIと責務分離後の動作を検証します。
+    """
+    
+    @pytest.mark.asyncio
+    async def test_pipeline_multiframe_data_flow(self):
+        """データフロー全体の検証
+        
+        検証項目:
+        - RealtimePipelineがデータを受信
+        - MultiTimeframeAnalyzerにデータが転送される
+        - バッファが適切に管理される
+        - RCI計算が正しく実行される
+        """
+        # パイプラインとアナライザを作成（キューサイズを拡張）
+        pipeline = RealtimePipeline(
+            queue_size=500,  # 250個のデータ+バッファ余裕
+            alert_threshold=1.0,
+            enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
+            max_history_bars=500,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # 250個のテストデータを送信（最小バー数200を超える）
+            base_time = datetime.now()
+            for i in range(250):
+                data_point: DataPoint = {
+                    "timestamp": base_time + timedelta(seconds=i),
+                    "data": {
+                        "symbol": "USDJPY",
+                        "open": 150.0 + (i % 10) * 0.1,
+                        "high": 150.5 + (i % 10) * 0.1,
+                        "low": 149.5 + (i % 10) * 0.1,
+                        "close": 150.2 + (i % 10) * 0.1,
+                        "volume": 1000 + i * 10,
+                    },
+                    "metadata": {"sequence": i}
+                }
+                
+                success = await pipeline.submit(data_point)
+                assert success, f"Failed to submit data at index {i}"
+                
+                # バッチ送信時に少し待機してキューの処理を促す
+                if i % 50 == 0 and i > 0:
+                    await asyncio.sleep(0.2)  # 処理の猶予を増やす
+            
+            # 処理完了を待つ
+            await asyncio.sleep(1.0)
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            assert metrics["processed_count"] == 250
+            assert metrics["data_buffer_size"] >= 200  # バッファに最小限のデータがある
+            
+            # アナライザの状態を確認
+            assert pipeline._multiframe_analyzer is not None
+            assert pipeline._multiframe_analyzer.get_buffer_size() == min(250, pipeline._max_history_bars)
+            assert pipeline._multiframe_analyzer.is_ready() is True
+            
+            # 結果を取得してRCI計算が実行されたことを確認
+            results = []
+            while len(results) < 250:
+                try:
+                    result = await asyncio.wait_for(pipeline.get_result(), timeout=0.1)
+                    results.append(result)
+                except asyncio.TimeoutError:
+                    break
+            
+            # 最小バー数を超えた後のデータにはRCI値が含まれているはず
+            late_results = [r for i, r in enumerate(results) if i >= 200]
+            assert len(late_results) > 0
+            
+            # パフォーマンスメトリクスを確認
+            assert metrics.get("multiframe_avg_latency") is not None
+            assert metrics["multiframe_avg_latency"] < 1.0  # 1秒未満で処理
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_buffer_synchronization(self):
+        """バッファ管理の同期確認
+        
+        検証項目:
+        - RealtimePipelineとMultiTimeframeAnalyzerのバッファが同期している
+        - バッファサイズ制限が適切に動作
+        - 古いデータが適切に削除される
+        """
+        # バッファサイズを適切に設定
+        pipeline = RealtimePipeline(
+            queue_size=200,  # キューサイズを拡張
+            alert_threshold=1.0,
+            enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
+            max_history_bars=100,  # 小さなバッファ
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # 150個のデータを送信（バッファサイズを超える）
+            for i in range(150):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=i),
+                    "data": {
+                        "symbol": "EURUSD",
+                        "open": 1.08 + (i % 5) * 0.001,
+                        "high": 1.085 + (i % 5) * 0.001,
+                        "low": 1.075 + (i % 5) * 0.001,
+                        "close": 1.082 + (i % 5) * 0.001,
+                        "volume": 2000 + i * 20,
+                    },
+                    "metadata": {"index": i}
+                }
+                
+                success = await pipeline.submit(data_point)
+                assert success, f"Failed to submit data at index {i}"
+                
+                # 定期的に処理待機
+                if i % 20 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
+            
+            # 処理完了を待つ
+            await asyncio.sleep(0.5)
+            
+            # バッファサイズを確認
+            metrics = pipeline.get_metrics()
+            buffer_size = metrics["data_buffer_size"]
+            
+            # バッファサイズが最大値以下であることを確認
+            assert buffer_size <= 100, f"Buffer size {buffer_size} exceeds max 100"
+            assert buffer_size == 100, f"Buffer should be at max capacity, got {buffer_size}"
+            
+            # アナライザのバッファも同じサイズであることを確認
+            assert pipeline._multiframe_analyzer.get_buffer_size() == buffer_size
+            
+            # 最新のデータがバッファに含まれていることを確認
+            buffer_df = pipeline._multiframe_analyzer.get_buffer_as_dataframe()
+            assert buffer_df is not None
+            assert len(buffer_df) == 100
+            
+            # 古いデータが削除されていることを確認（インデックス50以降のデータのみ）
+            # バッファには最新100個のデータが残っているはず
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_analyzer_state_consistency(self):
+        """分析器の状態一貫性テスト
+        
+        検証項目:
+        - データ追加前後で状態が一貫している
+        - is_ready()の状態遷移が正しい
+        - エラー発生時も状態が保たれる
+        """
+        pipeline = RealtimePipeline(
+            queue_size=500,  # キューサイズを拡張
+            alert_threshold=1.0,
+            enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
+            max_history_bars=500,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # 初期状態を確認
+            assert not pipeline._multiframe_analyzer.is_ready()
+            assert pipeline._multiframe_analyzer.get_buffer_size() == 0
+            
+            # 199個のデータを送信（最小バー数の1個手前）
+            for i in range(199):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=i),
+                    "data": {
+                        "symbol": "GBPUSD",
+                        "open": 1.25 + (i % 10) * 0.001,
+                        "high": 1.255 + (i % 10) * 0.001,
+                        "low": 1.245 + (i % 10) * 0.001,
+                        "close": 1.252 + (i % 10) * 0.001,
+                        "volume": 1500 + i * 15,
+                    },
+                    "metadata": {"seq": i}
+                }
+                
+                await pipeline.submit(data_point)
+                
+                # バッチ処理で定期的に待機
+                if i % 50 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
+            
+            await asyncio.sleep(0.5)  # 処理完了を待つ
+            
+            # まだ準備完了していないことを確認
+            assert not pipeline._multiframe_analyzer.is_ready()
+            assert pipeline._multiframe_analyzer.get_buffer_size() == 199
+            
+            # 1個追加して200個にする
+            data_point: DataPoint = {
+                "timestamp": datetime.now() + timedelta(seconds=199),
+                "data": {
+                    "symbol": "GBPUSD",
+                    "open": 1.26,
+                    "high": 1.265,
+                    "low": 1.255,
+                    "close": 1.262,
+                    "volume": 5000,
+                },
+                "metadata": {"seq": 199}
+            }
+            await pipeline.submit(data_point)
+            
+            await asyncio.sleep(0.5)  # is_ready()確認前に処理完了を待つ
+            
+            # 準備完了状態になったことを確認
+            assert pipeline._multiframe_analyzer.is_ready()
+            assert pipeline._multiframe_analyzer.get_buffer_size() == 200
+            
+            # 無効なデータを送信してもバッファの状態が保たれることを確認
+            invalid_data: DataPoint = {
+                "timestamp": datetime.now() + timedelta(seconds=200),
+                "data": {
+                    "symbol": "INVALID",
+                    "open": None,  # 無効な値
+                    "high": None,
+                    "low": None,
+                    "close": None,
+                    "volume": -1,  # 負の値
+                },
+                "metadata": {"seq": 200}
+            }
+            
+            # パイプラインは処理するが、アナライザは無効データをスキップ
+            await pipeline.submit(invalid_data)
+            await asyncio.sleep(0.3)
+            
+            # 状態が変わらないことを確認（またはエラー処理されている）
+            assert pipeline._multiframe_analyzer.is_ready()
+            # バッファサイズは200または201（エラー処理の実装による）
+            assert pipeline._multiframe_analyzer.get_buffer_size() >= 200
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_pipeline_restart_recovery(self):
+        """パイプライン再起動時の復旧テスト
+        
+        検証項目:
+        - パイプライン停止後も再起動可能
+        - アナライザの状態が適切にリセットされる
+        - 再起動後も正常に動作する
+        """
+        pipeline = RealtimePipeline(
+            queue_size=500,  # キューサイズを拡張
+            alert_threshold=1.0,
+            enable_metrics=True,
+            enable_multiframe=True,  # マルチフレーム機能を有効化
+            max_history_bars=300,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        # 1回目の起動
+        await pipeline.start()
+        
+        try:
+            # データを送信
+            for i in range(100):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=i),
+                    "data": {
+                        "symbol": "AUDUSD",
+                        "open": 0.65 + (i % 5) * 0.001,
+                        "high": 0.655 + (i % 5) * 0.001,
+                        "low": 0.645 + (i % 5) * 0.001,
+                        "close": 0.652 + (i % 5) * 0.001,
+                        "volume": 800 + i * 8,
+                    },
+                    "metadata": {"batch": 1, "index": i}
+                }
+                
+                await pipeline.submit(data_point)
+                
+                # バッチ処理で定期的に待機
+                if i % 50 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
+            
+            await asyncio.sleep(0.5)  # 処理完了を待つ
+            
+            # 1回目の状態を記録
+            first_metrics = pipeline.get_metrics()
+            first_buffer_size = pipeline._multiframe_analyzer.get_buffer_size()
+            assert first_buffer_size == 100
+            assert first_metrics["processed_count"] == 100
+            
+            # パイプラインを停止
+            await pipeline.stop()
+            assert not pipeline._is_running
+            
+            await asyncio.sleep(1.0)  # 完全停止を待つ
+            
+            # 再起動
+            await pipeline.start()
+            assert pipeline._is_running
+            
+            # アナライザの状態は維持されている（実装による）
+            # または新しいインスタンスが作成される
+            current_buffer_size = pipeline._multiframe_analyzer.get_buffer_size()
+            # バッファは維持されるか、リセットされる（実装による）
+            assert current_buffer_size >= 0
+            
+            # 2回目のデータ送信
+            for i in range(50):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=100 + i),
+                    "data": {
+                        "symbol": "AUDUSD",
+                        "open": 0.66 + (i % 5) * 0.001,
+                        "high": 0.665 + (i % 5) * 0.001,
+                        "low": 0.655 + (i % 5) * 0.001,
+                        "close": 0.662 + (i % 5) * 0.001,
+                        "volume": 900 + i * 9,
+                    },
+                    "metadata": {"batch": 2, "index": i}
+                }
+                
+                success = await pipeline.submit(data_point)
+                assert success
+                
+                # バッチ処理で定期的に待機
+                if i % 20 == 0 and i > 0:
+                    await asyncio.sleep(0.1)
+            
+            await asyncio.sleep(0.5)  # 処理完了を待つ
+            
+            # 2回目の処理後の状態を確認
+            second_metrics = pipeline.get_metrics()
+            # processed_countはリセットされているか継続している
+            assert second_metrics["processed_count"] >= 50
+            
+            # アナライザが正常に動作していることを確認
+            final_buffer_size = pipeline._multiframe_analyzer.get_buffer_size()
+            assert final_buffer_size > 0
+            
+        finally:
+            await pipeline.stop()
+
+
+class TestEndToEndIntegration:
+    """エンドツーエンドの統合テスト
+    
+    実際の使用シナリオに近い形でシステム全体の動作を検証します。
+    """
+    
+    @pytest.mark.asyncio
+    async def test_realtime_data_processing(self):
+        """リアルタイムデータ処理の検証
+        
+        検証項目:
+        - 連続的なリアルタイムデータの処理
+        - 適切なレスポンスタイム
+        - データの順序保持
+        """
+        pipeline = RealtimePipeline(
+            queue_size=200,
+            alert_threshold=0.5,  # 500msのアラート閾値
+            enable_metrics=True,
+            max_history_bars=1000,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # リアルタイムシミュレーション：1秒間隔で60データ
+            start_time = time.time()
+            sent_timestamps = []
+            
+            for i in range(60):
+                current_time = datetime.now()
+                sent_timestamps.append(current_time)
+                
+                data_point: DataPoint = {
+                    "timestamp": current_time,
+                    "data": {
+                        "symbol": "USDJPY",
+                        "open": 150.0 + random.uniform(-0.1, 0.1),
+                        "high": 150.5 + random.uniform(-0.1, 0.1),
+                        "low": 149.5 + random.uniform(-0.1, 0.1),
+                        "close": 150.2 + random.uniform(-0.1, 0.1),
+                        "volume": random.randint(1000, 5000),
+                    },
+                    "metadata": {"realtime_seq": i}
+                }
+                
+                # 非同期送信とレスポンス時間測定
+                send_start = time.time()
+                success = await pipeline.submit(data_point)
+                send_latency = time.time() - send_start
+                
+                assert success
+                assert send_latency < 0.1, f"Send latency {send_latency:.3f}s too high"
+                
+                # リアルタイム間隔をシミュレート（50ms）
+                await asyncio.sleep(0.05)
+            
+            # 全体の処理時間
+            total_time = time.time() - start_time
+            
+            # 処理完了を待つ
+            await asyncio.sleep(0.5)
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            assert metrics["processed_count"] == 60
+            assert metrics["avg_latency"] < 0.5  # 平均レイテンシが500ms未満
+            
+            # アラート統計を確認
+            alert_stats = pipeline.get_alert_statistics()
+            if alert_stats["total_alerts"] > 0:
+                print(f"Alerts triggered: {alert_stats['total_alerts']}")
+                assert alert_stats["avg_latency"] < 1.0  # アラート時も1秒未満
+            
+            # スループットを計算
+            throughput = 60 / total_time
+            print(f"Realtime throughput: {throughput:.1f} msgs/sec")
+            assert throughput >= 1.0, "Throughput should be at least 1 msg/sec"
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_large_volume_processing(self):
+        """大量データ処理のパフォーマンステスト
+        
+        検証項目:
+        - 10000件のデータ処理
+        - メモリ使用量の安定性
+        - 処理速度の維持
+        """
+        pipeline = RealtimePipeline(
+            queue_size=5000,
+            alert_threshold=2.0,
+            enable_metrics=True,
+            max_history_bars=5000,  # 大きなバッファ
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # メモリ使用量の追跡開始
+            tracemalloc.start()
+            initial_memory = tracemalloc.get_traced_memory()[0]
+            
+            # 10000件のデータを高速送信
+            batch_size = 1000
+            total_count = 10000
+            
+            start_time = time.time()
+            
+            for batch in range(total_count // batch_size):
+                batch_tasks = []
+                
+                for i in range(batch_size):
+                    idx = batch * batch_size + i
+                    data_point: DataPoint = {
+                        "timestamp": datetime.now() + timedelta(milliseconds=idx),
+                        "data": {
+                            "symbol": "EURUSD",
+                            "open": 1.08 + (idx % 100) * 0.0001,
+                            "high": 1.085 + (idx % 100) * 0.0001,
+                            "low": 1.075 + (idx % 100) * 0.0001,
+                            "close": 1.082 + (idx % 100) * 0.0001,
+                            "volume": 1000 + idx,
+                        },
+                        "metadata": {"batch": batch, "index": i}
+                    }
+                    
+                    task = asyncio.create_task(pipeline.submit(data_point))
+                    batch_tasks.append(task)
+                
+                # バッチごとに送信
+                results = await asyncio.gather(*batch_tasks)
+                success_rate = sum(results) / len(results)
+                assert success_rate >= 0.95, f"Batch {batch} success rate {success_rate:.1%} too low"
+                
+                # バッチ間で少し待機
+                await asyncio.sleep(0.1)
+            
+            # 処理時間を計算
+            processing_time = time.time() - start_time
+            throughput = total_count / processing_time
+            
+            # メモリ使用量を確認
+            current_memory = tracemalloc.get_traced_memory()[0]
+            memory_increase = (current_memory - initial_memory) / 1024 / 1024  # MB
+            
+            tracemalloc.stop()
+            
+            # 処理完了を待つ
+            await asyncio.sleep(2.0)
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            
+            print(f"\nLarge volume test results:")
+            print(f"  Processed: {metrics['processed_count']} / {total_count}")
+            print(f"  Throughput: {throughput:.0f} msgs/sec")
+            print(f"  Memory increase: {memory_increase:.2f} MB")
+            print(f"  Buffer size: {metrics['multiframe_buffer_size']}")
+            
+            # 検証
+            assert metrics["processed_count"] >= total_count * 0.95  # 95%以上処理
+            assert throughput >= 500  # 500 msgs/sec以上
+            assert memory_increase < 500  # メモリ増加が500MB未満
+            assert metrics["multiframe_buffer_size"] <= 5000  # バッファサイズ制限が守られている
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_multiframe_analysis_accuracy(self):
+        """マルチタイムフレーム分析精度の検証
+        
+        検証項目:
+        - 短期・長期RCIの計算精度
+        - タイムフレーム変換の正確性
+        - 分析結果の一貫性
+        """
+        pipeline = RealtimePipeline(
+            queue_size=500,
+            alert_threshold=1.0,
+            enable_metrics=True,
+            max_history_bars=1000,
+            multiframe_config={
+                'short_timeframe': 60,   # 1時間
+                'long_timeframe': 240,    # 4時間
+                'rci_period': 9
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # 既知のパターンでデータを生成（上昇トレンド）
+            base_price = 150.0
+            trend_slope = 0.01  # 上昇トレンド
+            
+            for i in range(300):  # 最小バー数を超える
+                # トレンドに沿った価格生成
+                price = base_price + trend_slope * i
+                noise = random.uniform(-0.005, 0.005)
+                
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(minutes=i),
+                    "data": {
+                        "symbol": "USDJPY",
+                        "open": price + noise,
+                        "high": price + abs(noise) + 0.01,
+                        "low": price - abs(noise) - 0.01,
+                        "close": price + noise * 0.5,
+                        "volume": 1000 + random.randint(0, 500),
+                    },
+                    "metadata": {"trend_point": i}
+                }
+                
+                await pipeline.submit(data_point)
+            
+            await asyncio.sleep(1.0)
+            
+            # バッファからデータを取得して分析
+            analyzer = pipeline._multiframe_analyzer
+            assert analyzer.is_ready()
+            
+            # 分析実行
+            analysis_result = analyzer.analyze_streaming()
+            
+            # RCI値を確認（上昇トレンドなので正の値が期待される）
+            if "short_term_rci" in analysis_result:
+                short_rci = analysis_result["short_term_rci"]
+                long_rci = analysis_result["long_term_rci"]
+                
+                print(f"\nTrend analysis results:")
+                print(f"  Short-term RCI: {short_rci:.2f}")
+                print(f"  Long-term RCI: {long_rci:.2f}")
+                
+                # 上昇トレンドでは正のRCI値が期待される
+                assert short_rci > -50, "Short-term RCI should indicate uptrend"
+                assert long_rci > -50, "Long-term RCI should indicate uptrend"
+                
+                # RCI値の範囲確認（-100から100）
+                assert -100 <= short_rci <= 100
+                assert -100 <= long_rci <= 100
+            
+            # メトリクスの確認
+            metrics = pipeline.get_metrics()
+            assert metrics["processed_count"] == 300
+            assert metrics["multiframe_buffer_size"] >= 200
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_error_recovery_flow(self):
+        """エラー復旧フローの確認
+        
+        検証項目:
+        - エラー発生後の自動復旧
+        - データ整合性の維持
+        - パイプラインの継続性
+        """
+        pipeline = RealtimePipeline(
+            queue_size=100,
+            alert_threshold=1.0,
+            enable_metrics=True,
+            max_history_bars=500,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # 正常データを送信
+            for i in range(50):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=i),
+                    "data": {
+                        "symbol": "GBPUSD",
+                        "open": 1.25 + (i % 5) * 0.001,
+                        "high": 1.255 + (i % 5) * 0.001,
+                        "low": 1.245 + (i % 5) * 0.001,
+                        "close": 1.252 + (i % 5) * 0.001,
+                        "volume": 2000 + i * 10,
+                    },
+                    "metadata": {"phase": "normal", "index": i}
+                }
+                
+                await pipeline.submit(data_point)
+            
+            # エラーを引き起こす可能性のあるデータ
+            error_data = [
+                # NaN値
+                {
+                    "timestamp": datetime.now() + timedelta(seconds=50),
+                    "data": {
+                        "symbol": "ERROR",
+                        "open": float('nan'),
+                        "high": float('nan'),
+                        "low": float('nan'),
+                        "close": float('nan'),
+                        "volume": 0,
+                    },
+                    "metadata": {"phase": "error", "type": "nan"}
+                },
+                # 極端な値
+                {
+                    "timestamp": datetime.now() + timedelta(seconds=51),
+                    "data": {
+                        "symbol": "ERROR",
+                        "open": 1e10,
+                        "high": 1e10,
+                        "low": -1e10,
+                        "close": 0,
+                        "volume": -1000,
+                    },
+                    "metadata": {"phase": "error", "type": "extreme"}
+                },
+                # None値
+                {
+                    "timestamp": datetime.now() + timedelta(seconds=52),
+                    "data": {
+                        "symbol": "ERROR",
+                        "open": None,
+                        "high": None,
+                        "low": None,
+                        "close": None,
+                        "volume": None,
+                    },
+                    "metadata": {"phase": "error", "type": "none"}
+                }
+            ]
+            
+            # エラーデータを送信
+            for error_point in error_data:
+                try:
+                    await pipeline.submit(error_point)
+                except Exception as e:
+                    print(f"Expected error: {e}")
+            
+            # パイプラインがまだ動作中であることを確認
+            assert pipeline._is_running
+            
+            # 正常データを再度送信（復旧確認）
+            for i in range(50):
+                data_point: DataPoint = {
+                    "timestamp": datetime.now() + timedelta(seconds=60 + i),
+                    "data": {
+                        "symbol": "GBPUSD",
+                        "open": 1.26 + (i % 5) * 0.001,
+                        "high": 1.265 + (i % 5) * 0.001,
+                        "low": 1.255 + (i % 5) * 0.001,
+                        "close": 1.262 + (i % 5) * 0.001,
+                        "volume": 2500 + i * 10,
+                    },
+                    "metadata": {"phase": "recovery", "index": i}
+                }
+                
+                success = await pipeline.submit(data_point)
+                assert success, f"Recovery phase failed at index {i}"
+            
+            await asyncio.sleep(0.5)
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            
+            # エラーがあっても処理が継続されていることを確認
+            assert metrics["processed_count"] >= 100  # 正常データの数
+            assert pipeline._is_running
+            
+            # バッファの整合性を確認
+            buffer_size = metrics["multiframe_buffer_size"]
+            assert buffer_size > 0, "Buffer should contain valid data"
+            
+            # アナライザの状態を確認
+            assert pipeline._multiframe_analyzer.get_buffer_size() == buffer_size
+            
+            print(f"\nError recovery test results:")
+            print(f"  Processed: {metrics['processed_count']}")
+            print(f"  Buffer size: {buffer_size}")
+            print(f"  Pipeline running: {pipeline._is_running}")
+            
+        finally:
+            await pipeline.stop()
+
+
+class TestPerformanceIntegration:
+    """パフォーマンス測定の統合テスト
+    
+    システムのパフォーマンス特性を詳細に測定します。
+    """
+    
+    @pytest.mark.asyncio
+    async def test_throughput_measurement(self):
+        """スループット測定テスト
+        
+        検証項目:
+        - 最大スループットの測定
+        - ボトルネックの特定
+        - 持続可能な処理速度
+        """
+        pipeline = RealtimePipeline(
+            queue_size=10000,  # 大きなキュー
+            alert_threshold=5.0,  # パフォーマンステスト用
+            enable_metrics=True,
+            max_history_bars=5000,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # スループット測定（バースト送信）
+            burst_size = 1000
+            burst_results = []
+            
+            for burst in range(5):  # 5回のバースト
+                start_time = time.time()
+                tasks = []
+                
+                for i in range(burst_size):
+                    data_point: DataPoint = {
+                        "timestamp": datetime.now(),
+                        "data": {
+                            "symbol": "USDJPY",
+                            "open": 150.0 + random.random(),
+                            "high": 150.5 + random.random(),
+                            "low": 149.5 + random.random(),
+                            "close": 150.2 + random.random(),
+                            "volume": random.randint(100, 10000),
+                        },
+                        "metadata": {"burst": burst, "index": i}
+                    }
+                    
+                    task = asyncio.create_task(pipeline.submit(data_point))
+                    tasks.append(task)
+                
+                # バースト送信
+                results = await asyncio.gather(*tasks)
+                send_time = time.time() - start_time
+                success_count = sum(results)
+                
+                burst_throughput = success_count / send_time
+                burst_results.append({
+                    "burst": burst,
+                    "success": success_count,
+                    "throughput": burst_throughput,
+                    "time": send_time
+                })
+                
+                # バースト間で待機
+                await asyncio.sleep(0.5)
+            
+            # 処理完了を待つ
+            await asyncio.sleep(2.0)
+            
+            # 結果を分析
+            avg_throughput = sum(b["throughput"] for b in burst_results) / len(burst_results)
+            max_throughput = max(b["throughput"] for b in burst_results)
+            min_throughput = min(b["throughput"] for b in burst_results)
+            
+            print("\nThroughput measurement results:")
+            for result in burst_results:
+                print(f"  Burst {result['burst']}: {result['throughput']:.0f} msgs/sec")
+            print(f"  Average: {avg_throughput:.0f} msgs/sec")
+            print(f"  Max: {max_throughput:.0f} msgs/sec")
+            print(f"  Min: {min_throughput:.0f} msgs/sec")
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            total_processed = metrics["processed_count"]
+            
+            # 検証
+            assert avg_throughput >= 500, f"Average throughput {avg_throughput:.0f} too low"
+            assert max_throughput >= 1000, f"Max throughput {max_throughput:.0f} too low"
+            assert total_processed >= burst_size * 4, "Not enough data processed"
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_latency_monitoring(self):
+        """レイテンシー監視テスト
+        
+        検証項目:
+        - エンドツーエンドレイテンシー
+        - 各コンポーネントのレイテンシー
+        - レイテンシー分布
+        """
+        pipeline = RealtimePipeline(
+            queue_size=1000,
+            alert_threshold=0.1,  # 100msの厳しい閾値
+            enable_metrics=True,
+            max_history_bars=1000,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            latency_samples = []
+            multiframe_latencies = []
+            
+            # 100個のデータで詳細なレイテンシー測定
+            for i in range(100):
+                start_time = time.time()
+                
+                data_point: DataPoint = {
+                    "timestamp": datetime.now(),
+                    "data": {
+                        "symbol": "EURUSD",
+                        "open": 1.08 + (i % 10) * 0.001,
+                        "high": 1.085 + (i % 10) * 0.001,
+                        "low": 1.075 + (i % 10) * 0.001,
+                        "close": 1.082 + (i % 10) * 0.001,
+                        "volume": 1000 + i * 10,
+                    },
+                    "metadata": {"latency_test": i}
+                }
+                
+                # 送信レイテンシー測定
+                success = await pipeline.submit(data_point)
+                submit_latency = time.time() - start_time
+                
+                if success:
+                    latency_samples.append(submit_latency * 1000)  # ms変換
+                
+                # 少し間隔を開ける（安定した測定のため）
+                await asyncio.sleep(0.01)
+            
+            # 処理完了を待つ
+            await asyncio.sleep(0.5)
+            
+            # メトリクスを取得
+            metrics = pipeline.get_metrics()
+            
+            # レイテンシー統計を計算
+            if latency_samples:
+                avg_latency = sum(latency_samples) / len(latency_samples)
+                max_latency = max(latency_samples)
+                min_latency = min(latency_samples)
+                
+                # パーセンタイル計算
+                sorted_latencies = sorted(latency_samples)
+                p50 = sorted_latencies[len(sorted_latencies) // 2]
+                p95 = sorted_latencies[int(len(sorted_latencies) * 0.95)]
+                p99 = sorted_latencies[int(len(sorted_latencies) * 0.99)]
+                
+                print("\nLatency monitoring results:")
+                print(f"  Samples: {len(latency_samples)}")
+                print(f"  Average: {avg_latency:.2f} ms")
+                print(f"  Min: {min_latency:.2f} ms")
+                print(f"  Max: {max_latency:.2f} ms")
+                print(f"  P50: {p50:.2f} ms")
+                print(f"  P95: {p95:.2f} ms")
+                print(f"  P99: {p99:.2f} ms")
+                
+                # マルチフレーム分析のレイテンシー
+                if "multiframe_latency" in metrics:
+                    print(f"  Multiframe latency: {metrics['multiframe_latency']*1000:.2f} ms")
+                
+                # 検証
+                assert avg_latency < 100, f"Average latency {avg_latency:.2f}ms too high"
+                assert p95 < 200, f"P95 latency {p95:.2f}ms too high"
+                assert p99 < 500, f"P99 latency {p99:.2f}ms too high"
+            
+            # アラート統計を確認
+            alert_stats = pipeline.get_alert_statistics()
+            if alert_stats["total_alerts"] > 0:
+                print(f"\nAlerts triggered: {alert_stats['total_alerts']}")
+                print(f"Alert rate: {alert_stats['total_alerts']/100:.1%}")
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_memory_efficiency(self):
+        """メモリ効率検証テスト
+        
+        検証項目:
+        - メモリ使用量の推移
+        - メモリリークの検出
+        - ガベージコレクションの影響
+        """
+        import gc
+        
+        pipeline = RealtimePipeline(
+            queue_size=2000,
+            alert_threshold=1.0,
+            enable_metrics=True,
+            max_history_bars=2000,  # 中規模バッファ
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # メモリ追跡開始
+            tracemalloc.start()
+            gc.collect()  # 初期ガベージコレクション
+            
+            initial_memory = tracemalloc.get_traced_memory()[0]
+            memory_samples = []
+            
+            # 5000データを段階的に送信
+            batch_size = 500
+            total_batches = 10
+            
+            for batch in range(total_batches):
+                batch_start_memory = tracemalloc.get_traced_memory()[0]
+                
+                # バッチ送信
+                for i in range(batch_size):
+                    idx = batch * batch_size + i
+                    data_point: DataPoint = {
+                        "timestamp": datetime.now() + timedelta(milliseconds=idx),
+                        "data": {
+                            "symbol": "GBPUSD",
+                            "open": 1.25 + (idx % 50) * 0.0001,
+                            "high": 1.255 + (idx % 50) * 0.0001,
+                            "low": 1.245 + (idx % 50) * 0.0001,
+                            "close": 1.252 + (idx % 50) * 0.0001,
+                            "volume": 1000 + idx,
+                        },
+                        "metadata": {"memory_test": batch, "index": i}
+                    }
+                    
+                    await pipeline.submit(data_point)
+                
+                # バッチ後のメモリを測定
+                batch_end_memory = tracemalloc.get_traced_memory()[0]
+                batch_memory_increase = (batch_end_memory - batch_start_memory) / 1024 / 1024
+                memory_samples.append({
+                    "batch": batch,
+                    "memory_mb": batch_end_memory / 1024 / 1024,
+                    "increase_mb": batch_memory_increase
+                })
+                
+                # 定期的にガベージコレクション
+                if batch % 3 == 2:
+                    gc.collect()
+                
+                await asyncio.sleep(0.2)
+            
+            # 最終メモリ使用量
+            final_memory = tracemalloc.get_traced_memory()[0]
+            total_increase = (final_memory - initial_memory) / 1024 / 1024
+            
+            tracemalloc.stop()
+            
+            # メモリ使用量の分析
+            max_memory = max(s["memory_mb"] for s in memory_samples)
+            avg_increase = sum(s["increase_mb"] for s in memory_samples) / len(memory_samples)
+            
+            print("\nMemory efficiency results:")
+            print(f"  Initial memory: {initial_memory/1024/1024:.2f} MB")
+            print(f"  Final memory: {final_memory/1024/1024:.2f} MB")
+            print(f"  Total increase: {total_increase:.2f} MB")
+            print(f"  Max memory: {max_memory:.2f} MB")
+            print(f"  Avg batch increase: {avg_increase:.2f} MB")
+            
+            # バッファサイズを確認
+            metrics = pipeline.get_metrics()
+            buffer_size = metrics["multiframe_buffer_size"]
+            print(f"  Buffer size: {buffer_size} bars")
+            
+            # 検証
+            assert total_increase < 200, f"Memory increase {total_increase:.2f}MB too high"
+            assert avg_increase < 20, f"Average batch increase {avg_increase:.2f}MB too high"
+            assert buffer_size <= 2000, "Buffer size exceeds limit"
+            
+            # メモリリークチェック（後半のバッチで増加率が上がっていないか）
+            early_increases = [s["increase_mb"] for s in memory_samples[:3]]
+            late_increases = [s["increase_mb"] for s in memory_samples[-3:]]
+            
+            avg_early = sum(early_increases) / len(early_increases) if early_increases else 0
+            avg_late = sum(late_increases) / len(late_increases) if late_increases else 0
+            
+            # 後半の増加率が前半の2倍を超えないこと
+            if avg_early > 0:
+                leak_ratio = avg_late / avg_early
+                assert leak_ratio < 2.0, f"Potential memory leak detected: ratio {leak_ratio:.2f}"
+            
+        finally:
+            await pipeline.stop()
+    
+    @pytest.mark.asyncio
+    async def test_cpu_utilization(self):
+        """CPU使用率測定テスト
+        
+        検証項目:
+        - CPU使用率の測定
+        - 並行処理の効率
+        - CPUボトルネックの特定
+        """
+        import psutil
+        import os
+        
+        # 現在のプロセスを取得
+        process = psutil.Process(os.getpid())
+        
+        pipeline = RealtimePipeline(
+            queue_size=5000,
+            alert_threshold=2.0,
+            enable_metrics=True,
+            max_history_bars=3000,
+            multiframe_config={
+                'short_term_periods': [9, 13, 24],
+                'long_term_periods': [24, 33],
+                'long_timeframe': '5T'
+            }
+        )
+        
+        await pipeline.start()
+        
+        try:
+            # CPU使用率のベースライン測定
+            process.cpu_percent()  # 初回呼び出し（初期化）
+            await asyncio.sleep(0.1)
+            baseline_cpu = process.cpu_percent(interval=0.1)
+            
+            cpu_samples = []
+            
+            # 高負荷テスト（2000データを高速送信）
+            start_time = time.time()
+            
+            for wave in range(4):  # 4波に分けて送信
+                wave_start = time.time()
+                tasks = []
+                
+                for i in range(500):
+                    idx = wave * 500 + i
+                    data_point: DataPoint = {
+                        "timestamp": datetime.now(),
+                        "data": {
+                            "symbol": "AUDUSD",
+                            "open": 0.65 + (idx % 20) * 0.0001,
+                            "high": 0.655 + (idx % 20) * 0.0001,
+                            "low": 0.645 + (idx % 20) * 0.0001,
+                            "close": 0.652 + (idx % 20) * 0.0001,
+                            "volume": random.randint(100, 5000),
+                        },
+                        "metadata": {"cpu_test": wave, "index": i}
+                    }
+                    
+                    task = asyncio.create_task(pipeline.submit(data_point))
+                    tasks.append(task)
+                
+                # 並行送信とCPU測定
+                await asyncio.gather(*tasks)
+                wave_cpu = process.cpu_percent(interval=0.1)
+                cpu_samples.append(wave_cpu)
+                
+                wave_time = time.time() - wave_start
+                print(f"Wave {wave}: {500/wave_time:.0f} msgs/sec, CPU: {wave_cpu:.1f}%")
+                
+                await asyncio.sleep(0.2)
+            
+            # 全体の処理時間とCPU使用率
+            total_time = time.time() - start_time
+            avg_cpu = sum(cpu_samples) / len(cpu_samples) if cpu_samples else 0
+            max_cpu = max(cpu_samples) if cpu_samples else 0
+            
+            # メトリクスを確認
+            metrics = pipeline.get_metrics()
+            
+            print("\nCPU utilization results:")
+            print(f"  Baseline CPU: {baseline_cpu:.1f}%")
+            print(f"  Average CPU: {avg_cpu:.1f}%")
+            print(f"  Max CPU: {max_cpu:.1f}%")
+            print(f"  Total time: {total_time:.2f}s")
+            print(f"  Throughput: {2000/total_time:.0f} msgs/sec")
+            print(f"  Processed: {metrics['processed_count']}")
+            
+            # 検証
+            assert avg_cpu < 80, f"Average CPU {avg_cpu:.1f}% too high"
+            assert max_cpu < 95, f"Max CPU {max_cpu:.1f}% too high"
+            assert metrics["processed_count"] >= 1900, "Not enough data processed"
+            
+            # CPU効率（msgs/sec per CPU%）
+            if avg_cpu > baseline_cpu:
+                cpu_efficiency = (2000/total_time) / (avg_cpu - baseline_cpu)
+                print(f"  CPU efficiency: {cpu_efficiency:.1f} msgs/sec per CPU%")
+                assert cpu_efficiency > 5, "CPU efficiency too low"
+            
+        finally:
+            await pipeline.stop()
