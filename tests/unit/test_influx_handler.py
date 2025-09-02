@@ -14,6 +14,7 @@ from src.storage.influx_handler import (
     InfluxDBConnectionError,
     InfluxDBHandler,
     InfluxDBSchema,
+    InfluxDBWriteError,
     OHLCDataPoint,
     TimeFrame,
 )
@@ -322,6 +323,216 @@ class TestInfluxDBHandler:
 
         # Should not raise error
         handler.__del__()
+
+    @pytest.mark.asyncio
+    async def test_write_point_success(self, influx_handler):
+        """Test successful write of single data point."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_write_api = MagicMock()
+        mock_client.write_api.return_value = mock_write_api
+        influx_handler._client = mock_client
+
+        # Create test data point
+        data_point = OHLCDataPoint(
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            timeframe=TimeFrame.M5,
+            open=1.0850,
+            high=1.0860,
+            low=1.0840,
+            close=1.0855,
+            volume=1000.0,
+        )
+
+        # Write data point
+        await influx_handler.write_point(data_point)
+
+        # Verify
+        mock_client.write_api.assert_called_once()
+        mock_write_api.write.assert_called_once()
+        mock_write_api.close.assert_called_once()
+
+        # Check that write was called with correct bucket
+        call_kwargs = mock_write_api.write.call_args.kwargs
+        assert call_kwargs["bucket"] == influx_handler.bucket
+
+    @pytest.mark.asyncio
+    async def test_write_point_no_connection(self, influx_handler):
+        """Test write point without connection."""
+        data_point = OHLCDataPoint(
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            timeframe=TimeFrame.M5,
+            open=1.0850,
+            high=1.0860,
+            low=1.0840,
+            close=1.0855,
+            volume=1000.0,
+        )
+
+        with pytest.raises(
+            InfluxDBConnectionError, match="Not connected to InfluxDB"
+        ):
+            await influx_handler.write_point(data_point)
+
+    @pytest.mark.asyncio
+    async def test_write_point_influxdb_error(self, influx_handler):
+        """Test write point with InfluxDB error."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_write_api = MagicMock()
+
+        # Create a proper InfluxDBError
+        mock_response = MagicMock()
+        mock_response.data = None
+        mock_response.status = 500
+        mock_response.reason = "Write failed"
+        error = InfluxDBError(mock_response)
+        error.message = "Write failed"
+
+        mock_write_api.write.side_effect = error
+        mock_client.write_api.return_value = mock_write_api
+        influx_handler._client = mock_client
+
+        # Create test data point
+        data_point = OHLCDataPoint(
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            timeframe=TimeFrame.M5,
+            open=1.0850,
+            high=1.0860,
+            low=1.0840,
+            close=1.0855,
+            volume=1000.0,
+        )
+
+        # Write should raise InfluxDBWriteError
+        with pytest.raises(InfluxDBWriteError, match="Write failed"):
+            await influx_handler.write_point(data_point)
+
+        # Verify close was still called
+        mock_write_api.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_write_batch_success(self, influx_handler):
+        """Test successful batch write of multiple data points."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_write_api = MagicMock()
+        mock_client.write_api.return_value = mock_write_api
+        influx_handler._client = mock_client
+
+        # Create test data points
+        data_points = [
+            OHLCDataPoint(
+                timestamp=datetime.now(),
+                symbol="EURUSD",
+                timeframe=TimeFrame.M5,
+                open=1.0850 + i * 0.0001,
+                high=1.0860 + i * 0.0001,
+                low=1.0840 + i * 0.0001,
+                close=1.0855 + i * 0.0001,
+                volume=1000.0 + i * 100,
+            )
+            for i in range(10)
+        ]
+
+        # Write batch
+        await influx_handler.write_batch(data_points, batch_size=5)
+
+        # Verify
+        mock_client.write_api.assert_called_once()
+        # Should be called twice (2 batches of 5)
+        assert mock_write_api.write.call_count == 2
+        mock_write_api.flush.assert_called_once()
+        mock_write_api.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_write_batch_empty_list(self, influx_handler):
+        """Test write batch with empty list."""
+        influx_handler._client = MagicMock()
+
+        with pytest.raises(ValueError, match="No data points provided"):
+            await influx_handler.write_batch([])
+
+    @pytest.mark.asyncio
+    async def test_write_batch_invalid_batch_size(self, influx_handler):
+        """Test write batch with invalid batch size."""
+        influx_handler._client = MagicMock()
+
+        data_points = [
+            OHLCDataPoint(
+                timestamp=datetime.now(),
+                symbol="EURUSD",
+                timeframe=TimeFrame.M5,
+                open=1.0850,
+                high=1.0860,
+                low=1.0840,
+                close=1.0855,
+                volume=1000.0,
+            )
+        ]
+
+        with pytest.raises(ValueError, match="Invalid batch_size"):
+            await influx_handler.write_batch(data_points, batch_size=0)
+
+        with pytest.raises(ValueError, match="Invalid batch_size"):
+            await influx_handler.write_batch(data_points, batch_size=-1)
+
+    @pytest.mark.asyncio
+    async def test_write_batch_no_connection(self, influx_handler):
+        """Test write batch without connection."""
+        data_points = [
+            OHLCDataPoint(
+                timestamp=datetime.now(),
+                symbol="EURUSD",
+                timeframe=TimeFrame.M5,
+                open=1.0850,
+                high=1.0860,
+                low=1.0840,
+                close=1.0855,
+                volume=1000.0,
+            )
+        ]
+
+        with pytest.raises(
+            InfluxDBConnectionError, match="Not connected to InfluxDB"
+        ):
+            await influx_handler.write_batch(data_points)
+
+    @pytest.mark.asyncio
+    async def test_write_batch_large_dataset(self, influx_handler):
+        """Test batch write with dataset larger than batch size."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_write_api = MagicMock()
+        mock_client.write_api.return_value = mock_write_api
+        influx_handler._client = mock_client
+
+        # Create large dataset
+        data_points = [
+            OHLCDataPoint(
+                timestamp=datetime.now(),
+                symbol="EURUSD",
+                timeframe=TimeFrame.M5,
+                open=1.0850,
+                high=1.0860,
+                low=1.0840,
+                close=1.0855,
+                volume=1000.0,
+            )
+            for _ in range(12345)
+        ]
+
+        # Write batch with default batch size (5000)
+        await influx_handler.write_batch(data_points)
+
+        # Verify correct number of batches
+        # 12345 points / 5000 per batch = 3 batches (5000, 5000, 2345)
+        assert mock_write_api.write.call_count == 3
+        mock_write_api.flush.assert_called_once()
+        mock_write_api.close.assert_called_once()
 
 
 class TestOHLCDataPoint:

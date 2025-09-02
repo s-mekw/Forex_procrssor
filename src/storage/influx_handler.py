@@ -11,6 +11,7 @@ from typing import Any
 
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.exceptions import InfluxDBError
+from influxdb_client.client.write_api import ASYNCHRONOUS, SYNCHRONOUS
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
@@ -403,6 +404,115 @@ class InfluxDBHandler:
             exc_tb: Exception traceback if raised.
         """
         await self.disconnect()
+
+    async def write_point(
+        self, data_point: OHLCDataPoint, measurement: str = "ohlc"
+    ) -> None:
+        """Write a single data point to InfluxDB.
+
+        Args:
+            data_point: The OHLC data point to write.
+            measurement: The measurement name for InfluxDB. Defaults to "ohlc".
+
+        Raises:
+            InfluxDBWriteError: If write operation fails.
+            InfluxDBConnectionError: If not connected to InfluxDB.
+        """
+        if not self._client:
+            raise InfluxDBConnectionError("Not connected to InfluxDB")
+
+        try:
+            # Convert data point to InfluxDB Point format
+            point = data_point.to_influx_point(measurement)
+
+            # Get write API with synchronous mode for single point
+            write_api = self._client.write_api(write_options=SYNCHRONOUS)
+
+            # Write the point
+            write_api.write(bucket=self.bucket, record=point)
+
+            logger.debug(
+                f"Successfully wrote data point: {data_point.symbol} "
+                f"at {data_point.timestamp}"
+            )
+
+        except InfluxDBError as e:
+            logger.error(f"Failed to write data point: {e}")
+            raise InfluxDBWriteError(f"Write failed: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error during write: {e}")
+            raise InfluxDBWriteError(f"Unexpected write error: {e}") from e
+        finally:
+            # Close write API to free resources
+            if "write_api" in locals():
+                write_api.close()
+
+    async def write_batch(
+        self,
+        data_points: list[OHLCDataPoint],
+        measurement: str = "ohlc",
+        batch_size: int = 5000,
+    ) -> None:
+        """Write multiple data points to InfluxDB in batches.
+
+        Args:
+            data_points: List of OHLC data points to write.
+            measurement: The measurement name for InfluxDB. Defaults to "ohlc".
+            batch_size: Maximum number of points per batch. Defaults to 5000.
+
+        Raises:
+            InfluxDBWriteError: If write operation fails.
+            InfluxDBConnectionError: If not connected to InfluxDB.
+            ValueError: If batch_size is invalid or data_points is empty.
+        """
+        if not self._client:
+            raise InfluxDBConnectionError("Not connected to InfluxDB")
+
+        if not data_points:
+            raise ValueError("No data points provided for batch write")
+
+        if batch_size <= 0:
+            raise ValueError(f"Invalid batch_size: {batch_size}")
+
+        try:
+            # Convert all data points to InfluxDB Point format
+            points = [dp.to_influx_point(measurement) for dp in data_points]
+
+            # Get write API with asynchronous mode for batch write
+            write_api = self._client.write_api(write_options=ASYNCHRONOUS)
+
+            # Write points in batches
+            total_points = len(points)
+            written_count = 0
+
+            for i in range(0, total_points, batch_size):
+                batch = points[i : i + batch_size]
+                write_api.write(bucket=self.bucket, records=batch)
+                written_count += len(batch)
+
+                logger.debug(
+                    f"Wrote batch of {len(batch)} points "
+                    f"({written_count}/{total_points} total)"
+                )
+
+            # Flush any remaining data
+            write_api.flush()
+
+            logger.info(
+                f"Successfully wrote {total_points} data points in "
+                f"{(total_points + batch_size - 1) // batch_size} batches"
+            )
+
+        except InfluxDBError as e:
+            logger.error(f"Failed to write batch: {e}")
+            raise InfluxDBWriteError(f"Batch write failed: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error during batch write: {e}")
+            raise InfluxDBWriteError(f"Unexpected batch write error: {e}") from e
+        finally:
+            # Close write API to free resources
+            if "write_api" in locals():
+                write_api.close()
 
 
 class InfluxDBConnectionError(Exception):
