@@ -4,11 +4,14 @@ This module provides an asynchronous interface for interacting with InfluxDB,
 including connection management, health checks, and basic CRUD operations.
 """
 
+import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from functools import wraps
+from typing import Any, Callable, TypeVar
 
 import polars as pl
 from influxdb_client import InfluxDBClient, Point
@@ -18,6 +21,58 @@ from influxdb_client.client.write_api import ASYNCHRONOUS, SYNCHRONOUS
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
+# Type variable for decorators
+T = TypeVar("T")
+
+
+# Forward declaration of exception classes
+class InfluxDBConnectionError(Exception):
+    """Custom exception for InfluxDB connection errors."""
+    pass
+
+
+class InfluxDBQueryError(Exception):
+    """Custom exception for InfluxDB query errors."""
+    pass
+
+
+class InfluxDBWriteError(Exception):
+    """Custom exception for InfluxDB write errors."""
+    pass
+
+
+def ensure_connected(func: Callable) -> Callable:
+    """Decorator to ensure connection is established before operation.
+
+    This decorator automatically establishes or re-establishes connection
+    if needed before executing the decorated method.
+
+    Args:
+        func: The async method to decorate.
+
+    Returns:
+        Decorated async method.
+    """
+
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        """Wrapper function to check and establish connection."""
+        # Check if we need to establish connection
+        if not self._is_connected or not await self._is_connection_healthy():
+            await self._reconnect_with_retry()
+
+        # Try to execute the function
+        try:
+            return await func(self, *args, **kwargs)
+        except (InfluxDBError, InfluxDBConnectionError, InfluxDBWriteError, InfluxDBQueryError) as e:
+            # Connection might be lost, try to reconnect once
+            logger.warning(f"Operation failed, attempting reconnection: {e}")
+            await self._reconnect_with_retry()
+            # Retry the operation once after reconnection
+            return await func(self, *args, **kwargs)
+
+    return wrapper
 
 
 class TimeFrame(str, Enum):
@@ -255,7 +310,8 @@ class InfluxDBHandler:
     """Handler for InfluxDB operations.
 
     This class manages the connection to InfluxDB and provides methods for
-    health checks, data writing, and querying operations.
+    health checks, data writing, and querying operations. Includes automatic
+    reconnection logic and exponential backoff retry strategies.
 
     Attributes:
         url: The InfluxDB server URL.
@@ -264,6 +320,9 @@ class InfluxDBHandler:
         bucket: The bucket name for data storage.
         timeout: Connection timeout in milliseconds.
         verify_ssl: Whether to verify SSL certificates.
+        max_retries: Maximum number of retry attempts.
+        base_retry_delay: Base delay in seconds for exponential backoff.
+        max_retry_delay: Maximum delay in seconds between retries.
     """
 
     def __init__(
@@ -274,6 +333,9 @@ class InfluxDBHandler:
         bucket: str,
         timeout: int = 10000,
         verify_ssl: bool = True,
+        max_retries: int = 3,
+        base_retry_delay: float = 1.0,
+        max_retry_delay: float = 30.0,
     ) -> None:
         """Initialize InfluxDB handler.
 
@@ -284,6 +346,9 @@ class InfluxDBHandler:
             bucket: The bucket name for data storage.
             timeout: Connection timeout in milliseconds. Defaults to 10000.
             verify_ssl: Whether to verify SSL certificates. Defaults to True.
+            max_retries: Maximum number of retry attempts. Defaults to 3.
+            base_retry_delay: Base delay in seconds for exponential backoff. Defaults to 1.0.
+            max_retry_delay: Maximum delay in seconds between retries. Defaults to 30.0.
         """
         self.url = url
         self.token = token
@@ -291,8 +356,14 @@ class InfluxDBHandler:
         self.bucket = bucket
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+        self.max_retries = max_retries
+        self.base_retry_delay = base_retry_delay
+        self.max_retry_delay = max_retry_delay
         self._client: InfluxDBClient | None = None
         self._is_connected = False
+        self._connection_lock = asyncio.Lock()
+        self._last_health_check: float = 0
+        self._health_check_interval: float = 60.0  # Check every 60 seconds
 
     @classmethod
     def from_env(cls) -> "InfluxDBHandler":
@@ -363,6 +434,42 @@ class InfluxDBHandler:
             f"timeout={timeout}, verify_ssl={verify_ssl}"
         )
 
+        # Get retry configuration from environment
+        max_retries_str = os.getenv("INFLUXDB_MAX_RETRIES", "3")
+        base_retry_delay_str = os.getenv("INFLUXDB_BASE_RETRY_DELAY", "1.0")
+        max_retry_delay_str = os.getenv("INFLUXDB_MAX_RETRY_DELAY", "30.0")
+
+        # Parse retry configuration
+        try:
+            max_retries = int(max_retries_str)
+            if max_retries < 0:
+                raise ValueError(f"Invalid max_retries value: {max_retries}")
+        except ValueError as e:
+            logger.warning(
+                f"Invalid INFLUXDB_MAX_RETRIES value: {max_retries_str}, using default: 3"
+            )
+            max_retries = 3
+
+        try:
+            base_retry_delay = float(base_retry_delay_str)
+            if base_retry_delay <= 0:
+                raise ValueError(f"Invalid base_retry_delay value: {base_retry_delay}")
+        except ValueError as e:
+            logger.warning(
+                f"Invalid INFLUXDB_BASE_RETRY_DELAY value: {base_retry_delay_str}, using default: 1.0"
+            )
+            base_retry_delay = 1.0
+
+        try:
+            max_retry_delay = float(max_retry_delay_str)
+            if max_retry_delay <= 0:
+                raise ValueError(f"Invalid max_retry_delay value: {max_retry_delay}")
+        except ValueError as e:
+            logger.warning(
+                f"Invalid INFLUXDB_MAX_RETRY_DELAY value: {max_retry_delay_str}, using default: 30.0"
+            )
+            max_retry_delay = 30.0
+
         return cls(
             url=url,
             token=token,
@@ -370,41 +477,130 @@ class InfluxDBHandler:
             bucket=bucket,
             timeout=timeout,
             verify_ssl=verify_ssl,
+            max_retries=max_retries,
+            base_retry_delay=base_retry_delay,
+            max_retry_delay=max_retry_delay,
         )
 
-    async def connect(self) -> None:
-        """Establish connection to InfluxDB.
+    async def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate delay for exponential backoff.
 
-        Creates a new InfluxDB client instance and verifies the connection.
+        Args:
+            attempt: Current retry attempt number (0-based).
+
+        Returns:
+            Delay in seconds.
+        """
+        delay = self.base_retry_delay * (2**attempt)
+        return min(delay, self.max_retry_delay)
+
+    async def _reconnect_with_retry(self) -> None:
+        """Reconnect to InfluxDB with exponential backoff retry.
 
         Raises:
-            InfluxDBError: If connection fails.
+            InfluxDBConnectionError: If all retry attempts fail.
         """
-        try:
-            # Create InfluxDB client
-            self._client = InfluxDBClient(
-                url=self.url,
-                token=self.token,
-                org=self.org,
-                timeout=self.timeout,
-                verify_ssl=self.verify_ssl,
+        async with self._connection_lock:
+            # Double-check if still disconnected
+            if self._is_connected and await self._is_connection_healthy():
+                return
+
+            # Disconnect existing client if any
+            if self._client:
+                try:
+                    self._client.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                finally:
+                    self._client = None
+                    self._is_connected = False
+
+            # Retry connection with exponential backoff
+            last_error = None
+            for attempt in range(self.max_retries):
+                try:
+                    logger.info(
+                        f"Connection attempt {attempt + 1}/{self.max_retries} to {self.url}"
+                    )
+                    await self._connect_internal()
+                    logger.info("Successfully reconnected to InfluxDB")
+                    return
+                except Exception as e:
+                    last_error = e
+                    if attempt < self.max_retries - 1:
+                        delay = await self._calculate_retry_delay(attempt)
+                        logger.warning(
+                            f"Connection attempt {attempt + 1} failed: {e}. "
+                            f"Retrying in {delay:.1f} seconds..."
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(
+                            f"All {self.max_retries} connection attempts failed"
+                        )
+
+            # All retries failed
+            raise InfluxDBConnectionError(
+                f"Failed to connect after {self.max_retries} attempts: {last_error}"
             )
 
-            # Verify connection by checking if ready
-            if not self._client.ready():
-                raise InfluxDBConnectionError("InfluxDB server is not ready")
+    async def _connect_internal(self) -> None:
+        """Internal method to establish connection to InfluxDB.
 
-            self._is_connected = True
-            logger.info(f"Successfully connected to InfluxDB at {self.url}")
+        Raises:
+            InfluxDBConnectionError: If connection fails.
+        """
+        # Create InfluxDB client
+        self._client = InfluxDBClient(
+            url=self.url,
+            token=self.token,
+            org=self.org,
+            timeout=self.timeout,
+            verify_ssl=self.verify_ssl,
+        )
 
-        except InfluxDBError as e:
-            logger.error(f"Failed to connect to InfluxDB: {e}")
-            self._is_connected = False
-            raise
+        # Verify connection by checking if ready
+        if not self._client.ready():
+            raise InfluxDBConnectionError("InfluxDB server is not ready")
+
+        self._is_connected = True
+        self._last_health_check = time.time()
+
+    async def _is_connection_healthy(self) -> bool:
+        """Check if the current connection is healthy.
+
+        Returns:
+            True if connection is healthy, False otherwise.
+        """
+        if not self._client or not self._is_connected:
+            return False
+
+        # Check if we need to perform a health check
+        current_time = time.time()
+        if current_time - self._last_health_check < self._health_check_interval:
+            return True  # Assume healthy if recently checked
+
+        # Perform health check
+        try:
+            health = self._client.health()
+            if health.status == "pass":
+                self._last_health_check = current_time
+                return True
         except Exception as e:
-            logger.error(f"Unexpected error during InfluxDB connection: {e}")
-            self._is_connected = False
-            raise InfluxDBConnectionError(f"Connection failed: {e}") from e
+            logger.debug(f"Health check failed: {e}")
+
+        return False
+
+    async def connect(self) -> None:
+        """Establish connection to InfluxDB with retry logic.
+
+        Creates a new InfluxDB client instance and verifies the connection.
+        Uses exponential backoff retry strategy.
+
+        Raises:
+            InfluxDBConnectionError: If all connection attempts fail.
+        """
+        await self._reconnect_with_retry()
 
     async def disconnect(self) -> None:
         """Close connection to InfluxDB.
@@ -420,6 +616,23 @@ class InfluxDBHandler:
                 logger.error(f"Error during disconnect: {e}")
             finally:
                 self._client = None
+
+    async def ping(self) -> bool:
+        """Ping the InfluxDB server to check connectivity.
+
+        Returns:
+            True if server responds to ping, False otherwise.
+        """
+        if not self._client:
+            return False
+
+        try:
+            # Use the ping endpoint for a quick connectivity check
+            self._client.ping()
+            return True
+        except Exception as e:
+            logger.debug(f"Ping failed: {e}")
+            return False
 
     async def health_check(self) -> bool:
         """Check the health status of InfluxDB connection.
@@ -486,6 +699,7 @@ class InfluxDBHandler:
         """
         await self.disconnect()
 
+    @ensure_connected
     async def write_point(
         self, data_point: OHLCDataPoint, measurement: str = "ohlc"
     ) -> None:
@@ -528,6 +742,7 @@ class InfluxDBHandler:
             if "write_api" in locals():
                 write_api.close()
 
+    @ensure_connected
     async def write_batch(
         self,
         data_points: list[OHLCDataPoint],
@@ -595,6 +810,7 @@ class InfluxDBHandler:
             if "write_api" in locals():
                 write_api.close()
 
+    @ensure_connected
     async def query(self, flux_query: str) -> list[dict[str, Any]]:
         """Execute a Flux query and return results.
 
@@ -634,6 +850,7 @@ class InfluxDBHandler:
             logger.error(f"Unexpected error during query: {e}")
             raise InfluxDBQueryError(f"Unexpected query error: {e}") from e
 
+    @ensure_connected
     async def query_ohlc(
         self,
         symbol: str,
@@ -734,6 +951,7 @@ class InfluxDBHandler:
             logger.error(f"Failed to query OHLC data: {e}")
             raise InfluxDBQueryError(f"Failed to query OHLC data: {e}") from e
 
+    @ensure_connected
     async def query_time_range(
         self,
         measurement: str,
@@ -808,21 +1026,3 @@ class InfluxDBHandler:
         except Exception as e:
             logger.error(f"Failed to query time range: {e}")
             raise InfluxDBQueryError(f"Failed to query time range: {e}") from e
-
-
-class InfluxDBConnectionError(Exception):
-    """Custom exception for InfluxDB connection errors."""
-
-    pass
-
-
-class InfluxDBQueryError(Exception):
-    """Custom exception for InfluxDB query errors."""
-
-    pass
-
-
-class InfluxDBWriteError(Exception):
-    """Custom exception for InfluxDB write errors."""
-
-    pass

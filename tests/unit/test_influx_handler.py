@@ -4,9 +4,10 @@ This module contains unit tests for InfluxDBHandler class,
 including connection management and health check functionality.
 """
 
+import asyncio
 import os
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import polars as pl
 import pytest
@@ -44,6 +45,177 @@ def influx_handler(influx_config):
 
 class TestInfluxDBHandler:
     """Test suite for InfluxDBHandler class."""
+
+    @pytest.mark.asyncio
+    async def test_reconnect_with_retry_success(self, influx_handler):
+        """Test successful reconnection with retry logic."""
+        with patch("src.storage.influx_handler.InfluxDBClient") as mock_client_class:
+            # Setup mock client
+            mock_client = MagicMock()
+            mock_client.ready.return_value = True
+            mock_client_class.return_value = mock_client
+
+            # Perform reconnection
+            await influx_handler._reconnect_with_retry()
+
+            # Verify connection was established
+            assert influx_handler._is_connected is True
+            assert influx_handler._client == mock_client
+
+    @pytest.mark.asyncio
+    async def test_reconnect_with_retry_failure_then_success(self, influx_handler):
+        """Test reconnection succeeds after initial failures."""
+        with patch("src.storage.influx_handler.InfluxDBClient") as mock_client_class:
+            # Setup mock client to fail twice then succeed
+            mock_client = MagicMock()
+            mock_client.ready.side_effect = [False, False, True]
+            mock_client_class.return_value = mock_client
+
+            # Set max_retries to 3
+            influx_handler.max_retries = 3
+            influx_handler.base_retry_delay = 0.01  # Short delay for testing
+
+            # Perform reconnection
+            await influx_handler._reconnect_with_retry()
+
+            # Verify connection was established after retries
+            assert influx_handler._is_connected is True
+            assert mock_client.ready.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_reconnect_with_retry_all_failures(self, influx_handler):
+        """Test reconnection fails after max retries."""
+        with patch("src.storage.influx_handler.InfluxDBClient") as mock_client_class:
+            # Setup mock client to always fail
+            mock_client = MagicMock()
+            mock_client.ready.return_value = False
+            mock_client_class.return_value = mock_client
+
+            # Set max_retries to 2
+            influx_handler.max_retries = 2
+            influx_handler.base_retry_delay = 0.01  # Short delay for testing
+
+            # Perform reconnection - should raise error
+            with pytest.raises(
+                InfluxDBConnectionError,
+                match="Failed to connect after 2 attempts"
+            ):
+                await influx_handler._reconnect_with_retry()
+
+            # Verify all attempts were made
+            assert mock_client.ready.call_count == 2
+            assert influx_handler._is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_exponential_backoff_calculation(self, influx_handler):
+        """Test exponential backoff delay calculation."""
+        influx_handler.base_retry_delay = 1.0
+        influx_handler.max_retry_delay = 30.0
+
+        # Test exponential growth
+        assert await influx_handler._calculate_retry_delay(0) == 1.0  # 1 * 2^0
+        assert await influx_handler._calculate_retry_delay(1) == 2.0  # 1 * 2^1
+        assert await influx_handler._calculate_retry_delay(2) == 4.0  # 1 * 2^2
+        assert await influx_handler._calculate_retry_delay(3) == 8.0  # 1 * 2^3
+        assert await influx_handler._calculate_retry_delay(4) == 16.0  # 1 * 2^4
+
+        # Test max delay cap
+        assert await influx_handler._calculate_retry_delay(10) == 30.0  # Capped at max
+
+    @pytest.mark.asyncio
+    async def test_is_connection_healthy_no_client(self, influx_handler):
+        """Test health check when no client exists."""
+        influx_handler._client = None
+        result = await influx_handler._is_connection_healthy()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_is_connection_healthy_not_connected(self, influx_handler):
+        """Test health check when not connected."""
+        influx_handler._client = MagicMock()
+        influx_handler._is_connected = False
+        result = await influx_handler._is_connection_healthy()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_is_connection_healthy_recent_check(self, influx_handler):
+        """Test health check skips if recently checked."""
+        import time
+
+        influx_handler._client = MagicMock()
+        influx_handler._is_connected = True
+        influx_handler._last_health_check = time.time()  # Just checked
+        influx_handler._health_check_interval = 60.0
+
+        result = await influx_handler._is_connection_healthy()
+        assert result is True
+        # Verify health() was not called
+        influx_handler._client.health.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_is_connection_healthy_needs_check(self, influx_handler):
+        """Test health check performs check when needed."""
+        import time
+
+        mock_client = MagicMock()
+        mock_health = MagicMock()
+        mock_health.status = "pass"
+        mock_client.health.return_value = mock_health
+
+        influx_handler._client = mock_client
+        influx_handler._is_connected = True
+        influx_handler._last_health_check = time.time() - 120  # 2 minutes ago
+        influx_handler._health_check_interval = 60.0
+
+        result = await influx_handler._is_connection_healthy()
+        assert result is True
+        mock_client.health.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_is_connection_healthy_check_fails(self, influx_handler):
+        """Test health check returns False on failure."""
+        import time
+
+        mock_client = MagicMock()
+        mock_health = MagicMock()
+        mock_health.status = "fail"
+        mock_client.health.return_value = mock_health
+
+        influx_handler._client = mock_client
+        influx_handler._is_connected = True
+        influx_handler._last_health_check = time.time() - 120  # 2 minutes ago
+        influx_handler._health_check_interval = 60.0
+
+        result = await influx_handler._is_connection_healthy()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ping_success(self, influx_handler):
+        """Test successful ping operation."""
+        mock_client = MagicMock()
+        mock_client.ping.return_value = None  # No exception means success
+        influx_handler._client = mock_client
+
+        result = await influx_handler.ping()
+        assert result is True
+        mock_client.ping.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ping_failure(self, influx_handler):
+        """Test failed ping operation."""
+        mock_client = MagicMock()
+        mock_client.ping.side_effect = Exception("Ping failed")
+        influx_handler._client = mock_client
+
+        result = await influx_handler.ping()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ping_no_client(self, influx_handler):
+        """Test ping with no client returns False."""
+        influx_handler._client = None
+        result = await influx_handler.ping()
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_handler_initialization(self, influx_handler, influx_config):
@@ -326,6 +498,102 @@ class TestInfluxDBHandler:
 
         # Should not raise error
         handler.__del__()
+
+    @pytest.mark.asyncio
+    async def test_ensure_connected_decorator_auto_connects(self, influx_handler):
+        """Test that ensure_connected decorator automatically establishes connection."""
+        # Create a mock data point
+        data_point = OHLCDataPoint(
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            timeframe=TimeFrame.M5,
+            open=1.0850,
+            high=1.0860,
+            low=1.0840,
+            close=1.0855,
+            volume=1000.0,
+        )
+
+        with patch("src.storage.influx_handler.InfluxDBClient") as mock_client_class:
+            # Setup mock client
+            mock_client = MagicMock()
+            mock_client.ready.return_value = True
+            mock_write_api = MagicMock()
+            mock_client.write_api.return_value = mock_write_api
+            mock_client_class.return_value = mock_client
+
+            # Handler starts disconnected
+            assert influx_handler._is_connected is False
+
+            # Call write_point which has @ensure_connected decorator
+            await influx_handler.write_point(data_point)
+
+            # Verify connection was established
+            mock_client_class.assert_called_once()
+            mock_client.ready.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_ensure_connected_decorator_retries_on_failure(self, influx_handler):
+        """Test that ensure_connected decorator retries operation on connection failure."""
+        # Create a mock data point
+        data_point = OHLCDataPoint(
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            timeframe=TimeFrame.M5,
+            open=1.0850,
+            high=1.0860,
+            low=1.0840,
+            close=1.0855,
+            volume=1000.0,
+        )
+
+        with patch("src.storage.influx_handler.InfluxDBClient") as mock_client_class:
+            # Setup mock client
+            mock_client = MagicMock()
+            mock_client.ready.return_value = True
+            mock_client.health.return_value = MagicMock(status="pass")
+            
+            # Track write API calls
+            write_api_calls = []
+            
+            def create_write_api(*args, **kwargs):
+                mock_write_api = MagicMock()
+                
+                # First call to write_api creates an API that fails
+                # Second call creates an API that succeeds
+                if len(write_api_calls) == 0:
+                    # First write will fail with InfluxDBError
+                    mock_response = MagicMock()
+                    mock_response.status = 500
+                    mock_response.reason = "Internal Server Error"
+                    mock_response.data = b"Connection lost"
+                    error = InfluxDBError(response=mock_response)
+                    mock_write_api.write.side_effect = error
+                else:
+                    # Second write succeeds
+                    mock_write_api.write.return_value = None
+                
+                mock_write_api.close = MagicMock()
+                write_api_calls.append(mock_write_api)
+                return mock_write_api
+            
+            mock_client.write_api.side_effect = create_write_api
+            mock_client_class.return_value = mock_client
+
+            # Set up handler with connection
+            influx_handler._client = mock_client
+            influx_handler._is_connected = True
+            influx_handler.max_retries = 2
+            influx_handler.base_retry_delay = 0.01
+
+            # Call write_point - should succeed after retry
+            await influx_handler.write_point(data_point)
+
+            # Verify write_api was called twice (once failed, once succeeded)
+            assert len(write_api_calls) == 2
+            # Verify both APIs had write called
+            write_api_calls[0].write.assert_called_once()
+            write_api_calls[1].write.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_write_point_success(self, influx_handler):
@@ -957,6 +1225,47 @@ class TestInfluxDBHandler:
                 ValueError, match="Invalid INFLUXDB_TIMEOUT value: -1000"
             ):
                 InfluxDBHandler.from_env()
+
+    def test_from_env_with_retry_config(self):
+        """Test creating handler from environment with retry configuration."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+            "INFLUXDB_MAX_RETRIES": "5",
+            "INFLUXDB_BASE_RETRY_DELAY": "2.5",
+            "INFLUXDB_MAX_RETRY_DELAY": "60.0",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            handler = InfluxDBHandler.from_env()
+
+            assert handler.max_retries == 5
+            assert handler.base_retry_delay == 2.5
+            assert handler.max_retry_delay == 60.0
+
+    def test_from_env_invalid_retry_config(self):
+        """Test creating handler with invalid retry configuration uses defaults."""
+        env_vars = {
+            "INFLUXDB_TOKEN": "test-token",
+            "INFLUXDB_ORG": "test-org",
+            "INFLUXDB_BUCKET": "test-bucket",
+            "INFLUXDB_MAX_RETRIES": "invalid",
+            "INFLUXDB_BASE_RETRY_DELAY": "not-a-number",
+            "INFLUXDB_MAX_RETRY_DELAY": "-10",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            with patch("src.storage.influx_handler.logger") as mock_logger:
+                handler = InfluxDBHandler.from_env()
+
+                # Should use defaults for invalid values
+                assert handler.max_retries == 3
+                assert handler.base_retry_delay == 1.0
+                assert handler.max_retry_delay == 30.0
+
+                # Should log warnings
+                assert mock_logger.warning.call_count >= 3
 
     def test_from_env_verify_ssl_variations(self):
         """Test various INFLUXDB_VERIFY_SSL values."""
