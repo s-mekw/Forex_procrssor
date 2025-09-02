@@ -92,7 +92,7 @@
   - マルチタイムフレーム処理の結合とデータ整合性を検証するテストを作成
   - _要件: 2.5_
 
-- [ ] 10.3. パイプラインのリファクタリングと責務の明確化
+- [X] 10.3. パイプラインのリファクタリングと責務の明確化
   - src/data_processing/analyzer.py に MultiFrameAnalyzer クラスを新設
   - RealtimePipeline からマルチタイムフレーム分析ロジックを MultiFrameAnalyzer に移譲
   - RealtimePipeline はデータフロー管理に専念し、MultiFrameAnalyzer をコンポーネントとして利用する構成に変更
