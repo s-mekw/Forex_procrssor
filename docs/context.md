@@ -6,7 +6,7 @@
 ## 実装ステップ
 - [x] Step 1: テスト環境の準備とInfluxDBクライアントパッケージの追加
 - [x] Step 2: InfluxDBHandlerクラスの接続設定とヘルスチェック機能の実装
-- [ ] Step 3: データモデル（タグ・フィールド）のスキーマ定義
+- [x] Step 3: データモデル（タグ・フィールド）のスキーマ定義
 - [ ] Step 4: 接続とヘルスチェックのユニットテスト作成
 - [ ] Step 5: 書き込み機能（単一ポイント）の実装とテスト
 - [ ] Step 6: クエリ機能（基本的な読み取り）の実装とテスト
@@ -31,6 +31,22 @@
 - ✅ カスタム例外クラスの定義（基本的なエラーハンドリング）
 - 📁 変更ファイル: src/storage/influx_handler.py（新規作成）
 - 📝 備考: プロジェクトのPython開発ガイドラインに準拠、型ヒント完備
+
+### Step 3 完了
+- ✅ OHLCDataPointクラス（pydantic BaseModel）を実装
+- ✅ TimeFrame列挙型で時間足を定義（M1, M5, M15, M30, H1, H4, D1, W1, MN）
+- ✅ タグとフィールドのスキーマ定義
+  - タグ: symbol（通貨ペア）、timeframe（時間足）、broker（ブローカー識別子）
+  - フィールド: open、high、low、close、volume、spread（すべてFloat32統一）
+- ✅ Float32範囲のバリデーション機能を実装
+- ✅ InfluxDB Line Protocolフォーマット変換メソッドを実装
+  - to_influx_point(): Point オブジェクトへの変換
+  - to_line_protocol(): Line Protocol文字列への変換
+- ✅ InfluxDBSchemaクラスでスキーマ定数と検証機能を定義
+  - Fluxクエリテンプレート
+  - タグの検証と正規化機能
+- 📁 変更ファイル: src/storage/influx_handler.py
+- 📝 備考: pydanticによる厳密な型チェックとFloat32統一を実現
 
 ## 👁️ レビュー結果
 
@@ -120,3 +136,7 @@
 
 #### 判定
 - ✅ 合格（次のStep 3へ進む）
+
+### コミット結果（合格時）
+- Hash: b74cae5
+- Message: feat: Step 2完了 - InfluxDBHandlerクラスの接続設定とヘルスチェック機能の実装
