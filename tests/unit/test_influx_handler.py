@@ -7,12 +7,14 @@ including connection management and health check functionality.
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import polars as pl
 import pytest
 from influxdb_client.client.exceptions import InfluxDBError
 
 from src.storage.influx_handler import (
     InfluxDBConnectionError,
     InfluxDBHandler,
+    InfluxDBQueryError,
     InfluxDBSchema,
     InfluxDBWriteError,
     OHLCDataPoint,
@@ -371,9 +373,7 @@ class TestInfluxDBHandler:
             volume=1000.0,
         )
 
-        with pytest.raises(
-            InfluxDBConnectionError, match="Not connected to InfluxDB"
-        ):
+        with pytest.raises(InfluxDBConnectionError, match="Not connected to InfluxDB"):
             await influx_handler.write_point(data_point)
 
     @pytest.mark.asyncio
@@ -496,9 +496,7 @@ class TestInfluxDBHandler:
             )
         ]
 
-        with pytest.raises(
-            InfluxDBConnectionError, match="Not connected to InfluxDB"
-        ):
+        with pytest.raises(InfluxDBConnectionError, match="Not connected to InfluxDB"):
             await influx_handler.write_batch(data_points)
 
     @pytest.mark.asyncio
@@ -533,6 +531,293 @@ class TestInfluxDBHandler:
         assert mock_write_api.write.call_count == 3
         mock_write_api.flush.assert_called_once()
         mock_write_api.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_query_success(self, influx_handler):
+        """Test successful query execution."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_query_api = MagicMock()
+
+        # Create mock result structure
+        mock_record = MagicMock()
+        mock_record.values = {
+            "_time": datetime.now(),
+            "symbol": "EURUSD",
+            "open": 1.0850,
+            "high": 1.0860,
+            "low": 1.0840,
+            "close": 1.0855,
+        }
+
+        mock_table = MagicMock()
+        mock_table.records = [mock_record]
+
+        mock_query_api.query.return_value = [mock_table]
+        mock_client.query_api.return_value = mock_query_api
+        influx_handler._client = mock_client
+
+        # Execute query
+        flux_query = 'from(bucket: "test-bucket") |> range(start: -1h)'
+        result = await influx_handler.query(flux_query)
+
+        # Verify
+        assert len(result) == 1
+        assert result[0] == mock_record.values
+        mock_query_api.query.assert_called_once_with(
+            query=flux_query, org=influx_handler.org
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_no_connection(self, influx_handler):
+        """Test query without connection."""
+        flux_query = 'from(bucket: "test-bucket") |> range(start: -1h)'
+
+        with pytest.raises(InfluxDBConnectionError, match="Not connected to InfluxDB"):
+            await influx_handler.query(flux_query)
+
+    @pytest.mark.asyncio
+    async def test_query_influxdb_error(self, influx_handler):
+        """Test query with InfluxDB error."""
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_query_api = MagicMock()
+
+        # Create a proper InfluxDBError
+        mock_response = MagicMock()
+        mock_response.data = None
+        mock_response.status = 400
+        mock_response.reason = "Invalid query"
+        error = InfluxDBError(mock_response)
+        error.message = "Invalid query"
+
+        mock_query_api.query.side_effect = error
+        mock_client.query_api.return_value = mock_query_api
+        influx_handler._client = mock_client
+
+        # Execute query should raise InfluxDBQueryError
+        flux_query = 'from(bucket: "test-bucket")'
+        with pytest.raises(InfluxDBQueryError, match="Query failed"):
+            await influx_handler.query(flux_query)
+
+    @pytest.mark.asyncio
+    async def test_query_ohlc_success(self, influx_handler):
+        """Test successful OHLC data query."""
+        # Setup mock for query method
+        mock_data = [
+            {
+                "_time": datetime(2024, 1, 1, 12, 0, 0),
+                "symbol": "EURUSD",
+                "timeframe": "M5",
+                "broker": "default",
+                "open": 1.0850,
+                "high": 1.0860,
+                "low": 1.0840,
+                "close": 1.0855,
+                "volume": 1000.0,
+                "spread": 0.0002,
+            },
+            {
+                "_time": datetime(2024, 1, 1, 12, 5, 0),
+                "symbol": "EURUSD",
+                "timeframe": "M5",
+                "broker": "default",
+                "open": 1.0855,
+                "high": 1.0865,
+                "low": 1.0845,
+                "close": 1.0860,
+                "volume": 1100.0,
+                "spread": 0.0002,
+            },
+        ]
+
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = mock_data
+            influx_handler._client = MagicMock()  # Ensure client exists
+
+            # Query OHLC data
+            df = await influx_handler.query_ohlc(
+                symbol="eurusd",  # Test lowercase conversion
+                timeframe=TimeFrame.M5,
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+                end_time=datetime(2024, 1, 1, 12, 10, 0),
+            )
+
+            # Verify DataFrame
+            assert isinstance(df, pl.DataFrame)
+            assert len(df) == 2
+            assert "time" in df.columns
+            assert df["symbol"][0] == "EURUSD"
+            assert df["open"].dtype == pl.Float32
+            assert df["high"].dtype == pl.Float32
+            assert df["low"].dtype == pl.Float32
+            assert df["close"].dtype == pl.Float32
+            assert df["volume"].dtype == pl.Float32
+
+    @pytest.mark.asyncio
+    async def test_query_ohlc_empty_result(self, influx_handler):
+        """Test OHLC query with empty result."""
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = []
+            influx_handler._client = MagicMock()
+
+            # Query OHLC data
+            df = await influx_handler.query_ohlc(
+                symbol="EURUSD",
+                timeframe="M5",
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+            )
+
+            # Verify empty DataFrame with correct schema
+            assert isinstance(df, pl.DataFrame)
+            assert len(df) == 0
+            assert "time" in df.columns
+            assert "symbol" in df.columns
+            assert df["open"].dtype == pl.Float32
+
+    @pytest.mark.asyncio
+    async def test_query_ohlc_with_broker_filter(self, influx_handler):
+        """Test OHLC query with broker filter."""
+        mock_data = [
+            {
+                "_time": datetime(2024, 1, 1, 12, 0, 0),
+                "symbol": "EURUSD",
+                "timeframe": "M5",
+                "broker": "test-broker",
+                "open": 1.0850,
+                "high": 1.0860,
+                "low": 1.0840,
+                "close": 1.0855,
+                "volume": 1000.0,
+            }
+        ]
+
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = mock_data
+            influx_handler._client = MagicMock()
+
+            # Query with broker filter
+            df = await influx_handler.query_ohlc(
+                symbol="EURUSD",
+                timeframe="M5",
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+                broker="test-broker",
+            )
+
+            # Verify broker filter was included in query
+            called_query = mock_query.call_args[0][0]
+            assert 'broker"] == "test-broker"' in called_query
+
+    @pytest.mark.asyncio
+    async def test_query_ohlc_no_connection(self, influx_handler):
+        """Test OHLC query without connection."""
+        with pytest.raises(InfluxDBConnectionError, match="Not connected to InfluxDB"):
+            await influx_handler.query_ohlc(
+                symbol="EURUSD",
+                timeframe=TimeFrame.M5,
+                start_time=datetime.now(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_query_time_range_success(self, influx_handler):
+        """Test successful time range query."""
+        mock_data = [
+            {
+                "_time": datetime(2024, 1, 1, 12, 0, 0),
+                "measurement": "test",
+                "field1": 100.0,
+                "field2": 200.0,
+            },
+            {
+                "_time": datetime(2024, 1, 1, 12, 5, 0),
+                "measurement": "test",
+                "field1": 110.0,
+                "field2": 210.0,
+            },
+        ]
+
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = mock_data
+            influx_handler._client = MagicMock()
+
+            # Query time range
+            df = await influx_handler.query_time_range(
+                measurement="test",
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+                end_time=datetime(2024, 1, 1, 12, 10, 0),
+            )
+
+            # Verify DataFrame
+            assert isinstance(df, pl.DataFrame)
+            assert len(df) == 2
+            assert "time" in df.columns
+
+    @pytest.mark.asyncio
+    async def test_query_time_range_with_filters(self, influx_handler):
+        """Test time range query with tag filters."""
+        mock_data = [
+            {
+                "_time": datetime(2024, 1, 1, 12, 0, 0),
+                "tag1": "value1",
+                "tag2": "value2",
+                "field1": 100.0,
+            }
+        ]
+
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = mock_data
+            influx_handler._client = MagicMock()
+
+            # Query with filters
+            filters = {"tag1": "value1", "tag2": "value2"}
+            df = await influx_handler.query_time_range(
+                measurement="test",
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+                filters=filters,
+            )
+
+            # Verify filters were included in query
+            called_query = mock_query.call_args[0][0]
+            assert 'tag1"] == "value1"' in called_query
+            assert 'tag2"] == "value2"' in called_query
+
+    @pytest.mark.asyncio
+    async def test_query_time_range_empty_result(self, influx_handler):
+        """Test time range query with empty result."""
+        with patch.object(
+            influx_handler, "query", new_callable=AsyncMock
+        ) as mock_query:
+            mock_query.return_value = []
+            influx_handler._client = MagicMock()
+
+            # Query time range
+            df = await influx_handler.query_time_range(
+                measurement="test",
+                start_time=datetime(2024, 1, 1, 12, 0, 0),
+            )
+
+            # Verify empty DataFrame
+            assert isinstance(df, pl.DataFrame)
+            assert len(df) == 0
+
+    @pytest.mark.asyncio
+    async def test_query_time_range_no_connection(self, influx_handler):
+        """Test time range query without connection."""
+        with pytest.raises(InfluxDBConnectionError, match="Not connected to InfluxDB"):
+            await influx_handler.query_time_range(
+                measurement="test",
+                start_time=datetime.now(),
+            )
 
 
 class TestOHLCDataPoint:

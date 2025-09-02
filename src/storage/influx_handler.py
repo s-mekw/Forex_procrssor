@@ -9,8 +9,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import polars as pl
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.exceptions import InfluxDBError
+from influxdb_client.client.query_api import QueryApi
 from influxdb_client.client.write_api import ASYNCHRONOUS, SYNCHRONOUS
 from pydantic import BaseModel, Field, field_validator
 
@@ -513,6 +515,220 @@ class InfluxDBHandler:
             # Close write API to free resources
             if "write_api" in locals():
                 write_api.close()
+
+    async def query(self, flux_query: str) -> list[dict[str, Any]]:
+        """Execute a Flux query and return results.
+
+        Args:
+            flux_query: The Flux query string to execute.
+
+        Returns:
+            List of dictionaries containing query results.
+
+        Raises:
+            InfluxDBQueryError: If query execution fails.
+            InfluxDBConnectionError: If not connected to InfluxDB.
+        """
+        if not self._client:
+            raise InfluxDBConnectionError("Not connected to InfluxDB")
+
+        try:
+            # Get query API
+            query_api: QueryApi = self._client.query_api()
+
+            # Execute query
+            result = query_api.query(query=flux_query, org=self.org)
+
+            # Convert result to list of dictionaries
+            data = []
+            for table in result:
+                for record in table.records:
+                    data.append(record.values)
+
+            logger.debug(f"Query returned {len(data)} records")
+            return data
+
+        except InfluxDBError as e:
+            logger.error(f"Query failed: {e}")
+            raise InfluxDBQueryError(f"Query failed: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error during query: {e}")
+            raise InfluxDBQueryError(f"Unexpected query error: {e}") from e
+
+    async def query_ohlc(
+        self,
+        symbol: str,
+        timeframe: TimeFrame | str,
+        start_time: datetime,
+        end_time: datetime | None = None,
+        broker: str | None = None,
+    ) -> pl.DataFrame:
+        """Query OHLC data for a specific symbol and timeframe.
+
+        Args:
+            symbol: Currency pair (e.g., 'EURUSD').
+            timeframe: Time interval for the candles.
+            start_time: Start time for the query range.
+            end_time: End time for the query range. If None, uses current time.
+            broker: Optional broker filter.
+
+        Returns:
+            Polars DataFrame containing OHLC data.
+
+        Raises:
+            InfluxDBQueryError: If query execution fails.
+            InfluxDBConnectionError: If not connected to InfluxDB.
+        """
+        if not self._client:
+            raise InfluxDBConnectionError("Not connected to InfluxDB")
+
+        # Normalize inputs
+        symbol = symbol.upper()
+        if isinstance(timeframe, str):
+            timeframe = TimeFrame(timeframe)
+        if end_time is None:
+            end_time = datetime.now()
+
+        # Build Flux query
+        flux_query = f"""
+        from(bucket: "{self.bucket}")
+            |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
+            |> filter(fn: (r) => r["_measurement"] == "ohlc")
+            |> filter(fn: (r) => r["symbol"] == "{symbol}")
+            |> filter(fn: (r) => r["timeframe"] == "{timeframe.value}")
+        """
+
+        # Add broker filter if specified
+        if broker:
+            flux_query += f'    |> filter(fn: (r) => r["broker"] == "{broker}")\n'
+
+        flux_query += """    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+            |> keep(columns: ["_time", "symbol", "timeframe", "broker", "open", "high", "low", "close", "volume", "spread"])
+        """
+
+        try:
+            # Execute query
+            result = await self.query(flux_query)
+
+            # Convert to Polars DataFrame
+            if not result:
+                # Return empty DataFrame with correct schema
+                return pl.DataFrame(
+                    schema={
+                        "time": pl.Datetime,
+                        "symbol": pl.Utf8,
+                        "timeframe": pl.Utf8,
+                        "broker": pl.Utf8,
+                        "open": pl.Float32,
+                        "high": pl.Float32,
+                        "low": pl.Float32,
+                        "close": pl.Float32,
+                        "volume": pl.Float32,
+                        "spread": pl.Float32,
+                    }
+                )
+
+            # Create DataFrame from results
+            df = pl.DataFrame(result)
+
+            # Rename _time column to time
+            if "_time" in df.columns:
+                df = df.rename({"_time": "time"})
+
+            # Cast numeric columns to Float32
+            numeric_columns = ["open", "high", "low", "close", "volume", "spread"]
+            for col in numeric_columns:
+                if col in df.columns:
+                    df = df.with_columns(pl.col(col).cast(pl.Float32))
+
+            # Sort by time
+            df = df.sort("time")
+
+            logger.info(
+                f"Retrieved {len(df)} OHLC records for {symbol}/{timeframe.value}"
+            )
+            return df
+
+        except InfluxDBQueryError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to query OHLC data: {e}")
+            raise InfluxDBQueryError(f"Failed to query OHLC data: {e}") from e
+
+    async def query_time_range(
+        self,
+        measurement: str,
+        start_time: datetime,
+        end_time: datetime | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> pl.DataFrame:
+        """Query data within a specific time range.
+
+        Args:
+            measurement: The measurement name to query.
+            start_time: Start time for the query range.
+            end_time: End time for the query range. If None, uses current time.
+            filters: Optional dictionary of tag filters.
+
+        Returns:
+            Polars DataFrame containing query results.
+
+        Raises:
+            InfluxDBQueryError: If query execution fails.
+            InfluxDBConnectionError: If not connected to InfluxDB.
+        """
+        if not self._client:
+            raise InfluxDBConnectionError("Not connected to InfluxDB")
+
+        if end_time is None:
+            end_time = datetime.now()
+
+        # Build Flux query
+        flux_query = f"""
+        from(bucket: "{self.bucket}")
+            |> range(start: {start_time.isoformat()}Z, stop: {end_time.isoformat()}Z)
+            |> filter(fn: (r) => r["_measurement"] == "{measurement}")
+        """
+
+        # Add filters if specified
+        if filters:
+            for tag, value in filters.items():
+                flux_query += f'    |> filter(fn: (r) => r["{tag}"] == "{value}")\n'
+
+        flux_query += """    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        """
+
+        try:
+            # Execute query
+            result = await self.query(flux_query)
+
+            # Convert to Polars DataFrame
+            if not result:
+                # Return empty DataFrame
+                return pl.DataFrame()
+
+            # Create DataFrame from results
+            df = pl.DataFrame(result)
+
+            # Rename _time column to time if it exists
+            if "_time" in df.columns:
+                df = df.rename({"_time": "time"})
+
+            # Sort by time if column exists
+            if "time" in df.columns:
+                df = df.sort("time")
+
+            logger.info(
+                f"Retrieved {len(df)} records from {measurement} "
+                f"between {start_time} and {end_time}"
+            )
+            return df
+
+        except InfluxDBQueryError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to query time range: {e}")
+            raise InfluxDBQueryError(f"Failed to query time range: {e}") from e
 
 
 class InfluxDBConnectionError(Exception):
