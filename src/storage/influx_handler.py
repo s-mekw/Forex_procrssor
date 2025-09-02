@@ -310,7 +310,7 @@ class InfluxDBHandler:
 
             # Verify connection by checking if ready
             if not self._client.ready():
-                raise InfluxDBError("InfluxDB server is not ready")
+                raise InfluxDBConnectionError("InfluxDB server is not ready")
 
             self._is_connected = True
             logger.info(f"Successfully connected to InfluxDB at {self.url}")
@@ -322,7 +322,7 @@ class InfluxDBHandler:
         except Exception as e:
             logger.error(f"Unexpected error during InfluxDB connection: {e}")
             self._is_connected = False
-            raise InfluxDBError(f"Connection failed: {e}") from e
+            raise InfluxDBConnectionError(f"Connection failed: {e}") from e
 
     async def disconnect(self) -> None:
         """Close connection to InfluxDB.
